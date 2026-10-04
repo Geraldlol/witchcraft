@@ -4,7 +4,7 @@ Claude Code and Codex CLI terminals inside WoW Forever, with separate tabs, inde
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 
-The WoW MCP bridge shares read-only character, location, tracked quest and progression context with both assistants. Open **WoW context** in the footer to pause sharing, request an update, and inspect acknowledged summaries.
+The WoW MCP bridge shares read-only character, location, tracked quest and progression context with both assistants, and lets them request recorded Lua errors, warnings and blocked actions. Open **WoW context** in the footer to pause sharing, request an update, and inspect acknowledged summaries.
 
 The book icon opens Guides: choose quest nudge, details or solution; save an item goal; or ask which dungeon covers several wishlist items. Actions prepare an editable prompt and preserve existing drafts. The first catalog covers seven Defias quest stages and twelve items across three Classic dungeons, with sources and explicit unverified-Forever status. This slice is built and offline-tested; activation and native acceptance remain pending.
 
@@ -12,11 +12,11 @@ The new **Adventures** page adds dungeon rehearsal, zone detours and a personal 
 
 This build also includes an opt-in dense optical carrier probe. It renders 22 extra rows below the normal strip only while the probe is active; the normal two-row transport stays unchanged. The probe is built and offline-tested, with native acceptance still pending.
 
-By default the companion daemon joins the sessions already running in the repository: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text for the game window and reads replies from a small pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply`, restart that session and then restart Witchcraft; the footer says when it lacks them. Authentication and agent approval prompts remain in their normal CLI sessions.
+By default the companion daemon joins sessions from the folder selected with `run --cwd`: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text and delivers them to the game through the `Witchcraft_Chunk_*` helper addons. Your prompts, terminal keys and game context travel back through the local fast link or calibrated pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'` from `tools/witchcraft-daemon`, using the same folder as `run --cwd`, restart that session and then restart Witchcraft. The footer says when it lacks the tools. Initial sign-in happens in the normal CLI; supported permission choices can also be answered from the in-game buttons.
 
 ## Start
 
-Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, and use `/witch` to open the window.
+Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, run `/reload`, and use `/witch` to open the window. On the pinned client build, run `/witch bindprobe` once per daemon/UI session to qualify the fast link.
 
 - Left-click the book button at the lower-left edge of the minimap to show or hide Witchcraft, just like `/witch`.
 - Click **Claude** or **Codex** to choose the terminal you read and address. Each tab keeps its own unsent draft.
@@ -26,10 +26,10 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 - When an agent is waiting on a choice (a permission prompt or picker), numbered buttons above the composer answer it. If you are looking elsewhere, a raid-warning line and sound say which agent needs you or has finished, and its tab badge turns red or green.
 - Shift-click an item, quest or spell while typing to insert it. Up and Down recall your sent prompts for that tab. Save reusable prompts with `/witch snippet add <prompt>` (`list`, `remove <n>`); they appear in the **/** menu. Key Bindings > AddOns > Witchcraft offers open-and-type, switch tab and interrupt, unbound by default.
 - The footer shows the model and context in use. **Copy** can take the agent's last reply instead of the screen, **Keys > Find** searches the scrollback, and **/ > Write a long prompt** sends several lines as one prompt (up to about 4,600 bytes).
-- **Settings:** Esc > Options > AddOns > Witchcraft, `/witch settings`, or Appearance > **All settings...** (the client opens Options only out of combat). Choose the window layer (above everything, normal, or behind other windows), lock or dock the window at the top of the screen, whether Escape closes it (off by default), whether it opens on login, the minimap button, alert text and sound and whether finishing alerts, whether terminal updates continue in combat (brief frame hitches are possible; prompts always go out), the choice buttons, the footer status line, prompt history size, font size, opacity and context sharing.
+- **Settings:** Esc > Options > AddOns > Witchcraft, `/witch settings`, or Appearance > **All settings...** (the client opens Options only out of combat). Choose the window layer (above everything, normal, or behind other windows), lock or dock the window at the top of the screen, whether Escape closes it (off by default), whether it opens on login, the minimap button, alert text and sound, alerts when an agent finishes, whether terminal updates continue in combat (brief frame hitches are possible), the choice buttons, the footer status line, prompt history size, font size, opacity and context sharing.
 - Enter sends the line to that terminal. The separate **Enter** button accepts terminal prompts; **Keys** exposes Escape, arrows and Interrupt for the selected CLI.
 - Scroll with the mouse wheel or Page Up/Page Down while the input is focused; End returns to the latest rows. **Copy** selects the visible terminal text for Ctrl+C. At narrow widths, Enter and Copy move into Keys. Context and Appearance remain reachable.
-- Drag the title bar, or double-click its title/empty area to expand or collapse it. The minimize button beside close does the same; the expanded height is retained. Resize from the corner or use the font controls. Existing window positions and sizes are retained. The close button, `/witch` or the toggle keybinding hide the window; Escape never does, and in the input it only leaves the input. Pending input continues until acknowledged.
+- Drag the title bar, or double-click its title/empty area to expand or collapse it. The minimize button beside close does the same; the expanded height is retained. Resize from the corner or use the font controls. Existing window positions and sizes are retained. The close button, `/witch` or the toggle keybinding hide the window. Escape closes it only when **Escape closes Witchcraft** is enabled; in the input, Escape leaves the input. Pending input continues until acknowledged.
 - The real terminal stays usable. **Ctrl+]** switches which agent it displays, independently of the WoW tabs.
 
 | Command | Action |
@@ -37,7 +37,7 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch` | Show or hide the window |
 | `/witch status` | Build, connection, ring cursor, pending input and session identifiers |
 | `/witch settings` | Open Esc > Options > AddOns > Witchcraft |
-| `/witch errors` / `/witch errors clear` | List the newest recorded Lua errors / empty the list |
+| `/witch errors` / `/witch errors clear` | Show the stored error count and newest entry / empty the list |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Save, list or remove reusable prompts for the **/** menu |
 | `/witch bindprobe` | Qualify the fast link once per daemon/UI session (pinned client build only) |
 | `/witch guide` | Quest-help and loot-goal panel |
@@ -59,7 +59,9 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 
 The dense carrier is diagnostic only. It does not update the MCP cache or send input to either assistant, and it must not replace normal traffic until the 200/300/400/500 ms native matrix passes.
 
-The window shows the current terminal screen and the bounded history supplied by the daemon. Rows that do not fit remain reachable by scrolling; terminal mouse interaction is unavailable. Chunk loading pauses during combat. Inputs are single lines up to 600 UTF-8 bytes; the maximum takes about 11.2 seconds to transmit at five frames per second, plus scheduling and acknowledgement time. No per-message reload is used. Exhausting the single-use chunk ring triggers a guarded reload outside combat.
+The window shows the current terminal screen and the bounded history supplied by the daemon. Rows that do not fit remain reachable by scrolling; terminal mouse interaction is unavailable. Terminal updates pause in combat by default; **Keep updating in combat** enables them. The fast link still waits for combat to end. The calibrated pixel path can carry input during combat while WoW is in the foreground, though acknowledgements wait if terminal updates are paused.
+
+The main input accepts one line up to 600 UTF-8 bytes. **/ > Write a long prompt** accepts multiple lines totaling about 4,600 bytes. Pixel transmission is slower than the fast link: a full 600-byte line takes about 11.2 seconds at five frames per second, plus scheduling and acknowledgement time. No per-message reload is used. Exhausting the single-use chunk ring triggers a guarded reload outside combat.
 
 Pending input and window preferences use `WitchcraftDB`; current terminal screens stay in memory. WoW writes SavedVariables on reload/logout, so the queue is not guaranteed to survive a client crash before that flush. A new daemon session never automatically submits input retained from an older session.
 

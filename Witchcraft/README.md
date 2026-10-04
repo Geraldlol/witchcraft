@@ -36,6 +36,10 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 |---|---|
 | `/witch` | Show or hide the window |
 | `/witch status` | Build, connection, ring cursor, pending input and session identifiers |
+| `/witch settings` | Open Esc > Options > AddOns > Witchcraft |
+| `/witch errors` / `/witch errors clear` | List the newest recorded Lua errors / empty the list |
+| `/witch snippet add <prompt>` / `list` / `remove <n>` | Save, list or remove reusable prompts for the **/** menu |
+| `/witch bindprobe` | Qualify the fast link once per daemon/UI session (pinned client build only) |
 | `/witch guide` | Quest-help and loot-goal panel |
 | `/witch quest [nudge\|details\|solution] <name/link/id>` | Prepare a quest-help prompt; defaults to nudge |
 | `/witch loot [name/link/id]` | Prepare an add-goal prompt, or show the saved plan with no argument |

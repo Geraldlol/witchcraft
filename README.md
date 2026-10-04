@@ -42,6 +42,14 @@ It has two parts:
 
 ## Use
 
+**Calibrate the screen strip once.** Witchcraft talks to the daemon through a small pixel strip at the top-left of the game window, plus a faster local "fast link". The fast link turns itself off on any client build other than the one pinned in `Witchcraft/Evidence.lua` (currently 1.60.1.69977), and the game and daemon both tell you when that happens. The strip then carries everything, so calibrate it before your first run. In game, type `/witch calibrate`. With WoW visible, run this from `tools\witchcraft-daemon`:
+
+```powershell
+node bin/witchcraft.js calibrate
+```
+
+Then type `/witch calibrate off` in game. Recalibrate after moving the game window or changing resolution, display scaling or UI scale. The strip is only read while WoW is the foreground window.
+
 Start the daemon from `tools\witchcraft-daemon`, pointing `--cwd` at the folder you want the agents to work in:
 
 ```powershell
@@ -52,9 +60,9 @@ By default the Claude tab mirrors the Claude Code session already running in tha
 
 In game:
 
-- `/witch` (or the minimap book button) shows the window.
-- Run `/witch bindprobe` once per daemon/UI session. It confirms the game-to-daemon link.
-- `/witch settings` opens the options page.
+- After starting the daemon, `/reload`, then `/witch` (or the minimap book button) to show the window.
+- On the pinned build, run `/witch bindprobe` once per daemon/UI session to qualify the fast link.
+- `/witch settings` opens the options page, and `/witch status` shows the connection.
 
 ## WoW tools (MCP)
 

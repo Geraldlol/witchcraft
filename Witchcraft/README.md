@@ -53,8 +53,6 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 
 ## Current limits
 
-The build has offline Lua, Node and native Windows PTY validation. **The complete two-tab flow has not finished its in-game check.** The original Phase 0 spike proved live load-on-demand file reads and exact colors for the original one-row strip; the new two-row strip, font and complete flow need runtime verification.
-
 The dense carrier is diagnostic only. It does not update the MCP cache or send input to either assistant, and it must not replace normal traffic until the 200/300/400/500 ms native matrix passes.
 
 The window shows the current terminal screen and the bounded history supplied by the daemon. Rows that do not fit remain reachable by scrolling; terminal mouse interaction is unavailable. Chunk loading pauses during combat. Inputs are single lines up to 600 UTF-8 bytes; the maximum takes about 11.2 seconds to transmit at five frames per second, plus scheduling and acknowledgement time. No per-message reload is used. Exhausting the single-use chunk ring triggers a guarded reload outside combat.

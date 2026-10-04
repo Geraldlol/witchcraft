@@ -59,4 +59,4 @@ MCP calculates freshness on every read. Data older than 180 seconds is stale; mi
 
 ## Status
 
-Offline tests establish codec, cache, interface and lifecycle behavior. Native WoW delivery, client API returns, latency, combat transitions and both assistant terminal connections still require the recorded in-game acceptance checks.
+Offline tests establish codec, cache, interface and lifecycle behavior. Native WoW delivery, client API returns, latency and combat transitions still require the recorded in-game acceptance checks.

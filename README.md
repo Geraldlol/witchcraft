@@ -11,8 +11,6 @@ It has two parts:
 | MCP server | `tools/witchcraft-daemon/bin/witchcraft-mcp.js` | Gives Claude and Codex 15 WoW tools (12 read-only) over local STDIO. See [docs/MCP.md](docs/MCP.md). |
 | Claude Code skill | `.claude/skills/witchcraft-daemon/` | Lets Claude start, stop, restart and check the daemon for you. |
 
-> **Early release.** The pieces are tested offline, but the complete two-tab flow has not finished its in-game check. Expect rough edges.
-
 ## Requirements
 
 - Windows 10 or 11.

@@ -42,7 +42,7 @@ It has two parts:
 
 ## Use
 
-**Calibrate the screen strip once.** Witchcraft talks to the daemon through a small pixel strip at the top-left of the game window, plus a faster local "fast link". The fast link turns itself off on any client build other than the one pinned in `Witchcraft/Evidence.lua` (currently 1.60.1.69977), and the game and daemon both tell you when that happens. The strip then carries everything, so calibrate it before your first run. In game, type `/witch calibrate`. With WoW visible, run this from `tools\witchcraft-daemon`:
+**Calibrate the screen strip once (recommended).** Witchcraft talks to the daemon through a local "fast link", with a small pixel strip at the top-left of the game window as a fallback. The fast link runs on the client build pinned in `Witchcraft/Evidence.lua` (currently 1.60.1.70205). It turns itself off on any other build, and both the game and the daemon tell you when that happens. Then the strip carries everything, so it's worth calibrating before your first run. In game, type `/witch calibrate`. With WoW visible, run this from `tools\witchcraft-daemon`:
 
 ```powershell
 node bin/witchcraft.js calibrate

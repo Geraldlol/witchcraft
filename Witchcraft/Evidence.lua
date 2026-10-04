@@ -3,8 +3,9 @@
 -- after the build-matched UI source shows no Cooldown Viewer, encoding or AddOns API change.
 -- 69977 moved the pin from 69913: the source differs only in three login-screen files
 -- (Gethe/wow-ui-source forever 70ef1b2fd7...c6e8998318). The daemon reads this file to warn at start.
+-- 70205 moved the pin from 69977 on 2026-10-04: the user confirmed both carriers working in game.
 local _, ns = ...
-local Evidence = { version = "1.60.1", build = "69977", interface = 16001 }
+local Evidence = { version = "1.60.1", build = "70205", interface = 16001 }
 ns.Evidence = Evidence
 
 function Evidence.Label() return Evidence.version .. "." .. Evidence.build end

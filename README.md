@@ -8,6 +8,10 @@ https://github.com/user-attachments/assets/4ae5190a-4871-4f89-a894-2df423aef8a5
 
 *Profession: Prompt Engineering (1/300).*
 
+[Download](https://github.com/Geraldlol/witchcraft/releases/latest) · [Install](#install) · [WoW MCP tools](docs/MCP.md) · [Changelog](CHANGELOG.md) · [Help and feedback](#help-and-feedback)
+
+The addon and companion are **free and open source (MIT)**. Your Claude Code or Codex account and their normal usage costs are separate.
+
 ## What you can do
 
 | Feature | In game |
@@ -183,6 +187,12 @@ The included [witchcraft-daemon skill](.claude/skills/witchcraft-daemon/SKILL.md
 | Context is stale or unavailable | Check sharing in **WoW context**, request an update and let delivery finish. Long quest snapshots take longer than character data, especially over the strip. |
 | `A Witchcraft bridge owns ... bridge.lock` | Check the running daemon or the skill's status action. Stop the existing daemon cleanly before starting another; dead-process locks are handled on startup. |
 | Codex's IDE panel does not show the game conversation | The game uses a second CLI client on the resumed thread. Reload the thread in the extension to see appended turns. |
+
+## Help and feedback
+
+For setup help or a bug, [open a report](https://github.com/Geraldlol/witchcraft/issues/new?template=bug_report.md). Include your WITCHCRAFT version, Forever client build, which assistant you use, and what happened. The template lists useful diagnostics; remove personal paths, account details and private conversation text before sharing them.
+
+Have an idea? [Describe what you want to do in game](https://github.com/Geraldlol/witchcraft/issues/new?template=feature_request.md), or [check existing issues](https://github.com/Geraldlol/witchcraft/issues) for the same problem. If the project is useful, a GitHub star makes it easier to find again, and feedback from your first setup helps improve the next release.
 
 ## Security and privacy
 

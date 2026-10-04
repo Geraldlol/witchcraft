@@ -2,7 +2,7 @@
 
 `guide-starter.json` is a small, manually curated factual reference: seven Defias Brotherhood quest stages and twelve item goals across three early Classic dungeons. It supplies the first useful quest and loot queries without pretending to be a complete game database.
 
-The target client is Forever **1.60.1.69913**. This catalog uses older Classic source data and is always **reference-only**. Source revisions identify the upstream records examined; they do not certify that Forever has identical requirements, drops, or quest behavior. Nothing here was tested in the client.
+This catalog was originally assembled for Forever **1.60.1.69913**; see the [main README](../../../README.md#requirements) for the current release's client target. It uses older Classic source data and remains **reference-only**. Source revisions identify the upstream records examined; they do not certify that Forever has identical requirements, drops, or quest behavior. The catalog does not establish matching in-game behavior.
 
 Every record points to a catalog source with an immutable upstream URL and commit. Names and IDs are factual identifiers. Hints are brief original paraphrases, not copied quest prose. No upstream executable Lua, art, database files, or libraries are bundled or executed.
 

@@ -1,5 +1,9 @@
 # Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things (WITCHCRAFT)
 
+https://github.com/user-attachments/assets/4ae5190a-4871-4f89-a894-2df423aef8a5
+
+*Real time, uncut: asking Claude about the character from inside the game, then having it fix a Lua error in another addon without leaving WoW.*
+
 Claude Code and Codex CLI terminals inside **WoW Forever**: separate tabs, independent drafts, an input box addressed to the selected agent, and optional read-only game context (character, location, tracked quests, progress, Lua errors) shared with both assistants through MCP.
 
 It has two parts:

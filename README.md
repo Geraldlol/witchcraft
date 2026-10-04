@@ -1,6 +1,4 @@
-# WITCHCRAFT
-
-**W**arcraft's **I**n-game **T**erminal for **C**laude's **H**unches & **C**odex's **R**eckless **A**ttempts at **F**ixing **T**hings.
+# Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things (WITCHCRAFT)
 
 Claude Code and Codex CLI terminals inside **WoW Forever**: separate tabs, independent drafts, an input box addressed to the selected agent, and optional read-only game context (character, location, tracked quests, progress, Lua errors) shared with both assistants through MCP.
 
@@ -10,6 +8,8 @@ It has two parts:
 |---|---|---|
 | Addon | `Witchcraft/` | The in-game window (`/witch`). |
 | Daemon | `tools/witchcraft-daemon/` | A Windows companion that runs Claude Code and Codex in local terminals and relays them to and from the game. |
+| MCP server | `tools/witchcraft-daemon/bin/witchcraft-mcp.js` | Gives Claude and Codex 15 WoW tools (12 read-only) over local STDIO. See [docs/MCP.md](docs/MCP.md). |
+| Claude Code skill | `.claude/skills/witchcraft-daemon/` | Lets Claude start, stop, restart and check the daemon for you. |
 
 > **Early release.** The pieces are tested offline, but the complete two-tab flow has not finished its in-game check. Expect rough edges.
 
@@ -58,11 +58,24 @@ In game:
 - Run `/witch bindprobe` once per daemon/UI session. It confirms the game-to-daemon link.
 - `/witch settings` opens the options page.
 
-To give a joined Claude session the WoW tools, run this once, then restart that Claude session and Witchcraft:
+## WoW tools (MCP)
+
+Terminals Witchcraft launches get the WoW MCP tools automatically (`--no-mcp` turns that off). A Claude Code session the Claude tab *joins* needs them registered once, from `tools\witchcraft-daemon`; then restart that Claude session and Witchcraft:
 
 ```powershell
 node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'
 ```
+
+Then ask either assistant something like: "Use the WoW tools to tell me where I am and what remains for my tracked quests." Any other MCP client can run the server directly with `node <repo>/tools/witchcraft-daemon/bin/witchcraft-mcp.js`. [docs/MCP.md](docs/MCP.md) lists every tool and explains sharing, freshness and the three local-write tools.
+
+## Claude Code skill
+
+`.claude/skills/witchcraft-daemon` lets Claude manage the daemon. The daemon is an interactive terminal, so the skill opens it in its own window, stops it cleanly, and reports on the lock, chunk ring and context cache. It needs PowerShell 7 (`pwsh`).
+
+- Claude Code sessions started inside this repository pick it up automatically.
+- To use it from your own projects, copy the folder to `%USERPROFILE%\.claude\skills\` and set `WITCHCRAFT_HOME` to this repository's path (or pass `-Repo`).
+
+Then ask Claude to "start Witchcraft" or "check the Witchcraft daemon". By default the agents work in, and join sessions from, the folder Claude is running in.
 
 See [`Witchcraft/README.md`](Witchcraft/README.md) for the full in-game guide and [`tools/witchcraft-daemon/README.md`](tools/witchcraft-daemon/README.md) for daemon options, transport details and troubleshooting.
 

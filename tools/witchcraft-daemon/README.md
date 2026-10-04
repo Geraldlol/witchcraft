@@ -44,7 +44,7 @@ node bin/witchcraft.js run --pixels --cwd 'C:\path\to\your\project'
 
 Return to WoW and run `/witch calibrate off` after calibration.
 
-Use `/witch` in game. Ctrl+] switches the real terminal between agents; the game tabs select independently. Closing both CLI sessions stops the daemon. Ordinary Ctrl+C is passed to the selected CLI. A second daemon is rejected by `.local/bridge.lock`, which names the running pid. A lock left by a crash (its process gone, or empty and either over a minute old or written before the last boot) is set aside as `.local/bridge.lock.stale-<written>-<epoch>.json` on the next start. A lock whose pid is alive is always refused; if that pid now belongs to another program, delete `.local/bridge.lock` yourself. Closing the daemon's console window, or Ctrl+Break, stops it cleanly and releases the lock.
+Use `/witch` in game. Ctrl+] switches the real terminal between agents; the game tabs select independently. Closing both CLI sessions stops the daemon. Ordinary Ctrl+C is passed to the selected CLI. A second daemon is rejected by `.local/bridge.lock`, which names the running pid. A lock left by a crash (its process gone, or empty and either over a minute old or written before the last boot) is set aside as `.local/bridge.lock.stale-<written>-<epoch>.json` on the next start. A lock whose pid is alive is always refused; if that pid now belongs to another program, the witchcraft-daemon skill's status action says so and its start action clears the lock. Closing the daemon's console window, or Ctrl+Break, stops it cleanly and releases the lock.
 
 Alternative commands:
 

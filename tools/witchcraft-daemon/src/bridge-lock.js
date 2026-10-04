@@ -26,7 +26,7 @@ async function staleReason(lockPath, { now, bootTime, isAlive, fs }) {
   const verdict = reason => ({ reason, identity: stats, pid, startedAt: owner?.startedAt, writtenAt });
   // A live pid always wins, even over the boot rule: a wall-clock step after the lock was written
   // can make a running bridge's lock look older than the boot. A pid reused by another process
-  // after a crash is refused here; the user deletes the lock once that pid is not the bridge.
+  // after a crash is refused here and settled by the witchcraft-daemon skill's status action.
   if (pid !== undefined) return isAlive(pid) ? { live: `pid ${pid}, started ${owner.startedAt ?? 'at an unknown time'}` }
     : verdict(`its process ${pid} has exited`);
   if (writtenAt < bootTime) return verdict('it was written before the last boot');
@@ -46,7 +46,7 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
   const handle = await fs.open(temporary, 'wx');
   const abandon = async () => { await handle.close().catch(() => {}); await fs.unlink(temporary).catch(() => {}); };
   const refuse = reason => Object.assign(new Error(`A Witchcraft bridge owns ${lockPath} (${reason}). Stop it first; `
-    + 'if that process is not a Witchcraft daemon, delete the lock.'), { code: 'LOCK_HELD' });
+    + 'the witchcraft-daemon skill\'s status action shows whether that process is still the bridge.'), { code: 'LOCK_HELD' });
   const reclaimed = [];
   try {
     await handle.writeFile(JSON.stringify(record));

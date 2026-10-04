@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "id": "classic-reference-starter",
+  "title": "Classic reference: Defias quest chain and early dungeon loot",
+  "sourceBuild": "WoW Classic reference data; not validated for Forever 1.60.1.69913",
+  "compatibility": "reference-only",
+  "sources": [
+    {
+      "id": "questie-classic-quests",
+      "title": "Questie Classic quest records (selected Defias chain facts)",
+      "url": "https://github.com/Questie/Questie/blob/e29dc411d70a4f7c6cd5d964f153bd065c5fd834/Database/Classic/classicQuestDB.lua",
+      "revision": "e29dc411d70a4f7c6cd5d964f153bd065c5fd834"
+    },
+    {
+      "id": "questie-quest-fields",
+      "title": "Questie quest field definitions",
+      "url": "https://github.com/Questie/Questie/blob/e29dc411d70a4f7c6cd5d964f153bd065c5fd834/Database/questDB.lua",
+      "revision": "e29dc411d70a4f7c6cd5d964f153bd065c5fd834"
+    },
+    {
+      "id": "atlasloot-classic-dungeons",
+      "title": "AtlasLootClassic Classic dungeon loot records",
+      "url": "https://github.com/Hoizame/AtlasLootClassic/blob/8e99341e4e779328460bf7684c0d5b22ce50ddf1/AtlasLootClassic_DungeonsAndRaids/data.lua",
+      "revision": "8e99341e4e779328460bf7684c0d5b22ce50ddf1"
+    }
+  ],
+  "quests": [
+    {
+      "id": 65,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "An informant knows more.",
+        "details": "Investigate Lakeshire.",
+        "solution": "Find Wiley in Lakeshire after speaking with Gryan Stoutmantle."
+      }
+    },
+    {
+      "id": 132,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [65],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "Your informant has written evidence.",
+        "details": "Return to Westfall.",
+        "solution": "Deliver Wiley's note to Gryan Stoutmantle."
+      }
+    },
+    {
+      "id": 135,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [132],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "The evidence needs an expert.",
+        "details": "Continue in Stormwind.",
+        "solution": "Bring Wiley's note to Mathias Shaw."
+      }
+    },
+    {
+      "id": 141,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [135],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "Report what you learned.",
+        "details": "Return to Westfall.",
+        "solution": "Deliver Shaw's report to Gryan Stoutmantle."
+      }
+    },
+    {
+      "id": 142,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [141],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "Intercept their communications.",
+        "details": "Search Westfall for their messenger.",
+        "solution": "Recover the Defias Messenger's message for Gryan Stoutmantle."
+      }
+    },
+    {
+      "id": 155,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [142],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "An insider can guide you.",
+        "details": "Keep the Defias Traitor safe.",
+        "solution": "Complete the escort, then report the hideout to Gryan Stoutmantle."
+      }
+    },
+    {
+      "id": 166,
+      "title": "The Defias Brotherhood",
+      "minLevel": 14,
+      "prerequisiteQuestIds": [155],
+      "sourceIds": ["questie-classic-quests", "questie-quest-fields"],
+      "hints": {
+        "hint": "Confront the leader.",
+        "details": "The objective is Edwin VanCleef.",
+        "solution": "Defeat VanCleef; return his head to Gryan Stoutmantle."
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": 5191,
+      "name": "Cruel Barb",
+      "sources": [{"id": "deadmines", "name": "The Deadmines", "kind": "dungeon", "encounter": "Edwin VanCleef", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 10399,
+      "name": "Blackened Defias Armor",
+      "sources": [{"id": "deadmines", "name": "The Deadmines", "kind": "dungeon", "encounter": "Edwin VanCleef", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 7230,
+      "name": "Smite's Mighty Hammer",
+      "sources": [{"id": "deadmines", "name": "The Deadmines", "kind": "dungeon", "encounter": "Mr. Smite", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 5201,
+      "name": "Emberstone Staff",
+      "sources": [{"id": "deadmines", "name": "The Deadmines", "kind": "dungeon", "encounter": "Captain Greenskin", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6469,
+      "name": "Venomstrike",
+      "sources": [{"id": "wailing-caverns", "name": "Wailing Caverns", "kind": "dungeon", "encounter": "Lord Serpentis", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 10410,
+      "name": "Leggings of the Fang",
+      "sources": [{"id": "wailing-caverns", "name": "Wailing Caverns", "kind": "dungeon", "encounter": "Lord Cobrahn", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6473,
+      "name": "Armor of the Fang",
+      "sources": [{"id": "wailing-caverns", "name": "Wailing Caverns", "kind": "dungeon", "encounter": "Lord Pythas", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6449,
+      "name": "Glowing Lizardscale Cloak",
+      "sources": [{"id": "wailing-caverns", "name": "Wailing Caverns", "kind": "dungeon", "encounter": "Skum", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6324,
+      "name": "Robes of Arugal",
+      "sources": [{"id": "shadowfang-keep", "name": "Shadowfang Keep", "kind": "dungeon", "encounter": "Archmage Arugal", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6392,
+      "name": "Belt of Arugal",
+      "sources": [{"id": "shadowfang-keep", "name": "Shadowfang Keep", "kind": "dungeon", "encounter": "Archmage Arugal", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6220,
+      "name": "Meteor Shard",
+      "sources": [{"id": "shadowfang-keep", "name": "Shadowfang Keep", "kind": "dungeon", "encounter": "Archmage Arugal", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    },
+    {
+      "id": 6320,
+      "name": "Commander's Crest",
+      "sources": [{"id": "shadowfang-keep", "name": "Shadowfang Keep", "kind": "dungeon", "encounter": "Commander Springvale", "sourceIds": ["atlasloot-classic-dungeons"]}]
+    }
+  ]
+}

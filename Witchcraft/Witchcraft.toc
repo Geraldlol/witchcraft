@@ -1,0 +1,20 @@
+## Interface: 16001
+## Title: WITCHCRAFT
+## Notes: Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things. /witch
+## Author: Geraldlol
+## Version: 0.1.0
+## SavedVariables: WitchcraftDB
+## X-Witchcraft-Build: stock-frame-20260923-1
+
+embeds.xml
+Evidence.lua
+Errors.lua
+Pixel.lua
+Ring.lua
+Binding.lua
+CooldownCarrier.lua
+Context.lua
+View.lua
+Options.lua
+Minimap.lua
+Core.lua

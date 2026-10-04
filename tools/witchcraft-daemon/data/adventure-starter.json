@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "id": "classic-adventure-starter",
+  "title": "Classic reference: dungeon practice, zone detours and personal adventures",
+  "sourceBuild": "WoW Classic reference data; not validated for Forever 1.60.1.69913",
+  "compatibility": "reference-only",
+  "sources": [
+    {
+      "id": "littlewigs-mr-smite",
+      "title": "LittleWigs Mr. Smite: Classic branch",
+      "url": "https://github.com/BigWigsMods/LittleWigs/blob/f805884d60bb0e512a3f0ee21baabcadc623eaae/Classic/Deadmines/MrSmite.lua",
+      "revision": "f805884d60bb0e512a3f0ee21baabcadc623eaae"
+    },
+    {
+      "id": "littlewigs-captain-greenskin",
+      "title": "LittleWigs Captain Greenskin: Classic branch",
+      "url": "https://github.com/BigWigsMods/LittleWigs/blob/f805884d60bb0e512a3f0ee21baabcadc623eaae/Classic/Deadmines/CaptainGreenskin.lua",
+      "revision": "f805884d60bb0e512a3f0ee21baabcadc623eaae"
+    },
+    {
+      "id": "littlewigs-edwin-vancleef",
+      "title": "LittleWigs Edwin VanCleef: Classic branch",
+      "url": "https://github.com/BigWigsMods/LittleWigs/blob/f805884d60bb0e512a3f0ee21baabcadc623eaae/Classic/Deadmines/EdwinVanCleef.lua",
+      "revision": "f805884d60bb0e512a3f0ee21baabcadc623eaae"
+    },
+    {
+      "id": "dbm-lord-cobrahn",
+      "title": "DBM Vanilla Lord Cobrahn reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Shared/WailingCaverns/LordCobrahn.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "dbm-skum",
+      "title": "DBM Vanilla Skum reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Shared/WailingCaverns/Skum.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "dbm-lord-serpentis",
+      "title": "DBM Vanilla Lord Serpentis reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Shared/WailingCaverns/LordSerpentis.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "dbm-baron-silverlaine",
+      "title": "DBM Classic Baron Silverlaine reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Classic/Shadowfangkeep/BaronSilverlaine.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "dbm-wolf-master-nandos",
+      "title": "DBM Classic Wolf Master Nandos reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Classic/Shadowfangkeep/WolfMasterNandos.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "dbm-archmage-arugal",
+      "title": "DBM Classic Archmage Arugal reference module",
+      "url": "https://github.com/DeadlyBossMods/DBM-Dungeons/blob/0cd25085f51aae90505f65c93e4881947d8f1bff/DBM-Party-Vanilla/Classic/Shadowfangkeep/ArchmageArugal.lua",
+      "revision": "0cd25085f51aae90505f65c93e4881947d8f1bff"
+    },
+    {
+      "id": "questie-classic-quests",
+      "title": "Questie selected Classic quest records and their field definitions",
+      "url": "https://github.com/Questie/Questie/blob/e29dc411d70a4f7c6cd5d964f153bd065c5fd834/Database/Classic/classicQuestDB.lua",
+      "revision": "e29dc411d70a4f7c6cd5d964f153bd065c5fd834"
+    },
+    {
+      "id": "atlasloot-classic-dungeons",
+      "title": "AtlasLootClassic dungeon and encounter associations",
+      "url": "https://github.com/Hoizame/AtlasLootClassic/blob/8e99341e4e779328460bf7684c0d5b22ce50ddf1/AtlasLootClassic_DungeonsAndRaids/data.lua",
+      "revision": "8e99341e4e779328460bf7684c0d5b22ce50ddf1"
+    }
+  ],
+  "dungeons": [
+    {
+      "id": "deadmines",
+      "name": "The Deadmines",
+      "aliases": ["deadmines", "dm", "vc"],
+      "zone": "Westfall",
+      "sourceIds": ["littlewigs-mr-smite", "littlewigs-captain-greenskin", "littlewigs-edwin-vancleef", "atlasloot-classic-dungeons"],
+      "steps": [
+        {
+          "id": "deadmines-mr-smite",
+          "title": "Mr. Smite",
+          "briefing": "Smite Stomp marks a phase change; Smite Slam follows in the final stage. Agree how the group will recover after each transition before pulling.",
+          "roleTips": {
+            "tank": "After each transition, re-establish your position and watch for Smite Slam in the final stage. Keep a defensive option available if your character has one.",
+            "healer": "Treat the transition as a regrouping cue. Be ready to resume tank healing when the boss returns to attacking, especially with Smite Slam in the final stage.",
+            "damage": "Notice Smite Stomp instead of assuming the fight has ended. Resume on the group's target when the tank is ready."
+          },
+          "quiz": {
+            "question": "Which ability signals a change of phase?",
+            "choices": ["Smite Stomp", "Poisoned Harpoon", "VanCleef's Allies"],
+            "answerIndex": 0,
+            "explanation": "Smite Stomp marks a phase transition. Smite Slam belongs to the final stage."
+          },
+          "sourceIds": ["littlewigs-mr-smite"]
+        },
+        {
+          "id": "deadmines-captain-greenskin",
+          "title": "Captain Greenskin",
+          "briefing": "Prepare for Poisoned Harpoon. Before the pull, identify any player who can remove poison and agree who will watch its cast. Check the abilities your party has actually learned.",
+          "roleTips": {
+            "tank": "Keep Greenskin controlled while the group handles Poisoned Harpoon. If you have an available interrupt, coordinate it with the other interrupters.",
+            "healer": "Watch the poisoned player's health. If your character can remove poison, prepare that response; do not assume every healer has that ability.",
+            "damage": "Offer an interrupt or poison removal if your character actually has it. Avoid overlapping every available response on the same cast."
+          },
+          "quiz": {
+            "question": "Which removal capability is relevant to Poisoned Harpoon?",
+            "choices": ["Remove curse", "Remove poison", "Remove disease"],
+            "answerIndex": 1,
+            "explanation": "Poison removal is the relevant response. Availability depends on the character."
+          },
+          "sourceIds": ["littlewigs-captain-greenskin"]
+        },
+        {
+          "id": "deadmines-edwin-vancleef",
+          "title": "Edwin VanCleef",
+          "briefing": "VanCleef's Allies signals reinforcements. Agree on an add plan: who gathers them, which target the group attacks, and how the healer calls for help.",
+          "roleTips": {
+            "tank": "Be ready to collect arriving allies instead of watching only VanCleef. Establish a clear target for the group.",
+            "healer": "Choose a position that lets the tank reach you if reinforcements approach. Call out pressure early while continuing essential healing.",
+            "damage": "Follow the agreed add target and allow the tank to establish control. Keep any assigned crowd control consistent with the group's plan."
+          },
+          "quiz": {
+            "question": "What should the group prepare for when VanCleef's Allies occurs?",
+            "choices": ["A poison-removal check", "An end-of-dungeon reward window", "Additional enemies"],
+            "answerIndex": 2,
+            "explanation": "VanCleef's Allies brings reinforcements. Have an add-handling plan ready."
+          },
+          "sourceIds": ["littlewigs-edwin-vancleef"]
+        }
+      ]
+    },
+    {
+      "id": "wailing-caverns",
+      "name": "Wailing Caverns",
+      "aliases": ["wc", "wailing caverns"],
+      "zone": "The Barrens",
+      "sourceIds": ["dbm-lord-cobrahn", "dbm-skum", "dbm-lord-serpentis", "atlasloot-classic-dungeons"],
+      "steps": [
+        {
+          "id": "wailing-caverns-lord-cobrahn",
+          "title": "Lord Cobrahn",
+          "briefing": "Prepare for Druid's Slumber, Healing Touch and poison. Assign an interrupt for Slumber, watch for the heal and identify poison-removal options. These three practice cards cover selected bosses, not the full instance or its finale.",
+          "roleTips": {
+            "tank": "Coordinate Slumber interrupts with the group. Keep your plan simple enough to continue if one party member is put to sleep.",
+            "healer": "Plan around the possibility of a sleeping party member and check whether anyone can remove poison. Your exact dispel toolkit is character-dependent.",
+            "damage": "If you have an interrupt, help cover Slumber and discuss how the group will respond to Healing Touch. Call your assignment before pulling."
+          },
+          "quiz": {
+            "question": "Which Cobrahn spell is the interrupt priority covered in this card?",
+            "choices": ["Druid's Slumber", "Shadow Port", "Veil of Shadow"],
+            "answerIndex": 0,
+            "explanation": "Druid's Slumber is the assigned interrupt. Also watch for Healing Touch and poison."
+          },
+          "sourceIds": ["dbm-lord-cobrahn"]
+        },
+        {
+          "id": "wailing-caverns-skum",
+          "title": "Skum",
+          "briefing": "Prepare for Chained Bolt by discussing positioning and healing beyond the tank. Keep healing range in mind; no reliable spread distance is established for this reference.",
+          "roleTips": {
+            "tank": "Choose a stable position that keeps the boss accessible without forcing everyone into the same spot.",
+            "healer": "Be ready to look beyond the tank when Chained Bolt occurs. Keep the group within your actual healing range while they position.",
+            "damage": "Avoid unnecessary stacking and keep the healer in reach. Positioning is preparation, not a guarantee of avoiding damage."
+          },
+          "quiz": {
+            "question": "Which attack should you recognize during Skum?",
+            "choices": ["Healing Touch", "Smite Slam", "Chained Bolt"],
+            "answerIndex": 2,
+            "explanation": "Chained Bolt is the attack covered here. Plan to notice damage across the party."
+          },
+          "sourceIds": ["dbm-skum"]
+        },
+        {
+          "id": "wailing-caverns-lord-serpentis",
+          "title": "Lord Serpentis",
+          "briefing": "Watch Druid's Slumber and Healing Touch. Decide who covers Slumber and who can cover the next cast, using abilities your party has learned.",
+          "roleTips": {
+            "tank": "Keep Serpentis positioned consistently and coordinate your interrupt with the group rather than spending every interrupt together.",
+            "healer": "Let the group know if Slumber affects your ability to respond. Agree on an available backup before the pull.",
+            "damage": "Watch both cast names. Cover your assigned interrupt and call if it is unavailable so a teammate can respond."
+          },
+          "quiz": {
+            "question": "Besides Druid's Slumber, which Serpentis cast should you watch?",
+            "choices": ["Poisoned Harpoon", "Healing Touch", "VanCleef's Allies"],
+            "answerIndex": 1,
+            "explanation": "Healing Touch is the other cast covered in this rehearsal."
+          },
+          "sourceIds": ["dbm-lord-serpentis"]
+        }
+      ]
+    },
+    {
+      "id": "shadowfang-keep",
+      "name": "Shadowfang Keep",
+      "aliases": ["sfk", "shadowfang keep"],
+      "zone": "Silverpine Forest",
+      "sourceIds": ["dbm-baron-silverlaine", "dbm-wolf-master-nandos", "dbm-archmage-arugal", "atlasloot-classic-dungeons"],
+      "steps": [
+        {
+          "id": "shadowfang-keep-baron-silverlaine",
+          "title": "Baron Silverlaine",
+          "briefing": "Watch the target of Veil of Shadow. Before pulling, establish whether the party has curse removal and who will notice the affected player. This card describes the Classic encounter.",
+          "roleTips": {
+            "tank": "Keep the encounter controlled while the party identifies the curse target. Mention if you are affected so the responsible player can react.",
+            "healer": "Watch the affected player and check your own removal capabilities. If your class cannot remove curses, identify a teammate who can.",
+            "damage": "If you can remove curses, offer that utility before the pull. Do not assume curse removal belongs to the healer."
+          },
+          "quiz": {
+            "question": "What kind of effect is Veil of Shadow in this reference?",
+            "choices": ["Curse", "Poison", "Disease"],
+            "answerIndex": 0,
+            "explanation": "Veil of Shadow is a curse. Check who has the corresponding removal tool."
+          },
+          "sourceIds": ["dbm-baron-silverlaine"]
+        },
+        {
+          "id": "shadowfang-keep-wolf-master-nandos",
+          "title": "Wolf Master Nandos",
+          "briefing": "Prepare for Bleak Worg, Slavering Worg and Lupine Horror summons. Agree on a collection point, a target call and a way for the healer to ask for help.",
+          "roleTips": {
+            "tank": "Leave attention available for newly summoned enemies. Gather them where the party can follow a clear target call.",
+            "healer": "Stay somewhere the tank can reach quickly if a summon moves toward you. Call out incoming pressure early.",
+            "damage": "Switch to the agreed target when summons arrive. Avoid scattering enemies while the tank is collecting them."
+          },
+          "quiz": {
+            "question": "Which enemy is summoned by Nandos?",
+            "choices": ["Defias Pillager", "Lupine Horror", "Lord Cobrahn"],
+            "answerIndex": 1,
+            "explanation": "Lupine Horror is one of the summons, alongside Bleak Worg and Slavering Worg."
+          },
+          "sourceIds": ["dbm-wolf-master-nandos"]
+        },
+        {
+          "id": "shadowfang-keep-archmage-arugal",
+          "title": "Archmage Arugal",
+          "briefing": "Watch Shadow Port and Arugal's Curse. Notice position changes and check the affected ally. Plan where to regroup; do not assume Arugal's Curse can be removed.",
+          "roleTips": {
+            "tank": "Reassess the boss's position after Shadow Port before moving the whole group. Preserve access for your healer.",
+            "healer": "Check the curse target and maintain a usable position as the encounter moves. Do not promise a dispel without checking the current effect and your toolkit.",
+            "damage": "Keep track of the boss after Shadow Port and avoid rushing out of the healer's reach. Call the curse target if the group needs help noticing it."
+          },
+          "quiz": {
+            "question": "Which pair should you watch for against Arugal?",
+            "choices": ["Smite Stomp and Smite Slam", "Healing Touch and Poisoned Harpoon", "Shadow Port and Arugal's Curse"],
+            "answerIndex": 2,
+            "explanation": "Shadow Port changes the positioning problem; Arugal's Curse calls attention to an affected ally."
+          },
+          "sourceIds": ["dbm-archmage-arugal"]
+        }
+      ]
+    }
+  ],
+  "detours": [
+    {
+      "id": "westfall-sentinel-hill-story",
+      "title": "Pick up the Defias thread",
+      "zone": "Westfall",
+      "interests": ["story", "exploration"],
+      "summary": "Use Sentinel Hill as the starting point for a personal Defias investigation.",
+      "details": "The Classic Alliance quest begins this Defias chain with Gryan Stoutmantle sending you to Wiley in Lakeshire. If it is available, read the conversation and note your next lead. Witchcraft's quest detective can help you review the selected chain.",
+      "questIds": [65],
+      "sourceIds": ["questie-classic-quests"]
+    },
+    {
+      "id": "westfall-forgotten-heirloom",
+      "title": "A farmer's missing keepsake",
+      "zone": "Westfall",
+      "interests": ["story", "exploration"],
+      "summary": "Follow a smaller Westfall story through Farmer Furlbrow's missing pocket watch.",
+      "details": "The Forgotten Heirloom is a Classic Alliance quest about recovering Furlbrow's pocket watch from his farmhouse wardrobe at the pumpkin farm. Look for the story if it is available, or make the farm a self-chosen exploration stop.",
+      "questIds": [64],
+      "sourceIds": ["questie-classic-quests"]
+    },
+    {
+      "id": "westfall-deadmines-preparation",
+      "title": "Turn the Defias trail into a dungeon trip",
+      "zone": "Westfall",
+      "interests": ["story", "loot"],
+      "summary": "Combine the Defias finale, your Deadmines wishlist and a short boss rehearsal.",
+      "details": "The selected Classic chain ends with the Edwin VanCleef objective. Before arranging a Deadmines trip, compare your progress with quest 166, inspect your loot goals and rehearse three selected bosses. Confirm quest availability in game; wanted drops are not guaranteed.",
+      "dungeonId": "deadmines",
+      "questIds": [166],
+      "sourceIds": ["questie-classic-quests", "atlasloot-classic-dungeons"]
+    },
+    {
+      "id": "barrens-forgotten-pools",
+      "title": "Investigate the Forgotten Pools",
+      "zone": "The Barrens",
+      "interests": ["exploration", "story"],
+      "summary": "Take an exploration break at the pools featured in Tonga Runetotem's investigation.",
+      "details": "The Forgotten Pools asks the player to explore the water and report findings to Tonga Runetotem. In the Classic reference this is a Horde quest. If it is available, use its instructions; otherwise treat the destination as an optional personal sightseeing idea.",
+      "questIds": [870],
+      "sourceIds": ["questie-classic-quests"]
+    },
+    {
+      "id": "barrens-stagnant-oasis",
+      "title": "Continue the oasis investigation",
+      "zone": "The Barrens",
+      "interests": ["story", "exploration"],
+      "summary": "Follow Tonga's investigation from the Forgotten Pools toward the Stagnant Oasis.",
+      "details": "The Classic records connect The Forgotten Pools to The Stagnant Oasis, then Altered Beings. The oasis stage asks you to test dried seeds; the following stage concerns altered snapjaws. This Horde quest thread makes a story-focused detour if available.",
+      "questIds": [870, 877, 880],
+      "sourceIds": ["questie-classic-quests"]
+    },
+    {
+      "id": "barrens-wailing-caverns-plan",
+      "title": "Make a plan for the Fang leaders",
+      "zone": "The Barrens",
+      "interests": ["loot", "story"],
+      "summary": "Connect a Wailing Caverns loot goal with the Leaders of the Fang story.",
+      "details": "The Classic Horde quest Leaders of the Fang requests gems from Cobrahn, Anacondra, Pythas and Serpentis, returned to Nara Wildmane in Thunder Bluff. Check its availability separately, then use the wishlist and rehearsal to prepare a group trip. The three-card rehearsal does not cover every leader or the dungeon finale.",
+      "dungeonId": "wailing-caverns",
+      "questIds": [914],
+      "sourceIds": ["questie-classic-quests", "atlasloot-classic-dungeons"]
+    },
+    {
+      "id": "silverpine-arugal-story",
+      "title": "Follow the Sepulcher's Arugal lead",
+      "zone": "Silverpine Forest",
+      "interests": ["story", "loot"],
+      "summary": "Give a Shadowfang trip a story goal through Arugal Must Die.",
+      "details": "The Classic Horde quest Arugal Must Die asks for Arugal's head to be returned to Dalar Dawnweaver at the Sepulcher. If the quest is available, read the request before planning your dungeon visit. Witchcraft can pair the idea with a wishlist and rehearsal; this detour is not an eligibility check.",
+      "dungeonId": "shadowfang-keep",
+      "questIds": [1014],
+      "sourceIds": ["questie-classic-quests", "atlasloot-classic-dungeons"]
+    },
+    {
+      "id": "silverpine-shadowfang-search",
+      "title": "Remember the missing Deathstalkers",
+      "zone": "Silverpine Forest",
+      "interests": ["story", "exploration"],
+      "summary": "Add a search-party objective to a planned Shadowfang Keep visit.",
+      "details": "Deathstalkers in Shadowfang is a Classic Horde quest asking you to find Adamant and Vincent. If it is available, keep its text in mind as you explore the keep with your group. This is a curated story prompt; Witchcraft does not infer that you have met either character.",
+      "dungeonId": "shadowfang-keep",
+      "questIds": [1098],
+      "sourceIds": ["questie-classic-quests"]
+    },
+    {
+      "id": "silverpine-book-of-ur",
+      "title": "Give the expedition a library errand",
+      "zone": "Silverpine Forest",
+      "interests": ["story", "exploration"],
+      "summary": "Consider The Book of Ur before committing to your Shadowfang expedition.",
+      "details": "The Classic Horde quest The Book of Ur is associated with Shadowfang Keep and sends the book back to Keeper Bel'dugur in the Undercity Apothecarium. Its quest giver is outside Silverpine, so this is a preparation reminder rather than a nearby pickup. Check the current quest text and availability yourself.",
+      "dungeonId": "shadowfang-keep",
+      "questIds": [1013],
+      "sourceIds": ["questie-classic-quests"]
+    }
+  ],
+  "campaigns": [
+    {
+      "id": "early-dungeons",
+      "title": "Three early expeditions",
+      "description": "A Witchcraft-authored personal challenge: prepare for and finish a group trip to each selected dungeon. Mark each visit yourself and keep a memory from the run. These are personal stamps, not official achievements or automatically observed boss kills.",
+      "milestones": [
+        {"id": "early-dungeons-deadmines", "title": "A Deadmines memory", "description": "Finish your planned Deadmines trip, then record one moment you want to remember and mark this milestone yourself.", "kind": "dungeon", "referenceId": "deadmines"},
+        {"id": "early-dungeons-wailing-caverns", "title": "A Wailing Caverns memory", "description": "Finish your planned Wailing Caverns trip and record one lesson from the group before marking this milestone.", "kind": "dungeon", "referenceId": "wailing-caverns"},
+        {"id": "early-dungeons-shadowfang-keep", "title": "A Shadowfang memory", "description": "Finish your planned Shadowfang Keep trip and add a remembered moment, then mark this milestone yourself.", "kind": "dungeon", "referenceId": "shadowfang-keep"}
+      ]
+    },
+    {
+      "id": "defias-story",
+      "title": "The Defias casebook",
+      "description": "An Alliance-oriented personal story campaign based on selected Classic quest references. Quest availability on Forever remains unverified. Confirm progress yourself; a stamp records your statement rather than an official achievement.",
+      "milestones": [
+        {"id": "defias-story-first-lead", "title": "Follow the first lead", "description": "Complete the selected opening Defias quest and write down the lead it gave you. Mark this yourself after checking your progress.", "kind": "quest", "referenceId": "65"},
+        {"id": "defias-story-the-hideout", "title": "Find the hideout", "description": "Complete the Defias Traitor escort stage and record what you learned. Mark this yourself after checking quest 155.", "kind": "quest", "referenceId": "155"},
+        {"id": "defias-story-enter-the-mines", "title": "Follow the trail below", "description": "Make your planned Deadmines trip with a group and record the visit yourself.", "kind": "dungeon", "referenceId": "deadmines"},
+        {"id": "defias-story-close-the-case", "title": "Close the case", "description": "Finish and turn in the selected VanCleef quest, then record your ending to the story and mark this milestone yourself.", "kind": "quest", "referenceId": "166"}
+      ]
+    },
+    {
+      "id": "westfall-explorer",
+      "title": "Westfall field journal",
+      "description": "Three self-chosen Westfall stops for a small personal scrapbook. Visiting a place or recording a plan is your own milestone; Witchcraft does not check coordinates, quest eligibility or official exploration credit.",
+      "milestones": [
+        {"id": "westfall-explorer-sentinel-hill", "title": "A lead from Sentinel Hill", "description": "Visit the story stop, read any available dialogue and write one sentence about the lead you chose. Confirm the visit yourself.", "kind": "exploration", "referenceId": "westfall-sentinel-hill-story"},
+        {"id": "westfall-explorer-keepsake", "title": "A farm with a story", "description": "Explore the farmhouse story stop when appropriate for your character and record a detail you noticed. Confirm your own visit.", "kind": "exploration", "referenceId": "westfall-forgotten-heirloom"},
+        {"id": "westfall-explorer-expedition-plan", "title": "My next expedition", "description": "Review the Deadmines preparation stop and write down a story or loot goal for a future group trip. Confirm when your plan is ready.", "kind": "exploration", "referenceId": "westfall-deadmines-preparation"}
+      ]
+    }
+  ]
+}

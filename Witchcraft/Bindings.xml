@@ -1,0 +1,18 @@
+<Bindings>
+    <Binding name="WITCHCRAFT_TOGGLE" header="WITCHCRAFT">
+        local addon = LibStub("AceAddon-3.0"):GetAddon("Witchcraft", true)
+        if addon then addon:Toggle() end
+    </Binding>
+    <Binding name="WITCHCRAFT_FOCUS">
+        local addon = LibStub("AceAddon-3.0"):GetAddon("Witchcraft", true)
+        if addon then addon:FocusInput() end
+    </Binding>
+    <Binding name="WITCHCRAFT_NEXTTAB">
+        local addon = LibStub("AceAddon-3.0"):GetAddon("Witchcraft", true)
+        if addon then addon:NextTab() end
+    </Binding>
+    <Binding name="WITCHCRAFT_INTERRUPT">
+        local addon = LibStub("AceAddon-3.0"):GetAddon("Witchcraft", true)
+        if addon then addon:Interrupt() end
+    </Binding>
+</Bindings>

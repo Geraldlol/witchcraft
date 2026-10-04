@@ -1,0 +1,32 @@
+{
+  "name": "witchcraft-daemon",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "witchcraft": "bin/witchcraft.js",
+    "witchcraft-mcp": "bin/witchcraft-mcp.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node bin/witchcraft.js",
+    "mcp": "node bin/witchcraft-mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
+    "@xterm/xterm": "6.0.0",
+    "electron": "44.3.0",
+    "luaparse": "0.3.1",
+    "node-pty": "1.1.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  }
+}

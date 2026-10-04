@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    >
+    <title>Witchcraft</title>
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main id="app" class="shell mode-workbench" data-connection="connecting">
+      <header class="titlebar">
+        <div class="brand drag-region" aria-label="Witchcraft terminal bridge">
+          <span class="lens-mark" aria-hidden="true"><i></i></span>
+          <span class="wordmark">WITCHCRAFT</span>
+          <span class="descriptor">BLACK GLASS LINK</span>
+        </div>
+
+        <div class="titlebar-status" role="status" aria-live="polite">
+          <span class="status-pulse" aria-hidden="true"></span>
+          <span id="connection-label">CONNECTING</span>
+        </div>
+
+        <div class="window-tools no-drag">
+          <button
+            id="mode-toggle"
+            class="tool-button tool-button-wide"
+            type="button"
+            aria-pressed="false"
+            aria-label="Switch to compact HUD"
+            aria-keyshortcuts="Control+Shift+H"
+            title="Toggle HUD / Workbench (Ctrl+Shift+H)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M3.5 4.5h13v11h-13zM6 7h8M6 10h5M6 13h7"/>
+            </svg>
+            <span id="mode-label">HUD</span>
+          </button>
+          <button id="minimize-button" class="tool-button" type="button" aria-label="Minimize Witchcraft" title="Minimize">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10.5h10"/></svg>
+          </button>
+          <button id="close-button" class="tool-button danger" type="button" aria-label="Close Witchcraft" title="Close">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="command-rail" aria-label="Witchcraft controls">
+        <nav class="agent-tabs" role="tablist" aria-label="Agent terminals">
+          <button
+            id="tab-claude"
+            class="agent-tab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="panel-claude"
+            aria-keyshortcuts="Alt+1"
+            tabindex="0"
+            data-tab="claude"
+          >
+            <span class="agent-glyph claude-glyph" aria-hidden="true">C</span>
+            <span class="agent-copy">
+              <strong>CLAUDE</strong>
+              <small id="claude-status">WAITING</small>
+            </span>
+            <span class="tab-signal" aria-hidden="true"></span>
+          </button>
+          <button
+            id="tab-codex"
+            class="agent-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel-codex"
+            aria-keyshortcuts="Alt+2"
+            tabindex="-1"
+            data-tab="codex"
+          >
+            <span class="agent-glyph codex-glyph" aria-hidden="true">X</span>
+            <span class="agent-copy">
+              <strong>CODEX</strong>
+              <small id="codex-status">WAITING</small>
+            </span>
+            <span class="tab-signal" aria-hidden="true"></span>
+          </button>
+        </nav>
+
+        <div class="rail-controls no-drag">
+          <label class="opacity-control" for="opacity-slider">
+            <span>OPACITY</span>
+            <input id="opacity-slider" type="range" min="0" max="100" step="5" value="88">
+            <output id="opacity-output" for="opacity-slider">88%</output>
+          </label>
+          <button id="focus-terminal" class="text-button" type="button" aria-keyshortcuts="Control+Shift+T" title="Focus the active terminal (Ctrl+Shift+T)">
+            TERMINAL FOCUS
+          </button>
+        </div>
+      </section>
+
+      <section class="terminal-deck" aria-label="Terminal workbench">
+        <article
+          id="panel-claude"
+          class="terminal-panel is-active"
+          role="tabpanel"
+          aria-labelledby="tab-claude"
+          data-tab="claude"
+        >
+          <div class="terminal-chrome" aria-hidden="true">
+            <span>SESSION / CLAUDE</span>
+            <span class="chrome-rule"></span>
+            <span id="claude-sequence">NO SIGNAL</span>
+          </div>
+          <div id="terminal-claude" class="terminal-host" aria-label="Claude terminal" tabindex="0"></div>
+          <div id="empty-claude" class="terminal-empty" role="status">
+            <span class="empty-reticle" aria-hidden="true"></span>
+            <strong>AWAITING CLAUDE LINK</strong>
+            <small>Start the Witchcraft companion to open this channel.</small>
+          </div>
+        </article>
+
+        <article
+          id="panel-codex"
+          class="terminal-panel"
+          role="tabpanel"
+          aria-labelledby="tab-codex"
+          data-tab="codex"
+          hidden
+        >
+          <div class="terminal-chrome" aria-hidden="true">
+            <span>SESSION / CODEX</span>
+            <span class="chrome-rule"></span>
+            <span id="codex-sequence">NO SIGNAL</span>
+          </div>
+          <div id="terminal-codex" class="terminal-host" aria-label="Codex terminal" tabindex="0"></div>
+          <div id="empty-codex" class="terminal-empty" role="status">
+            <span class="empty-reticle" aria-hidden="true"></span>
+            <strong>AWAITING CODEX LINK</strong>
+            <small>Start the Witchcraft companion to open this channel.</small>
+          </div>
+        </article>
+
+        <div class="corner-index corner-index-nw" aria-hidden="true"></div>
+        <div class="corner-index corner-index-se" aria-hidden="true"></div>
+      </section>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="composer-label">
+          <label id="composer-label" for="prompt-input">TO CLAUDE / PROMPT</label>
+          <span>ENTER SENDS <b aria-hidden="true">/</b> SHIFT+ENTER ADDS A LINE</span>
+        </div>
+        <div class="composer-row">
+          <textarea
+            id="prompt-input"
+            name="prompt"
+            rows="1"
+            maxlength="16384"
+            spellcheck="true"
+            aria-labelledby="composer-label"
+            placeholder="Send an instruction to Claude..."
+          ></textarea>
+          <button id="send-button" class="send-button" type="submit" disabled>
+            <span>SEND</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 15 10-10m0 0H7m8 0v8"/></svg>
+          </button>
+        </div>
+      </form>
+
+      <footer class="statusbar">
+        <div class="status-group">
+          <span class="status-key">LINK</span>
+          <strong id="link-detail">NEGOTIATING</strong>
+        </div>
+        <div class="status-group hud-hide">
+          <span class="status-key">ACTIVE</span>
+          <strong id="active-detail">CLAUDE</strong>
+        </div>
+        <div class="status-group shortcut-group">
+          <span class="status-key">HUD</span>
+          <strong id="shortcut-detail">CTRL+SHIFT+H STARTING</strong>
+        </div>
+        <div class="status-group status-group-last">
+          <span id="update-detail">WAITING FOR STATE</span>
+          <span id="escape-hint" class="key-hint" aria-label="Press Control Shift H to escape HUD mode">
+            <kbd class="hint-keys">CTRL+SHIFT+H</kbd><span class="hint-copy">ESCAPE HUD</span>
+          </span>
+          <span class="key-hint hud-hide"><kbd>ALT</kbd><kbd>1</kbd>/<kbd>2</kbd> SWITCH</span>
+        </div>
+      </footer>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>

@@ -16,7 +16,7 @@ By default the companion daemon joins sessions from the folder selected with `ru
 
 ## Start
 
-Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, run `/reload`, and use `/witch` to open the window. On the pinned client build, run `/witch bindprobe` once per daemon/UI session to qualify the fast link.
+Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, run `/reload`, and use `/witch` to open the window. Run `/witch bindprobe` outside combat once per daemon/UI session to qualify the default binding link.
 
 - Left-click the book button at the lower-left edge of the minimap to show or hide Witchcraft, just like `/witch`.
 - Click **Claude** or **Codex** to choose the terminal you read and address. Each tab keeps its own unsent draft.
@@ -39,7 +39,7 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch settings` | Open Esc > Options > AddOns > Witchcraft |
 | `/witch errors` / `/witch errors clear` | Show the stored error count and newest entry / empty the list |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Save, list or remove reusable prompts for the **/** menu |
-| `/witch bindprobe` | Qualify the fast link once per daemon/UI session (pinned client build only) |
+| `/witch bindprobe` | Qualify the default binding link once per daemon/UI session outside combat |
 | `/witch guide` | Quest-help and loot-goal panel |
 | `/witch quest [nudge\|details\|solution] <name/link/id>` | Prepare a quest-help prompt; defaults to nudge |
 | `/witch loot [name/link/id]` | Prepare an add-goal prompt, or show the saved plan with no argument |

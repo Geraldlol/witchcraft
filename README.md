@@ -182,7 +182,7 @@ The included [witchcraft-daemon skill](.claude/skills/witchcraft-daemon/SKILL.md
 |---|---|
 | `Cannot find executable claude` or `codex` | Use `--only` for your installed assistant, or configure its native `.exe` path in [the daemon's local config](tools/witchcraft-daemon/README.md#custom-executable-paths). A working `.cmd` wrapper alone is insufficient. |
 | No calibration strip found | Run `/witch calibrate`, leave the strip uncovered, and retry. Calibration captures the virtual desktop once; very large multi-monitor layouts can exceed its 16-million-pixel limit. |
-| Window opens but replies stop | Keep WoW in front when relying on the strip; check `/witch status`, the daemon console and calibration. After a daemon restart, `/reload`; on the pinned build, repeat `/witch bindprobe`. Combat pauses terminal updates by default. |
+| Window opens but replies stop | Keep WoW in front when relying on the strip; check `/witch status`, the daemon console and calibration. After a daemon restart, `/reload`, then repeat `/witch bindprobe` outside combat. Combat pauses terminal updates by default. |
 | Joined Claude has no WoW tools | Run `mcp-setup --apply` with the same `--cwd`, then restart that Claude session and the daemon. The footer reports when the joined session lacks the tools. |
 | Context is stale or unavailable | Check sharing in **WoW context**, request an update and let delivery finish. Long quest snapshots take longer than character data, especially over the strip. |
 | `A Witchcraft bridge owns ... bridge.lock` | Check the running daemon or the skill's status action. Stop the existing daemon cleanly before starting another; dead-process locks are handled on startup. |

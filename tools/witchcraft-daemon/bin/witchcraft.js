@@ -40,6 +40,7 @@ export function parseArgs(argv) {
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
     if (token === '--clean') { options.clean = true; continue; }
     if (token === '--no-mcp') { options.noMcp = true; continue; }
+    if (token === '--overlay') { options.overlay = true; continue; }
     if (token === '--no-overlay') { options.noOverlay = true; continue; }
     if (token === '--no-current') { options.noCurrent = true; continue; }
     if (token === '--pixels') { options.pixels = true; continue; }
@@ -394,29 +395,15 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     const lifetime = pair.attached.size ? 'Attached mode stays active until Witchcraft is stopped.' : 'Close both agents to stop.';
     process.stderr.write(`Witchcraft: Claude + Codex tabs; Ctrl+] switches the real terminal. ${lifetime}\n`);
     for (const line of current) process.stderr.write(`Witchcraft: ${line}. --no-current starts fresh sessions instead.\n`);
-    // A patched client silently turns the carriers off in game; say so before the player logs in.
-    const build = await checkClientBuild(config.addonsDir);
+    // A patched client silently turns the cooldown carrier off in game; say so before the player logs
+    // in. The pin gates nothing else, so with the carrier off a patch needs no action.
+    const build = config.cooldownCarrier === true
+      ? await (adapters.checkClientBuild ?? checkClientBuild)(config.addonsDir) : { status: 'unused' };
     if (build.status === 'mismatch') {
-      process.stderr.write(`Witchcraft: the client is ${build.client} but the carriers were checked on ${build.pinned}; the fast link `
-        + 'stays off and typing falls back to the screen strip until Witchcraft/Evidence.lua is moved to the new build.\n');
+      process.stderr.write(`Witchcraft: the client is ${build.client} but the optional cooldown carrier was checked on ${build.pinned}; it `
+        + 'stays off until Witchcraft/Evidence.lua is moved after exact-build validation. The binding carrier and calibrated strip are separate.\n');
     }
     for (const signal of STOP_SIGNALS) process.on(signal, terminate);
-    if (!options.noOverlay && adapters.overlay !== false) {
-      try {
-        const createOverlay = adapters.createOverlay ?? createElectronOverlaySupervisor;
-        overlay = createOverlay({ terminal: pair });
-        overlay.on?.('startup-error', error => process.stderr.write(`\nWitchcraft overlay unavailable: ${error.message}\n`));
-        overlay.on?.('restart-error', error => process.stderr.write(`\nWitchcraft overlay restart failed: ${error.message}\n`));
-        overlay.on?.('protocol-error', error => process.stderr.write(`\nWitchcraft overlay protocol error: ${error.message}\n`));
-        overlay.on?.('unavailable', () => process.stderr.write('\nWitchcraft overlay stopped; both terminal sessions remain active.\n'));
-        await startResource(overlay);
-      } catch (error) {
-        process.stderr.write(`\nWitchcraft overlay unavailable: ${error.message}\n`);
-        if (stopped) rememberFailure(error);
-        await overlay?.stop().catch(() => {});
-        overlay = null;
-      }
-    }
     if (stopped) return done;
     if (config.accountDir && adapters.bindingCarrier !== false) {
       const Receiver = adapters.BindingReceiver ?? BindingReceiver;
@@ -530,6 +517,25 @@ Cooldown carrier retained for inspection: ${error.message}
     }, 500);
     lag.unref?.();
     stopLagProbe = () => clearInterval(lag);
+    // The overlay is opt-in and starts last, unawaited: the game link never waits on Electron.
+    const wantsOverlay = (options.overlay === true || config.overlay === true) && !options.noOverlay;
+    if (wantsOverlay && adapters.overlay !== false) {
+      const unavailable = async error => {
+        process.stderr.write(`\nWitchcraft overlay unavailable: ${error.message}\n`);
+        if (stopped) rememberFailure(error);
+        await overlay?.stop().catch(() => {});
+        overlay = null;
+      };
+      try {
+        const createOverlay = adapters.createOverlay ?? createElectronOverlaySupervisor;
+        overlay = createOverlay({ terminal: pair });
+        overlay.on?.('startup-error', error => process.stderr.write(`\nWitchcraft overlay unavailable: ${error.message}\n`));
+        overlay.on?.('restart-error', error => process.stderr.write(`\nWitchcraft overlay restart failed: ${error.message}\n`));
+        overlay.on?.('protocol-error', error => process.stderr.write(`\nWitchcraft overlay protocol error: ${error.message}\n`));
+        overlay.on?.('unavailable', () => process.stderr.write('\nWitchcraft overlay stopped; both terminal sessions remain active.\n'));
+        void startResource(overlay).catch(unavailable);
+      } catch (error) { await unavailable(error); }
+    }
   } catch (error) { void stop(error); }
   finally { finishStartup(); }
   return done;
@@ -644,7 +650,7 @@ export async function main(argv = process.argv.slice(2)) {
       `witchcraft init [--ring 3000] [--clean] [--account NAME] [--character NAME]\n` +
       `witchcraft calibrate [--account NAME]    (show /witch calibrate first)\n` +
       `witchcraft burst-probe [--timeout 30]     (show /witch burstprobe first)\n` +
-      `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--no-overlay] [--pixels]\n` +
+      `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--overlay|--no-overlay] [--no-pixels]\n` +
       `witchcraft run --only claude -- <executable> <args...>\n` +
       `witchcraft run --attach claude=PID|pick [--attach codex=PID|pick]\n` +
       `witchcraft consoles [--all]                (the consoles a tab can mirror)\n` +
@@ -653,8 +659,8 @@ export async function main(argv = process.argv.slice(2)) {
       `--attach mirrors a console you started yourself instead of launching that tab;\n` +
       `type in that console's own window. Its colour is the sixteen ANSI colours.\n` +
       `WoW MCP is added to recognized Claude/Codex commands. --no-mcp skips it.\n` +
-      `The transparent desktop overlay starts by default; --no-overlay keeps only the terminal UI.\n` +
-      `The local binding carrier is the default; --pixels enables legacy screen capture.\n` +
+      `The desktop overlay is off; --overlay or overlay: true starts it, and --no-overlay overrides config.\n` +
+      `A saved calibration starts fallback screen capture; --no-pixels disables it.\n` +
       `Ctrl+] selects the real terminal; WoW tabs select independently.\n` +
       `By default the Claude tab mirrors the newest Claude Code console running in --cwd and the\n` +
       `Codex tab resumes the newest Codex thread there; --attach or --no-current overrides that.`);

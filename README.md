@@ -35,7 +35,7 @@ Guides and Adventures use a small, source-linked **Classic reference catalog**: 
 | MCP server | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Up to 15 tools over local STDIO: 12 read-only tools and three optional tools that save local goals/passport records. |
 | Claude Code skill | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Start, stop, restart and check the daemon from Claude Code. |
 
-**Download the full source to get all four.** The release asset `Witchcraft-0.1.0.zip` contains only the addon. It still needs the desktop daemon from the source download or a clone.
+**Download the full source to get all four.** The addon-only release ZIP contains only the `Witchcraft` folder. It still needs the desktop daemon from the source download or a clone.
 
 ## Requirements
 
@@ -44,7 +44,7 @@ Guides and Adventures use a small, source-linked **Classic reference catalog**: 
 - [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex), or both, installed and already signed in. The daemon needs native executables (`claude.exe` / `codex.exe`); `.cmd` and `.bat` wrappers do not work. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if yours are not found.
 - PowerShell for setup. The optional Claude Code management skill requires **PowerShell 7** (`pwsh`).
 
-The current fast transports are pinned to **1.60.1.70205** in [`Witchcraft/Evidence.lua`](Witchcraft/Evidence.lua). On another build they stay off and report the mismatch; calibrate the screen strip below so the fallback is available. This release targets Forever; other WoW clients are outside its compatibility claim.
+The default binding carrier is not build-pinned; qualify it once per daemon/UI session with `/witch bindprobe`. The optional cooldown and addon-state carriers remain pinned to the last runtime-qualified build, **1.60.1.70205**, in [`Witchcraft/Evidence.lua`](Witchcraft/Evidence.lua) and stay off on another build. Keep the screen strip calibrated as a separate fallback. This release targets Forever; other WoW clients are outside its compatibility claim.
 
 ## Install
 
@@ -60,7 +60,7 @@ The current fast transports are pinned to **1.60.1.70205** in [`Witchcraft/Evide
 
    ```json
    {
-     "addonsDir": "C:/Program Files/World of Warcraft/_classic_beta_/Interface/AddOns"
+      "addonsDir": "C:/Program Files/World of Warcraft/_forever_/Interface/AddOns"
    }
    ```
 
@@ -114,12 +114,12 @@ node bin/witchcraft.js run --only codex --cwd 'C:\path\to\your\project'
 
 By default, Claude mirrors the newest running interactive Claude Code session in that folder, and Codex resumes the newest top-level Codex thread there. A tab with no matching session starts fresh. Add `--no-current` to start fresh deliberately. The daemon window tells you which sessions it joined.
 
-The **desktop overlay starts too**. Add `--no-overlay` if you only want the game window and terminal. In the overlay, HUD mode passes clicks through; **Ctrl+Shift+H** brings back the interactive workbench.
+The desktop overlay is off by default. Add `--overlay`, or set `"overlay": true` in `.local/config.json`, to start it after the game link is up. In the overlay, HUD mode passes clicks through; **Ctrl+Shift+H** brings back the interactive workbench. `--no-overlay` overrides a saved setting.
 
 ### 3. Connect in game
 
 1. After starting the daemon, run `/reload` outside combat, then `/witch` or click the minimap book button.
-2. On the pinned build, run `/witch bindprobe` outside combat once per daemon/UI session. Wait for the message confirming host decode, acknowledgement and cleanup succeeded.
+2. Run `/witch bindprobe` outside combat once per daemon/UI session. Wait for the message confirming host decode, acknowledgement and cleanup succeeded.
 3. Select Claude or Codex and send a short prompt. Confirm its reply appears in the same tab. `/witch status` shows connection details if it does not.
 
 The input box's Enter sends your draft; the separate **Enter** button accepts a terminal prompt. Use **Keys** for navigation and Interrupt. The desktop terminal remains usable, and **Ctrl+]** switches its selected agent independently of the game tabs.

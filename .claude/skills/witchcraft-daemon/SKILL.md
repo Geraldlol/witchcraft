@@ -21,7 +21,8 @@ and reports what the ring, cache and carrier files say from outside.
 | Start in the proven mode (screen strip bootstrap), joining current sessions: Claude tab mirrors the running Claude Code console in `-Cwd` (default: the current folder), Codex tab resumes the newest Codex thread there | `-Action start` |
 | Start with new Claude and Codex sessions instead | `-Action start -Fresh` |
 | Start without the strip: the cooldown carrier's heartbeat drives the ring (unproven in game) | `-Action start -Mode carrier` |
-| One agent only, no overlay window | `-Action start -Only codex -NoOverlay` |
+| One agent only; the overlay remains off by default | `-Action start -Only codex` |
+| Start the optional desktop overlay | `-Action start -Overlay` |
 | Show a tab a console you started yourself, instead of launching that tab | `-Action start -Attach claude=<pid>` |
 | Choose that console from a list in the daemon's window | `-Action start -Attach claude=pick` |
 | Which consoles can be mirrored, and their process ids | `node bin/witchcraft.js consoles [--all]` in the daemon dir |

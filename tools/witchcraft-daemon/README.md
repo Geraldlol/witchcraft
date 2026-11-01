@@ -21,7 +21,7 @@ explicitly: node-pty's install script runs through `rebuild` (the explicit `--ig
 matters: a user-level `ignore-scripts=true` otherwise makes `rebuild` succeed without running it),
 and Electron's binary is fetched by its installer against the `checksums.json` pinned in the locked
 package, rather than on first launch. The `node -e` check fails unless both artifacts are in place.
-`npm ci` also reports known advisories for the locked tree.
+The release lockfile passes `npm audit` with no known vulnerabilities.
 
 The repository root's `wow.config.json` (copy `wow.config.example.json`; it is git-ignored) must identify the intended `Interface/AddOns` directory. Account selection is automatic only when one account directory exists; otherwise add `--account NAME`. Local calibration and preferences go in ignored `.local/config.json`.
 
@@ -33,7 +33,7 @@ Start both agents in a terminal:
 node bin/witchcraft.js run --cwd 'C:\path\to\your\project'
 ```
 
-On the client build pinned in [`Witchcraft/Evidence.lua`](../../Witchcraft/Evidence.lua) (currently 1.60.1.70205), run `/witch bindprobe` once out of combat for each new daemon/UI session. The qualification is complete only when Witchcraft prints that host decode, acknowledgement and exact cleanup all succeeded. The probe refuses occupied keys, combat, binding-set changes and any readback mismatch. Other client builds disable the file carriers; keep the screen strip calibrated for that fallback.
+Run `/witch bindprobe` once out of combat for each new daemon/UI session. The default binding carrier is not build-pinned; its qualification is complete only when Witchcraft prints that host decode, acknowledgement and exact cleanup all succeeded. The probe refuses occupied keys, combat, binding-set changes and any readback mismatch. The optional cooldown and addon-state carriers remain pinned in [`Witchcraft/Evidence.lua`](../../Witchcraft/Evidence.lua) (currently 1.60.1.70205) and stay off on another build. Keep the screen strip calibrated as a separate fallback.
 
 Calibrate the screen strip before your first run. Once calibration is saved, ordinary `run` also reads the strip, providing a fallback when a file carrier cannot operate. In WoW, run `/witch calibrate`, keep the top-left strip visible and uncovered, then run:
 
@@ -58,7 +58,7 @@ The selected agent can still join or resume an existing session with `--only`; a
 
 ## Private local overlay
 
-The desktop overlay starts with `run`. It is a same-machine presentation for the daemon's existing Claude and Codex PTYs. It uses the pinned Electron runtime and one inherited process IPC channel; it does not open a TCP listener or take ownership of either terminal. Claude and Codex have separate tabs. The background-opacity control runs from fully transparent to opaque while terminal text stays readable. HUD mode is click-through; `Ctrl+Shift+H` restores the interactive workbench. Use `--no-overlay` when only the terminal UI is wanted.
+The desktop overlay is off by default. `run --overlay`, or `"overlay": true` in `.local/config.json`, starts it after the game link is up, and the link never waits for it. It is a same-machine presentation for the daemon's existing Claude and Codex PTYs. It uses the pinned Electron runtime and one inherited process IPC channel; it does not open a TCP listener or take ownership of either terminal. Claude and Codex have separate tabs. The background-opacity control runs from fully transparent to opaque while terminal text stays readable. HUD mode is click-through; `Ctrl+Shift+H` restores the interactive workbench. `--no-overlay` overrides a saved setting.
 
 Overlay startup failure, renderer failure and bounded restart exhaustion leave both PTYs running. The daemon owns the overlay child; the overlay never owns or restarts the terminal processes.
 

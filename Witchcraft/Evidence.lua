@@ -1,6 +1,7 @@
--- The one client build the carriers were checked against. Both carriers write the player's real
--- game settings, so an unchecked build keeps them off; moving to a new build is this one line,
--- after the build-matched UI source shows no Cooldown Viewer, encoding or AddOns API change.
+-- The one client build the optional cooldown and addon-state carriers were checked against. They
+-- write the player's real game settings, so an unchecked build keeps them off. Moving to a new
+-- build is this one line after the build-matched UI source shows no Cooldown Viewer, encoding or
+-- AddOns API change.
 -- 69977 moved the pin from 69913: the source differs only in three login-screen files
 -- (Gethe/wow-ui-source forever 70ef1b2fd7...c6e8998318). The daemon reads this file to warn at start.
 -- 70205 moved the pin from 69977 on 2026-10-04: the user confirmed both carriers working in game.

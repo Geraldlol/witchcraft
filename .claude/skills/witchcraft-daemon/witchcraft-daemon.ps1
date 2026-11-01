@@ -20,6 +20,7 @@ param(
     # claude=pick to choose from a list in the daemon's own window. `witchcraft consoles` lists
     # the candidates with their process ids. Both tabs can be named: -Attach claude=1,codex=2
     [string[]]$Attach = @(),
+    [switch]$Overlay,
     [switch]$NoOverlay,
     [switch]$NoMcp,
     # By default the daemon joins what is already running in -Cwd: the Claude tab mirrors the
@@ -41,6 +42,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($Overlay -and $NoOverlay) { throw 'Use either -Overlay or -NoOverlay, not both.' }
 
 if (-not $Repo) { $Repo = $env:WITCHCRAFT_HOME }
 if (-not $Repo) {
@@ -180,7 +183,7 @@ function Start-Daemon([string]$dir) {
     if ($lock) { Remove-Item $lock.path; Write-Output "removed stale lock ($(if ($lock.invalid) { 'unreadable' } else { Stale-Reason $lock }))" }
     # Start-Process splits unquoted arguments on spaces, and the path may have one.
     $args = @('bin/witchcraft.js', 'run', '--cwd', ('"' + $Cwd + '"'))
-    if ($Mode -eq 'pixels') { $args += '--pixels' } else { $args += '--no-pixels' }
+    if ($Mode -ne 'pixels') { $args += '--no-pixels' }
     if ($Only) { $args += @('--only', $Only) }
     $picking = $false
     foreach ($entry in $Attach) {
@@ -191,7 +194,8 @@ function Start-Daemon([string]$dir) {
         if ($entry -match '=pick$') { $picking = $true }
         $args += @('--attach', $entry)
     }
-    if ($NoOverlay) { $args += '--no-overlay' }
+    if ($Overlay) { $args += '--overlay' }
+    elseif ($NoOverlay) { $args += '--no-overlay' }
     if ($NoMcp) { $args += '--no-mcp' }
     if ($Fresh) { $args += '--no-current' }
     $proc = Start-Process -FilePath 'node' -ArgumentList $args -WorkingDirectory $dir -PassThru

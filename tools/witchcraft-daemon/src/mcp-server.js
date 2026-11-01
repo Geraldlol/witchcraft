@@ -66,7 +66,7 @@ const READ_ONLY_NOTE = 'This server was started read-only: wishlists and the pas
 
 export function createMcpServer({ cachePath, guidePath, adventurePath, now = Date.now, allowWrites = false } = {}) {
   if (typeof cachePath !== 'string' || !cachePath) throw new TypeError('A fixed context cache path is required');
-  const server = new McpServer({ name: 'witchcraft-wow', version: '0.1.0' }, { instructions: instructions.replace('WRITES ', allowWrites ? WRITE_NOTE : READ_ONLY_NOTE) });
+  const server = new McpServer({ name: 'witchcraft-wow', version: '0.1.1' }, { instructions: instructions.replace('WRITES ', allowWrites ? WRITE_NOTE : READ_ONLY_NOTE) });
   const readCache = () => readContextFile(cachePath, { now: now() });
   // Each domain has its own want file, so the two adapters never rewrite each other's request.
   const request = ({ now: requestedAt, domains }) => Promise.all(domains.map(domain => requestContext(contextWantPath(cachePath, domain), { now: requestedAt })));

@@ -2,9 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 // The launcher's .build.info at the install root has one row per installed product. A product's
-// folder is its name after "wow_" between underscores (wow_classic_beta is _classic_beta_), and
-// plain "wow" is _retail_.
-function folderOf(product) { return product === 'wow' ? '_retail_' : product.startsWith('wow_') ? `_${product.slice(4)}_` : null; }
+// folder is usually its name after "wow_" between underscores (wow_classic_beta is
+// _classic_beta_). Retail is plain "wow" and the Forever launch product is "wowf".
+function folderOf(product) {
+  if (product === 'wow') return '_retail_';
+  if (product === 'wowf') return '_forever_';
+  return product.startsWith('wow_') ? `_${product.slice(4)}_` : null;
+}
 
 async function readClient(addonsDir) {
   const folder = path.basename(path.resolve(addonsDir, '../..'));
@@ -25,7 +29,7 @@ async function readPinned(addonsDir) {
   return pin ? `${pin[1]}.${pin[2]}` : null;
 }
 
-/** Compares the installed client with the build Witchcraft's carriers were checked against. */
+/** Compares the installed client with the optional carrier build pin. */
 export async function checkClientBuild(addonsDir) {
   const [client, pinned] = await Promise.all([readClient(addonsDir), readPinned(addonsDir)]);
   if (!client || !pinned) return { status: 'unknown', client, pinned };

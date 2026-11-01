@@ -150,9 +150,14 @@ export class RingWriter {
     const source = serializeHistoryChunk(payload);
     const operation = this.chain.catch(() => {}).then(async () => {
       if (this.stopped || generation !== this.generation || seq !== this.cursor) return false;
+      // Publishing ticks every second; while nothing changed, the slot already holds these bytes.
+      const last = this.lastWrite;
+      if (last && last.generation === generation && last.seq === seq && last.source === source) return true;
       const directory = await this.check(this.addonsDir, seq);
       if (this.stopped || generation !== this.generation || seq !== this.cursor) return false;
+      this.lastWrite = null;
       await this.write(path.join(directory, 'Chunk.lua'), source);
+      this.lastWrite = { generation, seq, source };
       this.written.add(seq);
       return true;
     });

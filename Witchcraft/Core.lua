@@ -5,7 +5,7 @@ local Core, Persistence = {}, {}
 ns.Core, ns.Persistence = Core, Persistence
 local methods = {}
 methods.__index = methods
-local BUILD = "stock-frame-20260923-1"
+local BUILD = "release-0.1.1"
 local Ring = ns.Ring
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
@@ -245,7 +245,15 @@ end
 function methods:AcceptCooldownHost(result)
     local carrier = self.cooldown
     if not carrier then return end
-    if result.cooldownProtocol ~= CooldownCarrier.Protocol or not result.cooldownNonce then return end
+    -- A host that leaves the carrier out never reads the layout, so the player's setting is handed
+    -- back and stays untouched, in later UI sessions too, until a host advertises the carrier again.
+    if result.cooldownProtocol ~= CooldownCarrier.Protocol or not result.cooldownNonce then
+        self.global.cooldownHost = false
+        -- An idle session owns nothing but would still claim the context lane; ending it writes nothing.
+        if carrier.status ~= "stopped" and carrier.status ~= "restored" then self:ReleaseCooldown() end
+        return
+    end
+    self.global.cooldownHost = true
     if carrier.status == "quarantined" then
         -- Hand any owned frame back first. Reset refuses while one is held, and it must, or a
         -- live field 127 would be forgotten rather than restored. If the gate blocks (combat,
@@ -267,8 +275,8 @@ function methods:AcceptCooldownHost(result)
                 and tostring(reason):match("^unsupported client build (%S+)")
             if observed then
                 self.buildAnnounced = true
-                self:Print(string.format("Witchcraft: the client is now %s; the fast link stays off until that build"
-                    .. " is checked (last checked %s). Typing still works over the screen strip.",
+                self:Print(string.format("Witchcraft: the client is now %s; the optional cooldown carrier stays off until that build"
+                    .. " is checked (last checked %s). The binding carrier and calibrated screen strip are separate.",
                     observed, ns.Evidence.Label()))
             end
         end
@@ -280,7 +288,7 @@ end
 -- The carrier owns outbound context only while it holds a live host session.
 function methods:CooldownActive()
     local carrier = self.cooldown
-    return carrier ~= nil and not carrier.quarantined
+    return self.global.cooldownHost == true and carrier ~= nil and not carrier.quarantined
         and (carrier.status == "ready" or carrier.status == "waiting")
 end
 
@@ -288,6 +296,13 @@ end
 function methods:CooldownTick()
     local carrier = self.cooldown
     if not self.active or not carrier then return end
+    -- Host loss revokes lane authority immediately, even when combat or the self-write rate makes
+    -- handing the player's setting back asynchronous. Retry that cleanup before any new work.
+    if self.cooldownDeferred then self:ReleaseCooldown() end
+    if self.global.cooldownHost ~= true or self.cooldownDeferred then
+        self:Schedule("cooldown", 1, self.CooldownTick)
+        return
+    end
     if self:CooldownActive() and not carrier.active and self.contextPending then
         carrier:OfferContext(self.contextPending.id, self.contextPending.text)
     end
@@ -315,6 +330,7 @@ end
 function methods:OfferHeartbeat()
     local carrier = self.cooldown
     if not carrier or not self.active then return false end
+    if self.global.cooldownHost ~= true then return false, "no host reads the cooldown carrier" end
     if self.connected then return carrier:Heartbeat(self.ring.nextSeq, self:HeartbeatFlags()) end
     local now = self:ContextNow()
     if now < (self.heartbeatNextAt or 0) then return false, "carrier heartbeat backoff" end
@@ -327,11 +343,12 @@ function methods:OfferHeartbeat()
 end
 
 -- Cleanup needs the same gate the writes do, so combat defers it to the next attempt.
-function methods:ReleaseCooldown()
+function methods:ReleaseCooldown(shutdown)
     local carrier = self.cooldown
-    if not carrier then return true end
-    local released, reason = carrier:RestoreOwned()
-    if not released then self.cooldownDeferred = reason or "carrier cleanup deferred" end
+    if not carrier then self.cooldownDeferred = nil return true end
+    local released, reason = carrier:RestoreOwned(shutdown == true)
+    if released then self.cooldownDeferred = nil
+    else self.cooldownDeferred = reason or "carrier cleanup deferred" end
     return released, reason
 end
 
@@ -631,7 +648,8 @@ function methods:Stop()
     self.contextRefreshRequested = nil
     self:ClearContext("Stopped")
     if self.binding then self.binding:Stop() end
-    self:ReleaseCooldown()
+    -- The retry timer is gone now, so terminal teardown bypasses only our own write interval.
+    self:ReleaseCooldown(true)
     if self.view then self.view:Hide(); self.view:RenderStrip(nil, nil); self.view:RenderBurst(nil) end
 end
 
@@ -1260,6 +1278,10 @@ function methods:OnEvent(event)
     if not self.active then return end
     if event == "UPDATE_BINDINGS" then
         if self.binding then self.binding:OnBindingsChanged() end
+    elseif event == "PLAYER_LOGOUT" then
+        -- Nothing else would clear a heartbeat once the game closes; bypass only our own write
+        -- interval while retaining the carrier's build, security, combat and ownership gates.
+        self:ReleaseCooldown(true)
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- No heartbeat is offered here: the carrier's gate refuses every write in combat.
         -- With "keep updating in combat" on, the load timer is the only thing that re-arms
@@ -1268,6 +1290,7 @@ function methods:OnEvent(event)
         if self.global.settings.combatUpdates ~= true then self:CancelTimer("load") end
     elseif event == "PLAYER_REGEN_ENABLED" then
         if self.resetRequested then self:Reset(); return end
+        if self.cooldownDeferred then self:ReleaseCooldown() end
         self:OfferHeartbeat()
         if self:WantStream() then self:Schedule("load", 1, self.LoadTick) end
         if self.binding and (self.binding:Busy() or self.binding.enabled) then self:Schedule("binding", 0, self.BindingTick) end
@@ -1465,6 +1488,7 @@ if LibStub then
         self.events:RegisterEvent("PLAYER_REGEN_DISABLED")
         self.events:RegisterEvent("PLAYER_REGEN_ENABLED")
         self.events:RegisterEvent("UPDATE_BINDINGS")
+        self.events:RegisterEvent("PLAYER_LOGOUT")
         controller:Start()
         if not self.minimapButton then self.minimapButton = ns.MinimapButton.Create(function() self:Toggle() end) end
         if self.minimapButton then

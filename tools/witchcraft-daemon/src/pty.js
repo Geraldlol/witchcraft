@@ -21,7 +21,15 @@ export function resolveProgram(command) {
     if (command === 'claude') candidates.push(path.join(os.homedir(), '.local', 'bin', 'claude.exe'));
   }
   for (const candidate of candidates) {
-    try { if (fs.statSync(candidate).isFile() && (!['.cmd', '.bat'].includes(path.extname(candidate).toLowerCase()))) return candidate; } catch {}
+    const extension = path.extname(candidate).toLowerCase();
+    if (['.cmd', '.bat'].includes(extension)) continue;
+    try { if (fs.statSync(candidate).isFile()) return candidate; continue; } catch (error) {
+      // A Store app's execution alias (WindowsApps\pwsh.exe) is a reparse point that stat
+      // refuses with EACCES although it launches; take it when access says it exists (on
+      // Windows X_OK checks existence, not executability: the .exe name is the only filter).
+      if (process.platform !== 'win32' || error.code !== 'EACCES' || extension !== '.exe') continue;
+    }
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch {}
   }
   throw new Error(`Cannot find executable ${command}. Configure its executable path in Witchcraft's local config.`);
 }

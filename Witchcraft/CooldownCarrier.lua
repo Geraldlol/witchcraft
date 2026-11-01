@@ -583,7 +583,7 @@ end
 
 -- Clears whichever of our frames the field holds, a data frame or a heartbeat, and
 -- restores the layout beneath it.
-function methods:ClearOwned()
+function methods:ClearOwned(ignoreWriteInterval)
     if not self.outstanding and not self.heartbeat then return true end
     local data, _, reason = self:Read()
     if not data then return self:Quarantine(reason) end
@@ -594,7 +594,9 @@ function methods:ClearOwned()
     elseif self.heartbeat and field == self.heartbeat.wire then owned = self.heartbeat end
     if not owned then return self:Quarantine("cooldown layout field 127 ownership changed") end
     local now = self:Now()
-    if now - self.lastWriteAt < WRITE_INTERVAL then return false, "carrier rate limit" end
+    if not ignoreWriteInterval and now - self.lastWriteAt < WRITE_INTERVAL then
+        return false, "carrier rate limit"
+    end
     data[127] = nil
     local target
     if owned.wasEmpty and sameLayout(data, owned.baseline) then target = ""
@@ -639,14 +641,14 @@ function methods:AcceptHost(result)
     return true
 end
 
-function methods:RestoreOwned()
+function methods:RestoreOwned(ignoreWriteInterval)
     if not self.outstanding and not self.heartbeat then
         self.queue, self.active, self.queuedBytes, self.status = {}, nil, 0, "restored"
         return true
     end
     local gate, reason = self:Gate()
     if not gate then return false, reason end
-    local cleared, clearReason = self:ClearOwned()
+    local cleared, clearReason = self:ClearOwned(ignoreWriteInterval == true)
     if not cleared then return false, clearReason or self.quarantined end
     self.queue, self.active, self.queuedBytes, self.status = {}, nil, 0, "restored"
     return true

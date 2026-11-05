@@ -27,7 +27,7 @@ local C = {
     body = { 12, 12, 12 }, rowBacking = { 0, 0, 0 }, frameBrass = { 128, 104, 24 }, brassBright = { 255, 209, 0 },
     parchHi = { 28, 28, 28 }, parchLo = { 12, 12, 12 }, ink = { 255, 209, 0 }, inkSoft = { 255, 209, 0 },
     text = { 255, 255, 255 }, muted = { 160, 160, 160 },
-    claude = { 232, 158, 115 }, claudeDeep = { 196, 110, 66 }, codex = { 102, 212, 189 }, codexDeep = { 35, 150, 125 },
+    claude = { 232, 158, 115 }, claudeDeep = { 196, 110, 66 }, copilot = { 183, 157, 242 }, copilotDeep = { 126, 91, 192 }, codex = { 102, 212, 189 }, codexDeep = { 35, 150, 125 },
     warning = { 255, 128, 64 }, inkWarn = { 255, 128, 64 }, inkErr = { 255, 26, 26 }, pauseInk = { 255, 128, 64 },
     stale = { 255, 26, 26 }, staleDim = { 153, 20, 20 }, staleText = { 255, 64, 64 }, staleRing = { 178, 26, 26 },
     onAccent = { 26, 15, 8 }, onWarning = { 40, 20, 8 }, tabText = { 255, 255, 255 },
@@ -38,7 +38,14 @@ for key, value in pairs(C) do C[key] = { value[1] / 255, value[2] / 255, value[3
 -- is prefilled for the player to finish; the rest are typed with Enter at once. Pickers they open
 -- (/model, /resume) are driven from Keys. Claude Code's come from its documentation; Codex's from
 -- codex-rs/tui/src/slash_command.rs. Commands that exit, log out or delete a session are left out.
+local TITLES = { claude = "Claude", codex = "Codex", copilot = "Copilot" }
 local COMMANDS = {
+    copilot = {
+        { { "/model", "Choose the model" }, { "/help", "Command help" } },
+        { { "/compact", "Compress the conversation" }, { "/usage", "Session usage" } },
+        { { "/resume", "Choose a saved session" }, { "/clear", "Start a new conversation" } },
+        { { "/mcp", "Manage MCP servers" } },
+    },
     claude = {
         { { "/model", "Choose the model" }, { "/effort", "Set reasoning effort: low, medium, high or max", args = true },
           { "/fast", "Toggle fast mode" }, { "/plan", "Plan before changing anything" } },
@@ -138,9 +145,9 @@ local function book(parent)
 end
 local function session(snapshot, id)
     for _, value in ipairs(snapshot.sessions or {}) do if value.id == id then return value end end
-    return { id = id, title = id == "codex" and "Codex" or "Claude", lines = {}, status = "Waiting" }
+    return { id = id, title = TITLES[id] or "Claude", lines = {}, status = "Waiting" }
 end
-local function agentName(id) return id == "codex" and "CODEX" or "CLAUDE" end
+local function agentName(id) return string.upper(TITLES[id] or "Claude") end
 -- The status of a tab whose terminal or console has exited or never started, or nil. Its last
 -- screen stays on show, but nothing typed reaches it. These are the daemon's own words (pty.js, sessions.js).
 local function stopped(value)
@@ -258,8 +265,8 @@ function View:LayoutHeader(width)
     self.divider:Hide(); self.barDivider:Hide()
     local tabX = 12 + bookSize + 10
     local tabHeight = minimized and 22 or 28
-    local tabWidth = width < 360 and 60 or 78
-    for _, id in ipairs({ "claude", "codex" }) do
+    local tabWidth = math.min(78, math.floor((width - tabX - (minimized and 12 or 44)) / 3) - 4)
+    for _, id in ipairs({ "claude", "codex", "copilot" }) do
         local tab = self.tabs[id]
         place(tab, header, tabX, middle(tabHeight), tabWidth, tabHeight)
         tab.label:SetAllPoints(tab); tab.label:SetText(agentName(id))
@@ -631,7 +638,7 @@ function View:SendWritten()
     local ok, reason = self.controller:SendLong(self.activeTab, typed(self.writeBox:GetText()))
     if ok then
         self.writeBox:SetText(""); self.openPanel = nil; self:Layout()
-        self.message = "Queued for " .. (self.activeTab == "codex" and "Codex" or "Claude")
+        self.message = "Queued for " .. (TITLES[self.activeTab] or "Claude")
     else self.message = plain(reason or "Unable to queue; your prompt is retained.") end
     self.writeCount:SetText(self.message); self:RenderStatus()
 end
@@ -662,7 +669,7 @@ function View:OpenCommands(owner)
     menu.CreateContextMenu(owner, function(_, root)
         root:CreateButton("Write a long prompt...", function() self:TogglePanel("write") end)
         root:CreateDivider()
-        root:CreateTitle((tab == "codex" and "Codex" or "Claude") .. " commands")
+        root:CreateTitle((TITLES[tab] or "Claude") .. " commands")
         for index, group in ipairs(COMMANDS[tab]) do
             if index > 1 then root:CreateDivider() end
             for _, entry in ipairs(group) do
@@ -722,7 +729,7 @@ function View:RecallHistory(step)
 end
 
 function View:RunCommand(tab, choice)
-    local name = tab == "codex" and "Codex" or "Claude"
+    local name = TITLES[tab] or "Claude"
     if choice.args then
         return self:Prefill(choice.command .. " ", "Finish " .. choice.command .. " for " .. name .. ", then Send.",
             "Draft kept. Send or clear it before choosing a command.")
@@ -761,7 +768,7 @@ end
 function View:Choose(index)
     if not self.activeTab or not self.controller.Choose then return end
     local ok, reason = self.controller:Choose(self.activeTab, index)
-    self.message = ok and ((self.activeTab == "codex" and "Codex" or "Claude") .. ": option " .. index .. " chosen")
+    self.message = ok and ((TITLES[self.activeTab] or "Claude") .. ": option " .. index .. " chosen")
         or plain(reason or "Unable to answer the menu.")
     -- The buttons leave at once; the controller keeps them away until the terminal shows a new screen.
     if ok then self.choiceMenu = nil; self:Layout() end
@@ -771,7 +778,7 @@ end
 -- A tab that wants the player while they look elsewhere: a raid-warning line and its sound.
 function View:Alert(id, kind, want)
     want = want or {}
-    local name = id == "codex" and "Codex" or "Claude"
+    local name = TITLES[id] or "Claude"
     local line = kind == "waiting" and (name .. " needs you") or (name .. " finished")
     local notice, frame = _G.RaidNotice_AddMessage, _G.RaidWarningFrame
     local color = kind == "waiting" and C.stale or C.done
@@ -820,7 +827,7 @@ function View:Send()
         while #list > (self.settings.historySize or 50) do table.remove(list, 1) end
         self.historyIndex, self.historyStash = nil, nil
         self.drafts[self.activeTab] = ""; self.input:SetText(""); self.input:ClearFocus()
-        self.message = "Queued for " .. (self.activeTab == "codex" and "Codex" or "Claude")
+        self.message = "Queued for " .. (TITLES[self.activeTab] or "Claude")
     else self.message = plain(reason or "Unable to queue; your prompt is retained.") end
     self:RenderStatus()
 end
@@ -900,7 +907,7 @@ end
 function View:Action(action)
     if not self.activeTab then return end
     local ok, reason = self.controller:Action(self.activeTab, action)
-    self.message = ok and ((self.activeTab == "codex" and "Codex" or "Claude") .. ": " .. action .. " queued")
+    self.message = ok and ((TITLES[self.activeTab] or "Claude") .. ": " .. action .. " queued")
         or plain(reason or "Unable to queue terminal action.")
     self.openPanel = nil; self:Layout(); self.input:ClearFocus(); self:RenderStatus()
 end
@@ -947,7 +954,7 @@ function View:RenderStatus()
     self.status:SetTextColor(rgb(queued > 0 and (self.minimized and C.inkWarn or C.warning) or quiet))
     local status = plain(snapshot.status)
     local selected = session(snapshot, active)
-    local halted, name = stopped(selected), active == "codex" and "Codex: " or "Claude: "
+    local halted, name = stopped(selected), (TITLES[active] or "Claude") .. ": "
     -- A joined session started before its WoW tools were registered cannot answer game questions.
     -- That is advice about the remote session, so the link's own notices and its loss come first.
     local ringNotice = status ~= "" and status ~= "Connected" and status
@@ -1090,7 +1097,7 @@ function View:Render(snapshot)
     self.snapshot = snapshot or {}
     snapshot = self.snapshot
     if self.lastStatus ~= snapshot.status then self.message = nil; self.lastStatus = snapshot.status end
-    local active = snapshot.activeTab == "codex" and "codex" or "claude"
+    local active = TITLES[snapshot.activeTab] and snapshot.activeTab or "claude"
     -- A tab that stops (its console closed) replaces any earlier action's message in the footer.
     local halted = stopped(session(snapshot, active))
     if self.lastHalted ~= halted then self.message = nil; self.lastHalted = halted end
@@ -1168,7 +1175,7 @@ function View:Render(snapshot)
         self.emptyHint2:SetText("Start the desktop daemon to reconnect.")
     else
         self.empty:SetText("Awaiting terminal")
-        self.emptyHint:SetText("Your " .. (active == "codex" and "Codex" or "Claude") .. " session will appear here.")
+        self.emptyHint:SetText("Your " .. (TITLES[active] or "Claude") .. " session will appear here.")
         self.emptyHint2:SetText("")
     end
     local emptyVisible = total == 0 and not self.minimized
@@ -1251,7 +1258,7 @@ function View:IsShown() return self.frame:IsShown() end
 
 function View.Create(controller)
     local self = setmetatable({ controller = controller, rows = {}, drafts = {}, tabs = {}, controls = {}, buttons = {}, settings = {},
-        history = { claude = {}, codex = {} } }, View)
+        history = { claude = {}, codex = {}, copilot = {} } }, View)
     local function makeButton(parent, caption, action, tier, options)
         local widget = button(parent, caption, action, tier, options)
         self.buttons[#self.buttons + 1] = widget; return widget
@@ -1298,7 +1305,7 @@ function View.Create(controller)
     self.brand = text(self.titleBar, 12, C.ink, { justify = "CENTER" }); self.brand:SetText("Witchcraft")
     self.divider = fill(header, C.ink, .4, "ARTWORK")
     self.barDivider = fill(header, C.ink, .4, "ARTWORK")
-    for _, id in ipairs({ "claude", "codex" }) do
+    for _, id in ipairs({ "claude", "codex", "copilot" }) do
         local tabID = id
         local tab = makeButton(header, agentName(id), function() controller:SelectTab(tabID) end, "tab", { size = 11, shadow = false })
         tab:SetFrameLevel(level + 3)

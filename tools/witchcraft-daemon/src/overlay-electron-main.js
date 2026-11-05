@@ -1,3 +1,4 @@
+import { AGENT_TITLES } from './agents.js';
 import path from 'node:path';
 import { OverlayChildTransport } from './overlay-child.js';
 import { OVERLAY_PROTOCOL_VERSION, OVERLAY_TABS, OverlayProtocolError } from './overlay-protocol.js';
@@ -32,7 +33,7 @@ function safeBoolean(value, label) {
   return value;
 }
 function defaultSessions() {
-  return OVERLAY_TABS.map(id => ({ id, title: id === 'claude' ? 'Claude' : 'Codex', status: 'connecting', lines: [] }));
+  return OVERLAY_TABS.map(id => ({ id, title: AGENT_TITLES[id], status: 'connecting', lines: [] }));
 }
 
 /** Electron main-process controller. Electron is loaded only inside start(). */

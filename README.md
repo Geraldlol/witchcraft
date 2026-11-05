@@ -4,19 +4,19 @@ https://github.com/user-attachments/assets/4ae5190a-4871-4f89-a894-2df423aef8a5
 
 *Real time, uncut: asking Claude about the character from inside the game, then having it fix a Lua error in another addon without leaving WoW.*
 
-**Claude Code and Codex CLI inside WoW Forever.** Talk to either assistant from the game, continue your existing conversations, ask about your character and tracked quests, or have an agent work on your addons while you play. WITCHCRAFT connects the in-game window to the real assistant sessions on your Windows desktop.
+**Claude Code, Codex CLI and GitHub Copilot CLI inside WoW Forever.** Talk to your assistant from the game, continue your existing conversations, ask about your character and tracked quests, or have an agent work on your addons while you play. WITCHCRAFT connects the in-game window to the real assistant sessions on your Windows desktop.
 
 *Profession: Prompt Engineering (1/300).*
 
 [Download](https://github.com/Geraldlol/witchcraft/releases/latest) · [Install](#install) · [WoW MCP tools](docs/MCP.md) · [Changelog](CHANGELOG.md) · [Help and feedback](#help-and-feedback)
 
-The addon and companion are **free and open source (MIT)**. Your Claude Code or Codex account and their normal usage costs are separate.
+The addon and companion are **free and open source (MIT)**. Your Claude Code, Codex or GitHub Copilot account and their normal usage costs are separate.
 
 ## What you can do
 
 | Feature | In game |
 |---|---|
-| **Two assistant terminals** | Claude and Codex have separate tabs, unsent drafts, prompt history, colored output and scrollback. The footer shows model and context usage when available. |
+| **Three assistant terminals** | Claude, Codex and Copilot have separate tabs, unsent drafts, prompt history, colored output and scrollback. The footer shows model and context usage when available. |
 | **Work on your projects** | Choose the agents' working folder. Continue a running Claude Code session or resume a Codex thread; ask them to inspect, edit and debug the files they can normally access. Their usual permissions still apply. |
 | **Answer terminal prompts** | Use the slash-command menu, numbered choice buttons and **Keys** for permission prompts, model pickers, Enter, Escape, arrows and Interrupt. Unread markers and optional sound/text alerts tell you when an agent needs attention or finishes. |
 | **Compose and reuse prompts** | Shift-click item, quest and spell links into your draft; recall previous prompts; save snippets; or use **/ > Write a long prompt** for multiple lines. Copy the last reply and search the scrollback. |
@@ -31,7 +31,7 @@ Guides and Adventures use a small, source-linked **Classic reference catalog**: 
 | Component | Location | Purpose |
 |---|---|---|
 | WoW addon | [`Witchcraft/`](Witchcraft/) | The in-game window, controls and context capture. |
-| Windows daemon and desktop overlay | [`tools/witchcraft-daemon/`](tools/witchcraft-daemon/) | Connect the game to local Claude Code and Codex terminals. |
+| Windows daemon and desktop overlay | [`tools/witchcraft-daemon/`](tools/witchcraft-daemon/) | Connect the game to local Claude Code, Codex and Copilot terminals. |
 | MCP server | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Up to 15 tools over local STDIO: 12 read-only tools and three optional tools that save local goals/passport records. |
 | Claude Code skill | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Start, stop, restart and check the daemon from Claude Code. |
 
@@ -41,7 +41,7 @@ Guides and Adventures use a small, source-linked **Classic reference catalog**: 
 
 - Windows 10 or 11 and the **WoW Forever** client, interface `16001`.
 - [Node.js](https://nodejs.org/) **24 or newer**.
-- [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex), or both, installed and already signed in. The daemon needs native executables (`claude.exe` / `codex.exe`); `.cmd` and `.bat` wrappers do not work. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if yours are not found.
+- [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started), installed and already signed in. The daemon uses native executables (`claude.exe` / `codex.exe` / `copilot.exe`). For npm-installed Copilot on Windows it can also launch the package with Node directly; other `.cmd` and `.bat` wrappers do not work. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if yours are not found.
 - PowerShell for setup. The optional Claude Code management skill requires **PowerShell 7** (`pwsh`).
 
 The default binding carrier is not build-pinned; qualify it once per daemon/UI session with `/witch bindprobe`. The optional cooldown and addon-state carriers remain pinned to the last runtime-qualified build, **1.60.1.70205**, in [`Witchcraft/Evidence.lua`](Witchcraft/Evidence.lua) and stay off on another build. Keep the screen strip calibrated as a separate fallback. This release targets Forever; other WoW clients are outside its compatibility claim.
@@ -105,14 +105,15 @@ From `tools\witchcraft-daemon`, point `--cwd` at the existing project folder you
 node bin/witchcraft.js run --cwd 'C:\path\to\your\project'
 ```
 
-This starts both tabs. **If you only have one assistant installed**, use one of these instead:
+This starts Claude and Codex. Add `--with-copilot` to also start Copilot. **If you only have one assistant installed**, use one of these instead:
 
 ```powershell
 node bin/witchcraft.js run --only claude --cwd 'C:\path\to\your\project'
 node bin/witchcraft.js run --only codex --cwd 'C:\path\to\your\project'
+node bin/witchcraft.js run --only copilot --cwd 'C:\path\to\your\project'
 ```
 
-By default, Claude mirrors the newest running interactive Claude Code session in that folder, and Codex resumes the newest top-level Codex thread there. A tab with no matching session starts fresh. Add `--no-current` to start fresh deliberately. The daemon window tells you which sessions it joined.
+By default, Claude mirrors the newest running interactive Claude Code session in that folder, and Codex resumes the newest top-level Codex thread there. Copilot starts fresh; use `/resume` in its tab to choose a saved conversation. Automatic folder-based session discovery applies to Claude and Codex. A tab with no matching session starts fresh. Add `--no-current` to start fresh deliberately. The daemon window tells you which sessions it joined.
 
 The desktop overlay is off by default. Add `--overlay`, or set `"overlay": true` in `.local/config.json`, to start it after the game link is up. In the overlay, HUD mode passes clicks through; **Ctrl+Shift+H** brings back the interactive workbench. `--no-overlay` overrides a saved setting.
 
@@ -120,7 +121,7 @@ The desktop overlay is off by default. Add `--overlay`, or set `"overlay": true`
 
 1. After starting the daemon, run `/reload` outside combat, then `/witch` or click the minimap book button.
 2. Run `/witch bindprobe` outside combat once per daemon/UI session. Wait for the message confirming host decode, acknowledgement and cleanup succeeded.
-3. Select Claude or Codex and send a short prompt. Confirm its reply appears in the same tab. `/witch status` shows connection details if it does not.
+3. Select Claude, Codex or Copilot and send a short prompt. Confirm its reply appears in the same tab. `/witch status` shows connection details if it does not.
 
 The input box's Enter sends your draft; the separate **Enter** button accepts a terminal prompt. Use **Keys** for navigation and Interrupt. The desktop terminal remains usable, and **Ctrl+]** switches its selected agent independently of the game tabs.
 
@@ -196,7 +197,7 @@ Have an idea? [Describe what you want to do in game](https://github.com/Geraldlo
 
 ## Security and privacy
 
-- **Every addon you have enabled can type into both agent sessions and read their output while the daemon runs.** WoW gives addons no isolation from one another. Run WITCHCRAFT alongside addons you trust as much as a shell.
+- **Every addon you have enabled can type into every running agent session and read their output while the daemon runs.** WoW gives addons no isolation from one another. Run WITCHCRAFT alongside addons you trust as much as a shell.
 - The bridge uses local files and screen capture and opens no network listener. Calibration captures the virtual desktop once to find the strip; normal capture reads only the calibrated **132 × 12 pixel** region while WoW is foreground. It is active on ordinary `run` after calibration unless `--no-pixels` is set.
 - Session discovery reads local Claude Code and Codex records under `~/.claude` and `~/.codex`. The bridge has no separate upload service. The assistants use their normal providers: prompts, file content and tool results you give them can be sent to those services under their own terms.
 - Game-context sharing starts enabled. Pause it in the footer or with `/witch context off`; the desktop cache clears when the pause reaches the daemon. Normal assistant tool approvals still apply.
@@ -212,4 +213,4 @@ Have an idea? [Describe what you want to do in game](https://github.com/Geraldlo
 
 [MIT](LICENSE). Bundled third-party components keep their own licenses: Ace3 and CallbackHandler ([BSD-style](Witchcraft/Libs/LICENSE-Ace3.txt)), LibStub (public domain), and DejaVu Sans Mono ([font license](Witchcraft/Media/LICENSE-DejaVu.txt)). npm dependencies are installed from `package-lock.json` under their own licenses.
 
-WITCHCRAFT is a fan project. It is not affiliated with or endorsed by Blizzard Entertainment, Anthropic or OpenAI.
+WITCHCRAFT is a fan project. It is not affiliated with or endorsed by Blizzard Entertainment, Anthropic, OpenAI or GitHub.

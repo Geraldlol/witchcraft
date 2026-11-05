@@ -10,7 +10,7 @@ local KEYS = { "CTRL-ALT-SHIFT-F12", "CTRL-ALT-SHIFT-F11", "CTRL-ALT-SHIFT-F10",
 local ZERO, PROBE = "00000000", "PFAM_BIND_PROBE"
 local ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 local MAX_SEQ, MAX_PAYLOAD = 16777215, 32
-local tabCodes = { claude = 0, codex = 1 }
+local tabCodes = { claude = 0, codex = 1, copilot = 2 }
 local actionCodes = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5 }
 
 local function integer(value, low, high)

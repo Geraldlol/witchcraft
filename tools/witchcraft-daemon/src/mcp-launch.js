@@ -1,3 +1,4 @@
+import { AGENT_TABS } from './agents.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -19,15 +20,15 @@ export function serverCommand({ cachePath, nodePath = process.execPath, scriptPa
 export function withWoWMcp(tab, entry, options = {}) {
   if (!entry) return entry;
   const basename = path.basename(entry.file).toLowerCase().replace(/\.exe$/u, '');
-  if (!['claude', 'codex'].includes(tab) || basename !== tab) return entry;
+  if (!AGENT_TABS.includes(tab) || basename !== tab) return entry;
   const [nodePath, ...serverArgs] = serverCommand(options);
   const args = [...(entry.args ?? [])];
-  if (tab === 'claude') {
+  if (tab === 'claude' || tab === 'copilot') {
     // Keep this variadic option after existing positional arguments, but before
     // an explicit end-of-options marker, so resume/prompt text stays intact.
-    const config = JSON.stringify({ mcpServers: { witchcraft_wow: { type: 'stdio', command: nodePath, args: serverArgs } } });
+    const config = JSON.stringify({ mcpServers: { witchcraft_wow: { type: 'stdio', command: nodePath, args: serverArgs, ...(tab === 'copilot' ? { tools: ['*'] } : {}) } } });
     const separator = args.indexOf('--');
-    args.splice(separator < 0 ? args.length : separator, 0, '--mcp-config', config);
+    args.splice(separator < 0 ? args.length : separator, 0, tab === 'copilot' ? '--additional-mcp-config' : '--mcp-config', config);
     return { ...entry, args };
   }
   const prefix = 'mcp_servers.witchcraft_wow';

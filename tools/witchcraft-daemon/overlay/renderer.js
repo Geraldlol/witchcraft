@@ -6,7 +6,8 @@ import {
   validatedTerminalGeometry,
 } from './terminal-policy.js';
 
-const VALID_TABS = new Set(['claude', 'codex']);
+const TITLES = { claude: 'Claude', codex: 'Codex', copilot: 'Copilot' };
+const VALID_TABS = new Set(['claude', 'codex', 'copilot']);
 const VALID_CONNECTIONS = new Set(['connecting', 'connected', 'disconnected', 'error']);
 const api = window.witchcraft;
 
@@ -297,7 +298,7 @@ function updateSession(id, session, generation, write, geometry) {
   view.button.dataset.status = status;
   view.status.textContent = status.toUpperCase();
   view.sequence.textContent = generation > 0 ? `SYNC ${generation}` : 'LOCAL STATE';
-  view.button.setAttribute('aria-label', `${id === 'claude' ? 'Claude' : 'Codex'} terminal, ${status}`);
+  view.button.setAttribute('aria-label', `${TITLES[id]} terminal, ${status}`);
   if (view.terminal) view.terminal.options.disableStdin = status !== 'running';
   if (write) writeSnapshot(id, session, generation, geometry);
 }
@@ -378,7 +379,7 @@ function selectTab(id, notify = true, focus = true) {
     view.panel.hidden = !selected;
     view.panel.classList.toggle('is-active', selected);
   }
-  const proper = id === 'claude' ? 'Claude' : 'Codex';
+  const proper = TITLES[id];
   elements.composerLabel.textContent = `TO ${proper.toUpperCase()} / PROMPT`;
   elements.prompt.placeholder = `Send an instruction to ${proper}...`;
   elements.activeDetail.textContent = id.toUpperCase();
@@ -486,7 +487,7 @@ async function loadTerminals() {
         theme: {
           background: '#01030400',
           foreground: '#d8e0e2',
-          cursor: id === 'claude' ? '#f0c777' : '#62c5dc',
+          cursor: ({ claude: '#f0c777', codex: '#62c5dc', copilot: '#b79df2' })[id],
           cursorAccent: '#010304',
           selectionBackground: '#d0a45c40',
           selectionInactiveBackground: '#8b989f28',
@@ -539,7 +540,7 @@ async function submitPrompt() {
   }
   const session = currentState?.sessions?.find(candidate => candidate?.id === activeTab);
   if (sessionStatus(session) !== 'running') {
-    showToast(`${activeTab === 'claude' ? 'Claude' : 'Codex'} is not running.`, true);
+    showToast(`${TITLES[activeTab]} is not running.`, true);
     return;
   }
   if (new TextEncoder().encode(value).byteLength + 1 > 16_384) {
@@ -550,7 +551,7 @@ async function submitPrompt() {
   try {
     await bridgeCall('sendInput', activeTab, `${value}\r`);
     elements.prompt.value = '';
-    showToast(`Sent to ${activeTab === 'claude' ? 'Claude' : 'Codex'}.`);
+    showToast(`Sent to ${TITLES[activeTab]}.`);
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -564,7 +565,7 @@ function bindEvents() {
   for (const [id, view] of Object.entries(tabs)) {
     view.button.addEventListener('click', () => selectTab(id));
     view.button.addEventListener('keydown', event => {
-      const order = ['claude', 'codex'];
+      const order = ['claude', 'codex', 'copilot'];
       const index = order.indexOf(id);
       let next = null;
       if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = order[(index + 1) % order.length];
@@ -604,9 +605,9 @@ function bindEvents() {
     }
   });
   document.addEventListener('keydown', event => {
-    if (event.altKey && !event.ctrlKey && !event.shiftKey && (event.code === 'Digit1' || event.code === 'Digit2')) {
+    if (event.altKey && !event.ctrlKey && !event.shiftKey && ['Digit1', 'Digit2', 'Digit3'].includes(event.code)) {
       event.preventDefault();
-      selectTab(event.code === 'Digit1' ? 'claude' : 'codex');
+      selectTab(['claude', 'codex', 'copilot'][Number(event.code.slice(-1)) - 1]);
       return;
     }
     if (event.ctrlKey && event.shiftKey && event.code === 'KeyH') {

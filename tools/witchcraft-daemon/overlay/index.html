@@ -87,6 +87,24 @@
             </span>
             <span class="tab-signal" aria-hidden="true"></span>
           </button>
+          <button
+            id="tab-copilot"
+            class="agent-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel-copilot"
+            aria-keyshortcuts="Alt+3"
+            tabindex="-1"
+            data-tab="copilot"
+          >
+            <span class="agent-glyph copilot-glyph" aria-hidden="true">P</span>
+            <span class="agent-copy">
+              <strong>COPILOT</strong>
+              <small id="copilot-status">WAITING</small>
+            </span>
+            <span class="tab-signal" aria-hidden="true"></span>
+          </button>
         </nav>
 
         <div class="rail-controls no-drag">
@@ -139,6 +157,27 @@
           <div id="empty-codex" class="terminal-empty" role="status">
             <span class="empty-reticle" aria-hidden="true"></span>
             <strong>AWAITING CODEX LINK</strong>
+            <small>Start the Witchcraft companion to open this channel.</small>
+          </div>
+        </article>
+
+        <article
+          id="panel-copilot"
+          class="terminal-panel"
+          role="tabpanel"
+          aria-labelledby="tab-copilot"
+          data-tab="copilot"
+          hidden
+        >
+          <div class="terminal-chrome" aria-hidden="true">
+            <span>SESSION / COPILOT</span>
+            <span class="chrome-rule"></span>
+            <span id="copilot-sequence">NO SIGNAL</span>
+          </div>
+          <div id="terminal-copilot" class="terminal-host" aria-label="Copilot terminal" tabindex="0"></div>
+          <div id="empty-copilot" class="terminal-empty" role="status">
+            <span class="empty-reticle" aria-hidden="true"></span>
+            <strong>AWAITING COPILOT LINK</strong>
             <small>Start the Witchcraft companion to open this channel.</small>
           </div>
         </article>

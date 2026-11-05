@@ -1,3 +1,4 @@
+import { AGENT_TITLES } from './agents.js';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { spawn as spawnProcess } from 'node:child_process';
@@ -70,7 +71,7 @@ export function snapshotOverlayTerminals(terminal, { activeTab = 'claude', gener
     const plain = live?.screen && typeof live.screen.plain === 'function'
       ? live.screen.plain() : terminal.plain?.(id);
     const ansi = boundedAnsi(live?.screen);
-    return { id, title: live?.title ?? previous?.title ?? (id === 'claude' ? 'Claude' : 'Codex'),
+    return { id, title: live?.title ?? previous?.title ?? AGENT_TITLES[id],
       status: safeStatus(live?.status ?? previous?.status), lines: boundedLines(plain ?? previous?.lines),
       ...(ansi === undefined ? {} : { ansi }) };
   });

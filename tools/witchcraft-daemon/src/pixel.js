@@ -1,3 +1,4 @@
+import { AGENT_TABS } from './agents.js';
 /** Witchcraft protocol v1. Pure codecs only; acceptance and PTY side effects belong to outbox. */
 export const CELL_COUNT = 22;
 export const CELL_SIZE = 6;
@@ -7,7 +8,7 @@ export const MAX_CONTEXT_BYTES = 580;
 const SYNC = 51;
 const CONTEXT_SYNC = 50;
 const ACTIONS = ['text', 'enter', 'interrupt', 'escape', 'up', 'down'];
-const TABS = ['claude', 'codex'];
+const TABS = AGENT_TABS;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
 const integer = (n, min, max) => Number.isInteger(n) && n >= min && n <= max;

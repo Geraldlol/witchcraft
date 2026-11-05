@@ -90,7 +90,7 @@ export function createMcpServer({ cachePath, guidePath, adventurePath, now = Dat
     });
   }
   server.registerResource('wow-context', 'wow://context', {
-    title: 'WoW context', description: 'Latest read-only game snapshot and freshness, shared by Claude and Codex.', mimeType: 'application/json',
+    title: 'WoW context', description: 'Latest read-only game snapshot and freshness, shared by Claude, Codex and Copilot.', mimeType: 'application/json',
   }, async uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(await read(GAME_DOMAINS)) }] }));
   return server;
 }

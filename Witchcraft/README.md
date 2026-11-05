@@ -1,6 +1,6 @@
 # Witchcraft
 
-Claude Code and Codex CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.1.1`, interface `16001`.
+Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.1.1`, interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 
@@ -12,14 +12,14 @@ The new **Adventures** page adds dungeon rehearsal, zone detours and a personal 
 
 This build also includes an opt-in dense optical carrier probe. It renders 22 extra rows below the normal strip only while the probe is active; the normal two-row transport stays unchanged. The probe is built and offline-tested, with native acceptance still pending.
 
-By default the companion daemon joins sessions from the folder selected with `run --cwd`: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text and delivers them to the game through the `Witchcraft_Chunk_*` helper addons. Your prompts, terminal keys and game context travel back through the local fast link or calibrated pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'` from `tools/witchcraft-daemon`, using the same folder as `run --cwd`, restart that session and then restart Witchcraft. The footer says when it lacks the tools. Initial sign-in happens in the normal CLI; supported permission choices can also be answered from the in-game buttons.
+By default the companion daemon joins sessions from the folder selected with `run --cwd`: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text and delivers them to the game through the `Witchcraft_Chunk_*` helper addons. Your prompts, terminal keys and game context travel back through the local fast link or calibrated pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'` from `tools/witchcraft-daemon`, using the same folder as `run --cwd`, restart that session and then restart Witchcraft. The footer says when it lacks the tools. Copilot is enabled with `run --only copilot` or `run --with-copilot`, starts fresh, and offers `/resume` for saved conversations. Initial sign-in happens in the normal CLI; supported permission choices can also be answered from the in-game buttons.
 
 ## Start
 
 Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, run `/reload`, and use `/witch` to open the window. Run `/witch bindprobe` outside combat once per daemon/UI session to qualify the default binding link.
 
 - Left-click the book button at the lower-left edge of the minimap to show or hide Witchcraft, just like `/witch`.
-- Click **Claude** or **Codex** to choose the terminal you read and address. Each tab keeps its own unsent draft.
+- Click **Claude**, **Codex** or **Copilot** to choose the terminal you read and address. Each tab keeps its own unsent draft.
 - An amber marker marks unseen terminal output on a tab, including while minimized. It clears when that tab is selected with the window expanded. It signals new text, not a guarantee that the agent has finished responding; the first screen after connecting is the baseline. Updates continue with the window closed while context sharing is enabled; otherwise idle updates pause until reopened.
 - Click the book icon for **Guides**, or **...** for **Appearance**. Adjust background opacity from 0% (clear) to 100% (solid) or choose 25/65/100%. Text stays fully visible; the setting survives reload. Default opacity is 80%.
 - The **/** button beside Send opens the selected agent's slash commands (/model, /compact, /resume and more) in the client's dropdown. Plain ones are typed with Enter at once; ones that take text are placed in the input for you to finish. Pickers they open are driven from **Keys**. On the Claude tab, /clear clears the mirrored desktop session.

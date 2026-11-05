@@ -1,3 +1,4 @@
+import { AGENT_TABS } from './agents.js';
 import fsNative from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -153,7 +154,7 @@ function parseApplicationBody(body, frame, startedAt, now) {
   const type = String.fromCharCode(body[0] ?? 0);
   if (type === 'I') {
     if (body.length < 6 || body.length > 610) throw new Error('Invalid input carrier body');
-    const id = body.readUIntBE(1, 3), tab = ['claude', 'codex'][body[4]];
+    const id = body.readUIntBE(1, 3), tab = AGENT_TABS[body[4]];
     const action = ['text', 'enter', 'interrupt', 'escape', 'up', 'down'][body[5]];
     if (!id || !tab || !action) throw new Error('Invalid input carrier route');
     return { epoch: frame.epoch, id, tab, action, text: decoder.decode(body.subarray(6)) };

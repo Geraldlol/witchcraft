@@ -1,3 +1,4 @@
+import { AGENT_TABS } from './agents.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { isUtf8 } from 'node:buffer';
@@ -15,7 +16,7 @@ const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 export function validMessage(message) {
   return message && typeof message === 'object' && /^[0-9a-f]{8}$/u.test(message.epoch) && message.epoch !== '00000000'
     && Number.isInteger(message.id) && message.id > 0 && message.id <= 262143
-    && ['claude', 'codex'].includes(message.tab) && ['text', ...Object.keys(ACTIONS)].includes(message.action)
+    && AGENT_TABS.includes(message.tab) && ['text', ...Object.keys(ACTIONS)].includes(message.action)
     && typeof message.text === 'string' && message.text.isWellFormed() && Buffer.byteLength(message.text) <= 600
     && !/[\x00-\x1f\x7f-\x9f]/u.test(message.text) && (message.action === 'text' ? message.text.length > 0 : message.text === '');
 }

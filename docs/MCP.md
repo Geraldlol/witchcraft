@@ -8,7 +8,7 @@ After installing this build, restart the Witchcraft desktop daemon with your usu
 
 Open **WoW context** in Witchcraft's footer. Sharing starts enabled, persists across reloads, and continues when the window is closed. The panel shows acknowledged character/quest summaries and capture age; **Pause sharing** clears the desktop context once the off message reaches it. **Update now** requests a new snapshot behind any transfer already in progress. `/witch context on`, `/witch context off`, and `/witch context refresh` expose the same controls.
 
-Ask either assistant: “Use the WoW tools to tell me where I am and what remains for my tracked quests.”
+Ask an assistant: “Use the WoW tools to tell me where I am and what remains for my tracked quests.”
 
 | MCP interface | Result |
 |---|---|
@@ -33,7 +33,7 @@ The Guides and Adventures features add no game-data domain or gameplay actions. 
 
 Each tool owns the domains it returns and pulls only those: `wow_get_character` owns `player`, `wow_get_quests` owns `quests`, `wow_get_progress` owns `progress`, `wow_get_errors` owns `errors`, and `wow_get_context` and the resource own the three game domains; errors are never part of a general context pull or a manual refresh, and the errors tool re-requests any copy older than five seconds. A tool's top-level `status` is computed over its own domains, so the character tool never reads `partial` because progression was never asked for. Group data is the group's size and the player's own role only; nothing about other players is exported.
 
-`witchcraft run` adds the local MCP configuration to recognized `claude`/`claude.exe` and `codex`/`codex.exe` commands, including absolute executable paths. It preserves your existing arguments and other MCP configuration. It does not change global assistant settings or automatically approve tool calls. Custom shell commands remain unchanged. `--no-mcp` skips this launch-time integration; the in-game sharing control determines whether game data is exported.
+`witchcraft run` adds the local MCP configuration to recognized `claude`/`claude.exe`, `codex`/`codex.exe` and `copilot`/`copilot.exe` commands, including absolute executable paths. It preserves your existing arguments and other MCP configuration. It does not change global assistant settings or automatically approve tool calls. Custom shell commands remain unchanged. `--no-mcp` skips this launch-time integration; the in-game sharing control determines whether game data is exported.
 
 By default the Claude tab joins your own running Claude Code session instead (`--no-current` starts a fresh one), and Witchcraft did not launch it, so it has no WoW tools until they are registered once. `node bin/witchcraft.js mcp-setup` prints the local-scope `claude mcp add` for the checkout it runs from (the same server, cache and local writes spawned tabs get), and `--apply` runs it in the repo root, or in `--cwd` when given. Claude reads its servers when a session starts, so restart that session once and then restart Witchcraft. While it runs, each WoW MCP server keeps a record in `.local/mcp-clients/` naming the process that started it; that is how the daemon window and the in-game footer can tell that a joined session lacks the tools. Servers from before this record existed do not write one, so restart the session after updating.
 
@@ -44,6 +44,14 @@ node <absolute-repo-path>/tools/witchcraft-daemon/bin/witchcraft-mcp.js
 ```
 
 The default cache is `tools/witchcraft-daemon/.local/wow-context.json`. The optional `--cache <absolute-path>` launcher argument selects one fixed cache file. Tools cannot choose arbitrary files. The adapter neither starts the game nor launches a terminal. It uses the official MCP SDK's STDIO transport; there is no listening network port. See [MCP STDIO documentation](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio.html), [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), and [Claude MCP configuration](https://code.claude.com/docs/en/mcp).
+
+## Copilot CLI
+
+`run --only copilot` and `run --with-copilot` inject a session-only `--additional-mcp-config` JSON argument containing `mcpServers.witchcraft_wow`, the absolute Node command and adapter/cache paths, and `tools: ["*"]`. This enables discovery of the server's tools; ordinary Copilot permissions still apply. No user-wide settings are changed.
+
+For a console you will attach, register a local STDIO server via Copilot's `/mcp add` interface, using Node as the command and the absolute path to `witchcraft-mcp.js` as its argument. Alternatively pass the same JSON with `--additional-mcp-config` when you start Copilot. Include `--cache` and the absolute cache path if using a nondefault cache, and `--allow-local-writes` only if you want the three local-record tools. `witchcraft mcp-setup` remains specific to Claude Code.
+
+See the [GitHub Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference) for session-only MCP configuration and tool permissions.
 
 ## Delivery and freshness
 

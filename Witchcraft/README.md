@@ -1,6 +1,6 @@
 # Witchcraft
 
-Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.1.1`, interface `16001`.
+Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.2.0`, interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 

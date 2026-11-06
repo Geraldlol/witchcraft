@@ -166,8 +166,9 @@ test('Copilot is opt-in and --only never launches other configured agents', () =
   const config = { commands: { copilot: { file: 'copilot', args: ['--resume', 'saved-id'] } } };
   assert.deepEqual(selectAgentCommands(config).commands.copilot.args, ['--resume', 'saved-id']);
   assert.equal(selectAgentCommands(config, { only: 'claude', withCopilot: true }).commands.copilot, null);
-  assert.equal(selectAgentCommands({}, { tab: 'copilot' }).commands.copilot, undefined);
+  assert.throws(() => selectAgentCommands({}, { tab: 'copilot' }), /--tab copilot names a terminal that is not started/u);
   assert.equal(selectAgentCommands({}, { tab: 'copilot' }, [process.execPath, '--help']).commands.copilot.file, process.execPath);
+  assert.equal(selectAgentCommands({ commands: { copilot: { file: 'copilot', args: [] } } }, { tab: 'copilot' }).commands.copilot.file, 'copilot');
   assert.equal(selectAgentCommands({}, { only: 'copilot' }, [process.execPath, '--help']).commands.copilot.file, process.execPath);
   assert.throws(() => selectAgentCommands({}, { only: 'copilot', tab: 'claude' }), /must match/u);
   assert.throws(() => selectAgentCommands({ commands: { copilot: { file: 'copilot', args: [null] } } }), /array of arguments/u);

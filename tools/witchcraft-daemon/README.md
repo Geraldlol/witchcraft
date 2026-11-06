@@ -60,7 +60,7 @@ The selected agent can still join or resume an existing session with `--only`; a
 
 ## GitHub Copilot CLI
 
-From this folder, run `node bin/witchcraft.js run --only copilot --cwd 'C:\path\to\project'`, or add `--with-copilot` to a normal run. `--tab copilot` only selects the tab in the desktop terminal; it launches nothing. A `commands.copilot` entry in `.local/config.json` enables it on normal runs; `--only` still restricts launches to the named agent.
+From this folder, run `node bin/witchcraft.js run --only copilot --cwd 'C:\path\to\project'`, or add `--with-copilot` to a normal run. `--tab copilot` only selects the tab in the desktop terminal; without one of those opt-ins the run is refused. A `commands.copilot` entry in `.local/config.json` enables it on normal runs; `--only` still restricts launches to the named agent.
 
 Copilot starts a new interactive session. Use `/resume` in the Copilot tab, or configure `commands.copilot.args` as `["--resume", "SESSION_ID"]` to resume a specific conversation. Witchcraft does not search Copilot's private session files; model/context metadata and the **Copy last reply** shortcut are unavailable for this tab. Screen output, scrollback, drafts, prompt history, terminal keys and screen-based choice detection work normally. Use a current Copilot CLI for the slash-command menu; older releases may omit commands such as `/resume` or `/compact`.
 

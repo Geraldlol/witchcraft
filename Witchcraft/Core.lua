@@ -155,6 +155,13 @@ function Persistence.Initialize(global)
     return global
 end
 
+local function sessionListed(sessions, id)
+    for _, session in ipairs(sessions) do
+        if session.id == id then return true end
+    end
+    return false
+end
+
 local function emptySessions()
     return { { id = "claude", title = "Claude", lines = {}, status = "Waiting for host" },
         { id = "codex", title = "Codex", lines = {}, status = "Waiting for host" },
@@ -949,6 +956,7 @@ function methods:Queue(tab, action, text)
         local stopped = session.id == tab and stoppedStatus(session.status)
         if stopped then return false, "That terminal has " .. stopped end
     end
+    if not sessionListed(self.sessions, tab) then return false, "That terminal is not available" end
     if #self.global.outbox >= 64 then return false, "Outbox full (64); wait for acknowledgements" end
     if self.global.nextId > 262143 then return false, "Message ID limit reached; pending messages are preserved" end
     local message = { epoch = self.global.epoch, id = self.global.nextId, tab = tab, action = action, text = text or "" }
@@ -1053,6 +1061,12 @@ end
 
 function methods:Resend()
     if not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
+    -- A message for a tab this host does not list would never be acknowledged: it is dropped, not requeued.
+    local kept, dropped = {}, 0
+    for _, message in ipairs(self.global.outbox) do
+        if sessionListed(self.sessions, message.tab) then kept[#kept + 1] = message else dropped = dropped + 1 end
+    end
+    self.global.outbox = kept
     local count = 0
     for _, message in ipairs(self.global.outbox) do if message.epoch ~= self.global.epoch then count = count + 1 end end
     if self.global.nextId + count - 1 > 262143 then return false, "Message ID limit reached" end
@@ -1066,6 +1080,7 @@ function methods:Resend()
     self.pixelFrames, self.pixelMessage, self.pixelIndex = nil, nil, nil
     self.ring.delay = self.ring.baseDelay
     self.notice = "Requeued " .. count .. " message(s) for the current host"
+        .. (dropped > 0 and (", dropped " .. dropped .. " for a tab it does not have") or "")
     self:Schedule("pixel", 0.2, self.PixelTick)
     if self.binding then self:Schedule("binding", 0, self.BindingTick) end
     if not self:InboundPaused() then self:Schedule("load", 1, self.LoadTick) end
@@ -1100,6 +1115,8 @@ function methods:ReceiveChunk(payload)
         if message.epoch ~= result.epoch or message.id > result.ack then retained[#retained + 1] = message end
     end
     global.outbox = retained
+    -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
+    if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then global.activeTab = "claude" end
     for _, session in ipairs(result.sessions) do
         local id, text = session.id, screenText(session.lines)
         -- A new host session is a new terminal: an answer recorded for the old one does not carry over.

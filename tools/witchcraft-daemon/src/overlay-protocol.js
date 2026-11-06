@@ -7,8 +7,10 @@ import { randomBytes } from 'node:crypto';
 
 export const OVERLAY_PROTOCOL_VERSION = 1;
 export const OVERLAY_TABS = AGENT_TABS;
-export const MAX_OVERLAY_RECORD_BYTES = 256 * 1024;
-export const MAX_OVERLAY_PENDING_BYTES = 512 * 1024;
+// The host sends at most 48 KiB of lines plus 64 KiB of ANSI per session (overlay-host.js),
+// so each tab gets 128 KiB of the record.
+export const MAX_OVERLAY_RECORD_BYTES = 128 * 1024 * OVERLAY_TABS.length;
+export const MAX_OVERLAY_PENDING_BYTES = 2 * MAX_OVERLAY_RECORD_BYTES;
 export const MAX_OVERLAY_PENDING_RECORDS = 64;
 export const MAX_OVERLAY_INPUT_BYTES = 16 * 1024;
 export const MAX_OVERLAY_OUTPUT_BYTES = 64 * 1024;

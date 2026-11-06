@@ -695,6 +695,7 @@ function methods:Snapshot()
             status = info.status, summary = info.summary, count = info.count, truncated = info.truncated }
     end
     return { sessions = self.sessions, activeTab = self.global.activeTab, cols = self.cols, rows = self.rows,
+        tabs = self:TabPresent("copilot") and { "claude", "codex", "copilot" } or { "claude", "codex" },
         unread = { claude = self.unread.claude, codex = self.unread.codex, copilot = self.unread.copilot },
         attention = { claude = self.attention.claude, codex = self.attention.codex, copilot = self.attention.copilot },
         answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil, copilot = self:AnswerPending("copilot") ~= nil },
@@ -856,7 +857,23 @@ function methods:FocusInput()
     if self.view and self.view.FocusInput then self.view:FocusInput() end
     return true
 end
-function methods:NextTab() return self:SelectTab(({ claude = "codex", codex = "copilot", copilot = "claude" })[self.global.activeTab] or "claude") end
+-- Copilot is opt-in: its tab is present only while selected or once the host reports it started.
+function methods:TabPresent(id)
+    if id == "claude" or id == "codex" then return true end
+    if id ~= "copilot" then return false end
+    if self.global.activeTab == "copilot" then return true end
+    for _, session in ipairs(self.sessions or {}) do
+        local status = session.id == "copilot" and session.status
+        if status and status ~= "not started" and status ~= "Waiting for host" then return true end
+    end
+    return false
+end
+function methods:NextTab()
+    local following = { claude = "codex", codex = "copilot", copilot = "claude" }
+    local tab = following[self.global.activeTab] or "claude"
+    if not self:TabPresent(tab) then tab = following[tab] end
+    return self:SelectTab(tab)
+end
 function methods:Interrupt() return self:Action(self.global.activeTab, "interrupt") end
 
 -- Saved prompts for the "/" menu. They are the player's words, bounded like any prompt.

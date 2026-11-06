@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AGENT_TABS, selectAgentCommands } from '../src/agents.js';
+import { AGENT_TABS, AGENT_TITLES, selectAgentCommands } from '../src/agents.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -386,7 +386,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       toolsTimer.unref?.();
     }
     const lifetime = pair.attached.size ? 'Attached mode stays active until Witchcraft is stopped.' : 'Close all launched agents to stop.';
-    process.stderr.write(`Witchcraft: Claude + Codex tabs; Ctrl+] switches the real terminal. ${lifetime}\n`);
+    const inUse = AGENT_TABS.filter(tab => chosen[tab] || pair.attached.has(tab)).map(tab => AGENT_TITLES[tab]).join(' + ');
+    process.stderr.write(`Witchcraft: ${inUse} tabs; Ctrl+] switches the real terminal. ${lifetime}\n`);
     for (const line of current) process.stderr.write(`Witchcraft: ${line}. --no-current starts fresh sessions instead.\n`);
     // A patched client silently turns the cooldown carrier off in game; say so before the player logs
     // in. The pin gates nothing else, so with the carrier off a patch needs no action.

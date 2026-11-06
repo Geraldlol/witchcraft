@@ -265,8 +265,12 @@ function View:LayoutHeader(width)
     self.divider:Hide(); self.barDivider:Hide()
     local tabX = 12 + bookSize + 10
     local tabHeight = minimized and 22 or 28
-    local tabWidth = math.min(78, math.floor((width - tabX - (minimized and 12 or 44)) / 3) - 4)
-    for _, id in ipairs({ "claude", "codex", "copilot" }) do
+    -- Copilot is opt-in: a tab the snapshot does not list stays hidden, with its marker.
+    local tabIds, listed = self.snapshot and self.snapshot.tabs or { "claude", "codex" }, {}
+    for _, id in ipairs(tabIds) do listed[id] = true end
+    for id, tab in pairs(self.tabs) do show(tab, listed[id]); if not listed[id] then tab.unread:Hide() end end
+    local tabWidth = math.min(78, math.floor((width - tabX - (minimized and 12 or 44)) / #tabIds) - 4)
+    for _, id in ipairs(tabIds) do
         local tab = self.tabs[id]
         place(tab, header, tabX, middle(tabHeight), tabWidth, tabHeight)
         tab.label:SetAllPoints(tab); tab.label:SetText(agentName(id))
@@ -1143,7 +1147,7 @@ function View:Render(snapshot)
         -- Red: waiting on you. Green: finished. Amber: new output only.
         local badge = attention == "waiting" and C.stale or attention == "done" and C.done or C.warning
         tab.unread:SetBackdropColor(rgb(badge))
-        show(tab.unread, unread or attention == "waiting" or attention == "done")
+        show(tab.unread, tab:IsShown() and (unread or attention == "waiting" or attention == "done"))
     end
     self.destination:SetText("TO " .. agentName(active)); self.destination:SetTextColor(rgb(accent))
     paint(self.destinationTick, accent)

@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { parseArgs } from '../bin/witchcraft.js';
 import { AGENT_TABS, selectAgentCommands } from '../src/agents.js';
 import { withWoWMcp } from '../src/mcp-launch.js';
-import { TerminalPair, attachTerminal, resolveCopilotNpm } from '../src/pty.js';
+import { TerminalPair, attachTerminal, resolveCopilotNpm, resolveProgram } from '../src/pty.js';
 import { SessionSet } from '../src/sessions.js';
 import { encodeMessage, PixelDecoder } from '../src/pixel.js';
 import { Outbox } from '../src/outbox.js';
@@ -57,6 +57,15 @@ test('npm Copilot resolves to Node without invoking a shell or allowing bin trav
   manifest({ copilot: '../outside.js' });
   assert.equal(resolveCopilotNpm({ folders: [folder] }), undefined);
   assert.equal(resolveCopilotNpm({ folders: ['.', ''] }), undefined);
+});
+
+test('resolveProgram keeps an absolute configured path without .exe on Windows', t => {
+  if (process.platform !== 'win32') { t.skip('the .exe rule applies on Windows only'); return; }
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'witchcraft-resolve-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const configured = path.join(folder, 'my-agent');
+  fs.writeFileSync(configured, '');
+  assert.equal(resolveProgram(configured), configured);
 });
 
 test('three PTYs route input, cycle through running tabs and clean up', async () => {

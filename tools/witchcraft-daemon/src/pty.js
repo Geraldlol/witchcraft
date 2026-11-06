@@ -24,7 +24,8 @@ export function resolveProgram(command) {
   for (const candidate of candidates) {
     const extension = path.extname(candidate).toLowerCase();
     if (['.cmd', '.bat'].includes(extension)) continue;
-    if (process.platform === 'win32' && extension !== '.exe') continue;
+    // An absolute configured path keeps the old behaviour; only PATH-derived candidates must be .exe.
+    if (process.platform === 'win32' && extension !== '.exe' && candidate !== command) continue;
     try { if (fs.statSync(candidate).isFile()) return candidate; continue; } catch (error) {
       // A Store app's execution alias (WindowsApps\pwsh.exe) is a reparse point that stat
       // refuses with EACCES although it launches; take it when access says it exists (on

@@ -9,7 +9,7 @@ const TITLES = AGENT_TITLES;
 /**
  * The assistant tabs, each behind whichever source it was given: a terminal the daemon spawns, or a
  * console the user owns and the daemon only mirrors. It presents what the bridge already
- * consumes â€” `write`, `snapshot`, `sessions`, `cols`, `rows` â€” so the ring chunk, and with it the
+ * consumes — `write`, `snapshot`, `sessions`, `cols`, `rows` — so the ring chunk, and with it the
  * addon, is unchanged.
  */
 export class SessionSet {

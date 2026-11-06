@@ -35,6 +35,12 @@ test('Lua controller preserves Copilot settings, cycles tabs and accepts old and
       assert(controller.scroll.copilot == 0)
       controller:NextTab(); assert(controller.global.activeTab == "claude")
       controller:NextTab(); assert(controller.global.activeTab == "codex")
+      controller:NextTab(); assert(controller.global.activeTab == "claude", "Copilot is skipped while it is not in use")
+      unpack = unpack or table.unpack
+      assert(#controller:Snapshot().tabs == 2)
+      controller.sessions = { {id="claude",title="Claude",lines={},status="running"}, {id="codex",title="Codex",lines={},status="running"}, {id="copilot",title="Copilot",lines={},status="running"} }
+      assert(#controller:Snapshot().tabs == 3)
+      controller:NextTab(); assert(controller.global.activeTab == "codex")
       controller:NextTab(); assert(controller.global.activeTab == "copilot")
       assert(not controller:SelectTab("unknown"))
       local function session(id) return { id = id, title = id, status = "running", lines = { id } } end

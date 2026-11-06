@@ -35,11 +35,11 @@ local function shortText(text, limit)
 end
 
 local function sessions(value, rows)
-    local valid, count = array(value, 2)
-    if not valid or count ~= 2 then return nil, "sessions" end
+    local valid, count = array(value, 3)
+    if not valid or (count ~= 2 and count ~= 3) then return nil, "sessions" end
     local copied, seen = {}, {}
     for _, session in ipairs(value) do
-        if not plain(session) or (session.id ~= "claude" and session.id ~= "codex") or seen[session.id] then
+        if not plain(session) or (session.id ~= "claude" and session.id ~= "codex" and session.id ~= "copilot") or seen[session.id] then
             return nil, "session identity"
         end
         if type(session.title) ~= "string" or #session.title > 80 or session.title:find("[%z\1-\31\127]") then
@@ -116,7 +116,9 @@ local function sessions(value, rows)
             state = state, choices = choices, info = info, reply = reply, tools = tools }
         seen[session.id] = true
     end
-    if copied[1].id ~= "claude" then copied[1], copied[2] = copied[2], copied[1] end
+    if not seen.claude or not seen.codex then return nil, "session identity" end
+    local order = { claude = 1, codex = 2, copilot = 3 }
+    table.sort(copied, function(a, b) return order[a.id] < order[b.id] end)
     return copied
 end
 

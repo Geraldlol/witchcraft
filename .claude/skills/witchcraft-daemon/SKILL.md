@@ -1,6 +1,6 @@
 ---
 name: witchcraft-daemon
-description: Use when the user asks to start, stop, restart, or check the Witchcraft WoW daemon (tools/witchcraft-daemon, `witchcraft run`, the Claude and Codex tabs inside WoW Forever), when a Witchcraft bridge.lock is stale or "A Witchcraft bridge owns" blocks a start, when daemon or MCP adapter code changed and must be reloaded, or before an in-game Witchcraft test session.
+description: Use when the user asks to start, stop, restart, or check the Witchcraft WoW daemon (tools/witchcraft-daemon, `witchcraft run`, the Claude, Codex and Copilot tabs inside WoW Forever), when a Witchcraft bridge.lock is stale or "A Witchcraft bridge owns" blocks a start, when daemon or MCP adapter code changed and must be reloaded, or before an in-game Witchcraft test session.
 ---
 
 # Witchcraft daemon
@@ -19,6 +19,8 @@ and reports what the ring, cache and carrier files say from outside.
 |---|---|
 | What is running, which mode, are the tabs up, is the cache fresh | `-Action status` |
 | Start in the proven mode (screen strip bootstrap), joining current sessions: Claude tab mirrors the running Claude Code console in `-Cwd` (default: the current folder), Codex tab resumes the newest Codex thread there | `-Action start` |
+| Start Copilot only (fresh by default; use `/resume` in its tab) | `-Action start -Only copilot` |
+| Add Copilot alongside Claude and Codex | `-Action start -WithCopilot` |
 | Start with new Claude and Codex sessions instead | `-Action start -Fresh` |
 | Start without the strip: the cooldown carrier's heartbeat drives the ring (unproven in game) | `-Action start -Mode carrier` |
 | One agent only; the overlay remains off by default | `-Action start -Only codex` |
@@ -53,13 +55,13 @@ its tab showing the last screen, and the daemon keeps running.
 - `ring:` newest chunk, seconds since written, and the want and acknowledgement counters. A
   chunk more than ~10 s old with the game running means the strip heartbeat stopped, which
   in pixel mode means the game window is not in front.
-- `tabs:` `running` for both is healthy; `not started` means the command table lost one.
+- `tabs:` `running` for each requested agent is healthy; `not started` is expected for agents excluded by `-Only` and for Copilot unless enabled.
 - `context:` cache status and age of the player and quest snapshots.
 - `cooldown file:` non-empty means a carrier frame is outstanding or was left behind.
 
 ## Common mistakes
 
-- Stopping the daemon ends the in-game Claude and Codex sessions. Say so before doing it
+- Stopping the daemon ends the in-game assistant sessions. Say so before doing it
   when the user is mid-conversation there.
 - Each agent's MCP process loads adapter code at daemon start. An edit to
   `src/mcp-server.js` or `src/context-*.js` does nothing until `-Action restart`.

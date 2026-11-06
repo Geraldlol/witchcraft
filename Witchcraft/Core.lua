@@ -1,11 +1,11 @@
--- Native lifecycle adapter plus a separately constructible controller. The two
+-- Native lifecycle adapter plus a separately constructible controller. The
 -- terminals carry user input only; no received terminal text is evaluated here.
 local _, ns = ...
 local Core, Persistence = {}, {}
 ns.Core, ns.Persistence = Core, Persistence
 local methods = {}
 methods.__index = methods
-local BUILD = "release-0.1.1"
+local BUILD = "release-0.2.0"
 local Ring = ns.Ring
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
@@ -70,7 +70,7 @@ ns.Settings = SETTINGS
 
 local function validMessage(message)
     if not plain(message) or not integer(message.id, 1, 262143) or not epoch(message.epoch) then return false end
-    if message.tab ~= "claude" and message.tab ~= "codex" then return false end
+    if message.tab ~= "claude" and message.tab ~= "codex" and message.tab ~= "copilot" then return false end
     if not actions[message.action] or type(message.text) ~= "string" or #message.text > 600 then return false end
     if not ns.Pixel.ValidText(message.text) or (message.action ~= "text" and message.text ~= "") then return false end
     if message.action == "text" and message.text == "" then return false end
@@ -121,7 +121,7 @@ function Persistence.Validate(raw)
         end
     end
     if global.hz ~= nil and not finite(global.hz, 0.125, 2) then return false, "Invalid stream rate" end
-    if global.activeTab ~= nil and global.activeTab ~= "claude" and global.activeTab ~= "codex" then return false, "Invalid tab" end
+    if global.activeTab ~= nil and global.activeTab ~= "claude" and global.activeTab ~= "codex" and global.activeTab ~= "copilot" then return false, "Invalid tab" end
     if global.view ~= nil and not validView(global.view) then return false, "Invalid saved layout" end
     if global.reloadAwaitHost ~= nil and type(global.reloadAwaitHost) ~= "boolean" then return false, "Invalid reload state" end
     if global.outbox ~= nil then
@@ -155,9 +155,24 @@ function Persistence.Initialize(global)
     return global
 end
 
+local function sessionListed(sessions, id)
+    for _, session in ipairs(sessions) do
+        if session.id == id then return true end
+    end
+    return false
+end
+
+local function queued(outbox, messageEpoch, messageId)
+    for _, message in ipairs(outbox) do
+        if message.epoch == messageEpoch and message.id == messageId then return true end
+    end
+    return false
+end
+
 local function emptySessions()
     return { { id = "claude", title = "Claude", lines = {}, status = "Waiting for host" },
-        { id = "codex", title = "Codex", lines = {}, status = "Waiting for host" } }
+        { id = "codex", title = "Codex", lines = {}, status = "Waiting for host" },
+        { id = "copilot", title = "Copilot", lines = {}, status = "Waiting for host" } }
 end
 
 -- Seconds after an answer's delivery before an identical menu counts as a new question (see AnswerPending).
@@ -197,17 +212,17 @@ function Core.New(global, api)
     -- Terminal output is ephemeral. Preserve legacy cache fields, if any, but
     -- never load them into the view or write new output to SavedVariables.
     self.sessions = emptySessions()
-    self.unread, self.screenText = { claude = false, codex = false }, {}
+    self.unread, self.screenText = { claude = false, codex = false, copilot = false }, {}
     -- The state each agent's screen last reported, and why a tab wants the player: "waiting" on a
     -- choice menu or "done" after working. Both clear when the player looks at that tab.
-    self.agentStates, self.attention = {}, { claude = false, codex = false }
+    self.agentStates, self.attention = {}, { claude = false, codex = false, copilot = false }
     -- Each tab's last answered menu, until the terminal moves on (see AnswerPending).
     self.answered = {}
     self.cols, self.rows = 120, 40
     -- Scrollback position per tab, in rows above the bottom. Memory only: a reload
     -- starts at the live rows, and SavedVariables never carries terminal state.
-    self.scroll = { claude = 0, codex = 0 }
-    self.scrolledAt = { claude = 0, codex = 0 }
+    self.scroll = { claude = 0, codex = 0, copilot = 0 }
+    self.scrolledAt = { claude = 0, codex = 0, copilot = 0 }
     self.heartbeatBackoff, self.heartbeatNextAt = HEARTBEAT_BASE, 0
     if api.Context ~= nil then self.context = api.Context
     elseif ns.Context then self.context = ns.Context.New() end
@@ -694,9 +709,10 @@ function methods:Snapshot()
             status = info.status, summary = info.summary, count = info.count, truncated = info.truncated }
     end
     return { sessions = self.sessions, activeTab = self.global.activeTab, cols = self.cols, rows = self.rows,
-        unread = { claude = self.unread.claude, codex = self.unread.codex },
-        attention = { claude = self.attention.claude, codex = self.attention.codex },
-        answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil },
+        tabs = self:TabPresent("copilot") and { "claude", "codex", "copilot" } or { "claude", "codex" },
+        unread = { claude = self.unread.claude, codex = self.unread.codex, copilot = self.unread.copilot },
+        attention = { claude = self.attention.claude, codex = self.attention.codex, copilot = self.attention.copilot },
+        answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil, copilot = self:AnswerPending("copilot") ~= nil },
         snippets = { unpack(self.global.snippets) },
         settings = (function() local copy = {}; for key, value in pairs(self.global.settings) do copy[key] = value end; return copy end)(),
         view = self.global.view, fontSize = self.global.fontSize, opacity = self.global.opacity,
@@ -855,7 +871,23 @@ function methods:FocusInput()
     if self.view and self.view.FocusInput then self.view:FocusInput() end
     return true
 end
-function methods:NextTab() return self:SelectTab(self.global.activeTab == "claude" and "codex" or "claude") end
+-- Copilot is opt-in: its tab is present only while selected or once the host reports it started.
+function methods:TabPresent(id)
+    if id == "claude" or id == "codex" then return true end
+    if id ~= "copilot" then return false end
+    if self.global.activeTab == "copilot" then return true end
+    for _, session in ipairs(self.sessions or {}) do
+        local status = session.id == "copilot" and session.status
+        if status and status ~= "not started" and status ~= "Waiting for host" then return true end
+    end
+    return false
+end
+function methods:NextTab()
+    local following = { claude = "codex", codex = "copilot", copilot = "claude" }
+    local tab = following[self.global.activeTab] or "claude"
+    if not self:TabPresent(tab) then tab = following[tab] end
+    return self:SelectTab(tab)
+end
 function methods:Interrupt() return self:Action(self.global.activeTab, "interrupt") end
 
 -- Saved prompts for the "/" menu. They are the player's words, bounded like any prompt.
@@ -875,7 +907,7 @@ function methods:RemoveSnippet(index)
 end
 
 function methods:SelectTab(tab)
-    if tab ~= "claude" and tab ~= "codex" then return false end
+    if tab ~= "claude" and tab ~= "codex" and tab ~= "copilot" then return false end
     self.global.activeTab = tab
     self:Render()
     return true
@@ -931,6 +963,7 @@ function methods:Queue(tab, action, text)
         local stopped = session.id == tab and stoppedStatus(session.status)
         if stopped then return false, "That terminal has " .. stopped end
     end
+    if not sessionListed(self.sessions, tab) then return false, "That terminal is not available" end
     if #self.global.outbox >= 64 then return false, "Outbox full (64); wait for acknowledgements" end
     if self.global.nextId > 262143 then return false, "Message ID limit reached; pending messages are preserved" end
     local message = { epoch = self.global.epoch, id = self.global.nextId, tab = tab, action = action, text = text or "" }
@@ -1035,9 +1068,18 @@ end
 
 function methods:Resend()
     if not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
-    local count = 0
-    for _, message in ipairs(self.global.outbox) do if message.epoch ~= self.global.epoch then count = count + 1 end end
+    -- A message for a tab this host does not list would never be acknowledged: it is dropped, not requeued.
+    -- The saved queue changes only once the requeue is known to fit the ID space.
+    local kept, dropped, count = {}, 0, 0
+    for _, message in ipairs(self.global.outbox) do
+        if not sessionListed(self.sessions, message.tab) then dropped = dropped + 1
+        else
+            kept[#kept + 1] = message
+            if message.epoch ~= self.global.epoch then count = count + 1 end
+        end
+    end
     if self.global.nextId + count - 1 > 262143 then return false, "Message ID limit reached" end
+    self.global.outbox = kept
     for _, message in ipairs(self.global.outbox) do
         if message.epoch ~= self.global.epoch then
             message.epoch, message.id = self.global.epoch, self.global.nextId
@@ -1048,6 +1090,7 @@ function methods:Resend()
     self.pixelFrames, self.pixelMessage, self.pixelIndex = nil, nil, nil
     self.ring.delay = self.ring.baseDelay
     self.notice = "Requeued " .. count .. " message(s) for the current host"
+        .. (dropped > 0 and (", dropped " .. dropped .. " for a tab it does not have") or "")
     self:Schedule("pixel", 0.2, self.PixelTick)
     if self.binding then self:Schedule("binding", 0, self.BindingTick) end
     if not self:InboundPaused() then self:Schedule("load", 1, self.LoadTick) end
@@ -1078,10 +1121,23 @@ function methods:ReceiveChunk(payload)
     end
     self:AcceptCooldownHost(result)
     local retained = {}
+    -- A queued message for a tab this host does not list would never be acknowledged and would hold
+    -- every message behind it; it is dropped here, whichever host queued it.
+    local dropped = 0
     for _, message in ipairs(global.outbox) do
-        if message.epoch ~= result.epoch or message.id > result.ack then retained[#retained + 1] = message end
+        if message.epoch ~= result.epoch or message.id > result.ack then
+            if sessionListed(result.sessions, message.tab) then retained[#retained + 1] = message
+            else
+                dropped = dropped + 1
+                -- A carrier transmission of a dropped message would wait forever for its acknowledgement.
+                if self.binding then self.binding:Cancel("input:" .. message.epoch .. ":" .. message.id) end
+            end
+        end
     end
     global.outbox = retained
+    if dropped > 0 then self:Print("Witchcraft dropped " .. dropped .. " queued message(s) for a tab this host does not have") end
+    -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
+    if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then global.activeTab = "claude" end
     for _, session in ipairs(result.sessions) do
         local id, text = session.id, screenText(session.lines)
         -- A new host session is a new terminal: an answer recorded for the old one does not carry over.
@@ -1233,6 +1289,12 @@ end
 
 function methods:BindingTick()
     if not self.active or not self.binding or self.binding.quarantined then return end
+    -- An input whose message is no longer queued is cancelled here too, which retries a cancel deferred in combat.
+    local active = self.binding.active
+    if active and active.kind == "input" then
+        local activeEpoch, activeId = active.identity:match("^input:(%x+):(%d+)$")
+        if not queued(self.global.outbox, activeEpoch, tonumber(activeId)) then self.binding:Cancel(active.identity) end
+    end
     if not self:Combat() and self.binding.enabled and not self.binding.active and not self.binding.outstanding then
         local message = self:PendingInput()
         if message then self.binding:OfferInput(message)
@@ -1476,7 +1538,7 @@ if LibStub then
         settingsCategory = ns.Options and ns.Options.Register(controller)
         _G.BINDING_HEADER_WITCHCRAFT, _G.BINDING_NAME_WITCHCRAFT_TOGGLE = "Witchcraft", "Toggle terminal window"
         _G.BINDING_NAME_WITCHCRAFT_FOCUS = "Open and type a prompt"
-        _G.BINDING_NAME_WITCHCRAFT_NEXTTAB = "Switch between Claude and Codex"
+        _G.BINDING_NAME_WITCHCRAFT_NEXTTAB = "Cycle Claude, Codex and Copilot"
         _G.BINDING_NAME_WITCHCRAFT_INTERRUPT = "Interrupt the selected agent"
     end
     function Witchcraft:OnEnable()

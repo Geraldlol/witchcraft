@@ -1,13 +1,16 @@
+import { AGENT_TABS } from './agents.js';
 import { randomBytes } from 'node:crypto';
 
-/** @typedef {'claude' | 'codex'} OverlayTab */
+/** @typedef {'claude' | 'codex' | 'copilot'} OverlayTab */
 /** @typedef {'hello' | 'input' | 'clipboard' | 'resize' | 'select' | 'ping' | 'resync' | 'disconnect'} ChildMessageType */
 /** @typedef {'ready' | 'state' | 'output' | 'status' | 'error' | 'pong' | 'shutdown'} HostMessageType */
 
 export const OVERLAY_PROTOCOL_VERSION = 1;
-export const OVERLAY_TABS = Object.freeze(['claude', 'codex']);
-export const MAX_OVERLAY_RECORD_BYTES = 256 * 1024;
-export const MAX_OVERLAY_PENDING_BYTES = 512 * 1024;
+export const OVERLAY_TABS = AGENT_TABS;
+// The host sends at most 48 KiB of lines plus 64 KiB of ANSI per session (overlay-host.js),
+// so each tab gets 128 KiB of the record.
+export const MAX_OVERLAY_RECORD_BYTES = 128 * 1024 * OVERLAY_TABS.length;
+export const MAX_OVERLAY_PENDING_BYTES = 2 * MAX_OVERLAY_RECORD_BYTES;
 export const MAX_OVERLAY_PENDING_RECORDS = 64;
 export const MAX_OVERLAY_INPUT_BYTES = 16 * 1024;
 export const MAX_OVERLAY_OUTPUT_BYTES = 64 * 1024;
@@ -61,7 +64,7 @@ function string(value, maxBytes, label, { minBytes = 0, pattern } = {}) {
   return value;
 }
 function tab(value, label = 'tab') {
-  if (!TAB_SET.has(value)) fail('INVALID_TAB', `${label} must be claude or codex`);
+  if (!TAB_SET.has(value)) fail('INVALID_TAB', `${label} must be claude, codex, or copilot`);
   return value;
 }
 function payloadOf(envelope) {
@@ -146,11 +149,11 @@ function validateSession(value, index) {
 function validateStatePayload(payload) {
   exactKeys(payload, ['authoritative', 'generation', 'activeTab', 'cols', 'rows', 'sessions'], [], 'state payload');
   if (!Array.isArray(payload.sessions) || payload.sessions.length !== OVERLAY_TABS.length) {
-    fail('INVALID_VALUE', 'state payload.sessions must contain exactly two terminals');
+    fail('INVALID_VALUE', 'state payload.sessions must contain exactly three terminals');
   }
   const sessions = payload.sessions.map(validateSession);
   if (sessions.some((session, index) => session.id !== OVERLAY_TABS[index])) {
-    fail('INVALID_VALUE', 'state payload.sessions must be ordered claude, codex');
+    fail('INVALID_VALUE', 'state payload.sessions must be ordered claude, codex, copilot');
   }
   return { authoritative: boolean(payload.authoritative, 'state payload.authoritative'),
     generation: integer(payload.generation, 1, Number.MAX_SAFE_INTEGER, 'state payload.generation'),
@@ -165,8 +168,8 @@ export function validateHostMessage(value) {
   switch (envelope.type) {
     case 'ready': {
       exactKeys(payload, ['sessionId', 'tabs', 'activeTab', 'lifecycle'], [], 'ready payload');
-      if (!Array.isArray(payload.tabs) || payload.tabs.length !== 2 || payload.tabs.some((value, index) => value !== OVERLAY_TABS[index])) {
-        fail('INVALID_VALUE', 'ready payload.tabs must be ordered claude, codex');
+      if (!Array.isArray(payload.tabs) || payload.tabs.length !== OVERLAY_TABS.length || payload.tabs.some((value, index) => value !== OVERLAY_TABS[index])) {
+        fail('INVALID_VALUE', 'ready payload.tabs must be ordered claude, codex, copilot');
       }
       if (payload.lifecycle !== 'syncing') fail('INVALID_VALUE', 'ready payload.lifecycle must be syncing');
       return { v: OVERLAY_PROTOCOL_VERSION, type: 'ready', seq, payload: {

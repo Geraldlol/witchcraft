@@ -1,12 +1,13 @@
+import { AGENT_TABS, AGENT_TITLES } from './agents.js';
 import { TerminalPair as SpawnedPair } from './pty.js';
 import { ConsoleMirror as Mirror, CONSOLE_DEFAULT_ROWS } from './console-mirror.js';
 import { agentState } from './agent-state.js';
 
-const TABS = Object.freeze(['claude', 'codex']);
-const TITLES = Object.freeze({ claude: 'Claude', codex: 'Codex' });
+const TABS = AGENT_TABS;
+const TITLES = AGENT_TITLES;
 
 /**
- * The two tabs, each behind whichever source it was given: a terminal the daemon spawns, or a
+ * The assistant tabs, each behind whichever source it was given: a terminal the daemon spawns, or a
  * console the user owns and the daemon only mirrors. It presents what the bridge already
  * consumes — `write`, `snapshot`, `sessions`, `cols`, `rows` — so the ring chunk, and with it the
  * addon, is unchanged.

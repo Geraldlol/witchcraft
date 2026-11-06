@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add an opt-in GitHub Copilot CLI tab in game and in the desktop overlay, with terminal input, console attachment, keyboard navigation, and session-only WoW MCP configuration.
+- Support native and npm-installed Copilot on Windows; preserve the default Claude/Codex launch.
+- Accept Copilot in pixel/binding transports and saved settings while preserving existing wire IDs. Update addon and daemon together.
+- Add Node and Lua regression coverage for three-agent routing and lifecycle.
+
+
 ## 0.1.1 - 2026-11-04
 
 - The optional cooldown carrier writes only after a host advertises it, revokes its lane immediately when that host disappears, and retries ownership-safe cleanup after the write-rate or combat gate clears. Logout and addon-disable cleanup bypass only Witchcraft's own write interval; native safety and exact-readback gates remain.

@@ -164,7 +164,7 @@ export class RingWriter {
     this.chain = operation;
     return operation;
   }
-  // Published chunks hold both terminal transcripts, so each goes back to the init placeholder
+  // Published chunks hold every terminal transcript, so each goes back to the init placeholder
   // rather than outliving the run in the AddOns folder.
   async scrubSlot(seq) {
     const directory = await this.check(this.addonsDir, seq);

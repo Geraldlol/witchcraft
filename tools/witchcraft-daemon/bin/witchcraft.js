@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { AGENT_TABS, AGENT_TITLES, selectAgentCommands } from '../src/agents.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -39,6 +40,7 @@ export function parseArgs(argv) {
     const token = rest[index];
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
     if (token === '--clean') { options.clean = true; continue; }
+    if (token === '--with-copilot') { options.withCopilot = true; continue; }
     if (token === '--no-mcp') { options.noMcp = true; continue; }
     if (token === '--overlay') { options.overlay = true; continue; }
     if (token === '--no-overlay') { options.noOverlay = true; continue; }
@@ -50,7 +52,7 @@ export function parseArgs(argv) {
     if (token === '--attach') {
       const value = rest[++index];
       const [tab, target] = String(value ?? '').split('=');
-      if (!['claude', 'codex'].includes(tab) || !target) throw new Error(`--attach takes claude=PID, codex=PID, or claude=pick`);
+      if (!AGENT_TABS.includes(tab) || !target) throw new Error(`--attach takes claude=PID|pick, codex=PID|pick, or copilot=PID|pick`);
       options.attach ??= {};
       if (options.attach[tab] !== undefined) throw new Error(`--attach names the ${tab} tab more than once; a tab mirrors one console`);
       if (target !== 'pick' && !/^[1-9][0-9]*$/u.test(target)) throw new Error(`--attach ${tab}= takes a process id or pick, not ${target}`);
@@ -60,10 +62,10 @@ export function parseArgs(argv) {
     if (!token.startsWith('--') || !values.has(token.slice(2)) || rest[index + 1] === undefined) throw new Error(`Unknown or incomplete option: ${token}`);
     options[token.slice(2)] = rest[++index];
   }
-  for (const key of ['tab', 'only']) if (options[key] && !['claude', 'codex'].includes(options[key])) throw new Error(`--${key} must be claude or codex`);
-  // --only silences the other tab, so attaching the tab it silenced would give it two answers.
-  if (options.only && options.attach && options.attach[options.only === 'claude' ? 'codex' : 'claude'] !== undefined) {
-    throw new Error(`--only ${options.only} silences the other tab, so it cannot also be attached`);
+  for (const key of ['tab', 'only']) if (options[key] && !AGENT_TABS.includes(options[key])) throw new Error(`--${key} must be claude, codex, or copilot`);
+  // --only silences the other tabs, so attaching the tab it silenced would give it two answers.
+  if (options.only && options.attach && Object.keys(options.attach).some(tab => tab !== options.only)) {
+    throw new Error(`--only ${options.only} silences the other tabs, so it cannot also be attached`);
   }
   return { command, options, child };
 }
@@ -78,16 +80,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   const hz = Number(options.hz ?? 1);
   if (!Number.isFinite(hz) || hz < 0.125 || hz > 2) throw new Error('hz must be 0.125..2');
   const history = boundedInteger(options.history ?? 200, 0, 1000, 'history');
-  const commands = { claude: { file: 'claude', args: [] }, codex: { file: 'codex', args: [] }, ...config.commands };
-  const chosen = { ...commands }, initialTab = options.tab ?? options.only ?? 'claude';
-  if (options.only && options.tab && options.only !== options.tab) throw new Error('--tab must match --only when one terminal is started');
-  if (options.only) chosen[options.only === 'claude' ? 'codex' : 'claude'] = null;
-  if (child.length) chosen[initialTab] = { file: child[0], args: child.slice(1) };
-  for (const entry of Object.values(chosen)) {
-    if (entry && (typeof entry.file !== 'string' || !Array.isArray(entry.args ?? []) || (entry.args ?? []).some(arg => typeof arg !== 'string'))) {
-      throw new Error('Terminal commands require an executable file and an array of arguments');
-    }
-  }
+  const { commands: chosen, initialTab } = selectAgentCommands(config, options, child);
   // Join the conversations already running here: the Claude tab mirrors the newest Claude Code
   // console in this folder, and the Codex tab resumes the newest top-level Codex thread (the VS Code
   // extension's, which has no console to mirror). An explicit --attach, --only or child command wins.
@@ -116,7 +109,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     }
   }
   if (!options.noMcp) {
-    for (const tab of ['claude', 'codex']) chosen[tab] = withWoWMcp(tab, chosen[tab], { cachePath: contextPath });
+    for (const tab of AGENT_TABS) chosen[tab] = withWoWMcp(tab, chosen[tab], { cachePath: contextPath });
   }
   // Naming a console is interactive, so it happens before the lock is taken: cancelling here
   // should leave nothing behind.
@@ -195,7 +188,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     try { return await operation; }
     finally { pendingStarts.delete(resource); }
   }
-  // The addon reports how many columns its pane fits; both terminals are resized to match.
+  // The addon reports how many columns its pane fits; all terminals are resized to match.
   const outbox = new Outbox({ epoch, write: (tab, data, action) => pair.write(tab, data, action),
     onControl: ({ cols: fitted }) => { pair?.resize(fitted, pair.rows, 'game'); if (!stopped) void publish(); } });
   // Every game-originated input decision is recorded (never its text) so a forged or dropped
@@ -315,14 +308,14 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       trace.note({ what: 'publish-error', code: error?.code, reason: error?.message, slot: writer.cursor });
       // A slot the game still has open is skipped; the next heartbeat asks for a fresh one.
       if (isTransientWriteError(error)) process.stderr.write(`\r\nWitchcraft: skipped a chunk write (${error.code}); retrying on the next tick\r\n`);
-      else if (error.code === 'LUA_OUTPUT_BUDGET') process.stderr.write('\r\nWitchcraft: display snapshot exceeds the chunk budget; keeping both terminal sessions active.\r\n');
+      else if (error.code === 'LUA_OUTPUT_BUDGET') process.stderr.write('\r\nWitchcraft: display snapshot exceeds the chunk budget; keeping terminal sessions active.\r\n');
       else if (error.code === 'DISPLAY_CONTENT') {
         // Agent text the Lua serializer refuses skips this frame and the next change publishes again.
         // Every advisory field is now made well-formed before it gets here, so this is a safety net:
         // a fault that persisted would skip every frame, which the throttled warning reports.
         if (Date.now() - contentWarningAt > 30000) {
           contentWarningAt = Date.now();
-          process.stderr.write(`\r\nWitchcraft: skipped a frame whose text the game cannot take (${error.message}); both terminal sessions stay active.\r\n`);
+          process.stderr.write(`\r\nWitchcraft: skipped a frame whose text the game cannot take (${error.message}); terminal sessions stay active.\r\n`);
         }
       }
       // A startup callback can publish while startResource is still waiting. Shutdown waits
@@ -392,8 +385,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       toolsTimer = setInterval(() => void checkClaudeTools(), adapters.presencePollMs ?? 5000);
       toolsTimer.unref?.();
     }
-    const lifetime = pair.attached.size ? 'Attached mode stays active until Witchcraft is stopped.' : 'Close both agents to stop.';
-    process.stderr.write(`Witchcraft: Claude + Codex tabs; Ctrl+] switches the real terminal. ${lifetime}\n`);
+    const lifetime = pair.attached.size ? 'Attached mode stays active until Witchcraft is stopped.' : 'Close all launched agents to stop.';
+    const inUse = AGENT_TABS.filter(tab => chosen[tab] || pair.attached.has(tab)).map(tab => AGENT_TITLES[tab]).join(' + ');
+    process.stderr.write(`Witchcraft: ${inUse} tabs; Ctrl+] switches the real terminal. ${lifetime}\n`);
     for (const line of current) process.stderr.write(`Witchcraft: ${line}. --no-current starts fresh sessions instead.\n`);
     // A patched client silently turns the cooldown carrier off in game; say so before the player logs
     // in. The pin gates nothing else, so with the carrier off a patch needs no action.
@@ -532,7 +526,7 @@ Cooldown carrier retained for inspection: ${error.message}
         overlay.on?.('startup-error', error => process.stderr.write(`\nWitchcraft overlay unavailable: ${error.message}\n`));
         overlay.on?.('restart-error', error => process.stderr.write(`\nWitchcraft overlay restart failed: ${error.message}\n`));
         overlay.on?.('protocol-error', error => process.stderr.write(`\nWitchcraft overlay protocol error: ${error.message}\n`));
-        overlay.on?.('unavailable', () => process.stderr.write('\nWitchcraft overlay stopped; both terminal sessions remain active.\n'));
+        overlay.on?.('unavailable', () => process.stderr.write('\nWitchcraft overlay stopped; terminal sessions remain active.\n'));
         void startResource(overlay).catch(unavailable);
       } catch (error) { await unavailable(error); }
     }
@@ -646,19 +640,19 @@ export function runBurstProbe(config, options = {}, adapters = {}) {
 export async function main(argv = process.argv.slice(2)) {
   const { command, options, child } = parseArgs(argv);
   if (command === 'help' || command === '--help') {
-    console.log(`Witchcraft - separate Claude and Codex terminals inside WoW\n\n` +
+    console.log(`Witchcraft - separate Claude, Codex and Copilot terminals inside WoW\n\n` +
       `witchcraft init [--ring 3000] [--clean] [--account NAME] [--character NAME]\n` +
       `witchcraft calibrate [--account NAME]    (show /witch calibrate first)\n` +
       `witchcraft burst-probe [--timeout 30]     (show /witch burstprobe first)\n` +
       `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--overlay|--no-overlay] [--no-pixels]\n` +
       `witchcraft run --only claude -- <executable> <args...>\n` +
-      `witchcraft run --attach claude=PID|pick [--attach codex=PID|pick]\n` +
+      `witchcraft run --attach claude=PID|pick [--attach codex=PID|pick] [--attach copilot=PID|pick]\n` +
       `witchcraft consoles [--all]                (the consoles a tab can mirror)\n` +
       `witchcraft mcp-setup [--apply]             (give a joined Claude session the WoW tools)\n\n` +
-      `run starts both agents by default. --only claude|codex starts one.\n` +
+      `run starts Claude and Codex by default. --only claude|codex|copilot starts one. --with-copilot adds Copilot.\n` +
       `--attach mirrors a console you started yourself instead of launching that tab;\n` +
       `type in that console's own window. Its colour is the sixteen ANSI colours.\n` +
-      `WoW MCP is added to recognized Claude/Codex commands. --no-mcp skips it.\n` +
+      `WoW MCP is added to recognized Claude/Codex/Copilot commands. --no-mcp skips it.\n` +
       `The desktop overlay is off; --overlay or overlay: true starts it, and --no-overlay overrides config.\n` +
       `A saved calibration starts fallback screen capture; --no-pixels disables it.\n` +
       `Ctrl+] selects the real terminal; WoW tabs select independently.\n` +

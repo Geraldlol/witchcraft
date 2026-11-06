@@ -1,3 +1,4 @@
+import { AGENT_TABS, AGENT_TITLES } from './agents.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -23,6 +24,8 @@ export function resolveProgram(command) {
   for (const candidate of candidates) {
     const extension = path.extname(candidate).toLowerCase();
     if (['.cmd', '.bat'].includes(extension)) continue;
+    // An absolute configured path keeps the old behaviour; only PATH-derived candidates must be .exe.
+    if (process.platform === 'win32' && extension !== '.exe' && candidate !== command) continue;
     try { if (fs.statSync(candidate).isFile()) return candidate; continue; } catch (error) {
       // A Store app's execution alias (WindowsApps\pwsh.exe) is a reparse point that stat
       // refuses with EACCES although it launches; take it when access says it exists (on
@@ -32,6 +35,34 @@ export function resolveProgram(command) {
     try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch {}
   }
   throw new Error(`Cannot find executable ${command}. Configure its executable path in Witchcraft's local config.`);
+}
+
+/** npm's Windows shim is a shell script; launch its documented package bin with Node instead. */
+export function resolveCopilotNpm({ folders = (process.env.PATH ?? '').split(path.delimiter), nodePath = process.execPath } = {}) {
+  for (const folder of folders) {
+    if (!path.isAbsolute(folder)) continue;
+    const root = path.join(folder, 'node_modules', '@github', 'copilot');
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+      const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.copilot;
+      if (manifest.name !== '@github/copilot' || typeof bin !== 'string') continue;
+      const script = path.resolve(root, bin), relative = path.relative(root, script);
+      if (relative.startsWith('..') || path.isAbsolute(relative) || !/\.m?js$/iu.test(script)) continue;
+      if (fs.statSync(script).isFile()) return { file: nodePath, args: [script] };
+    } catch { /* Not an npm Copilot installation in this PATH directory. */ }
+  }
+  return undefined;
+}
+
+export function resolveLaunch(command) {
+  try { return { file: resolveProgram(command.file), args: command.args ?? [] }; }
+  catch (error) {
+    if (process.platform === 'win32' && command.file === 'copilot') {
+      const npm = resolveCopilotNpm();
+      if (npm) return { file: npm.file, args: [...npm.args, ...(command.args ?? [])] };
+    }
+    throw error;
+  }
 }
 // Absolute System32 path: execFile('taskkill.exe') searches the cwd before System32 on Windows.
 export function taskkillPath() {
@@ -44,13 +75,14 @@ export class TerminalPair {
   constructor({ commands, cwd, cols = 120, rows = 40, history = 200, onData = () => {}, onExit = () => {}, spawn = pty.spawn }) {
     this.cols = cols; this.rows = rows; this.sessions = new Map(); this.disposed = false;
     try {
-      for (const tab of ['claude', 'codex']) {
+      for (const tab of AGENT_TABS) {
         const command = commands[tab];
-        const session = { id: tab, title: tab === 'claude' ? 'Claude' : 'Codex', status: command ? 'starting' : 'not started',
+        const session = { id: tab, title: AGENT_TITLES[tab], status: command ? 'starting' : 'not started',
           screen: new Screen({ cols, rows, history }), process: null, subscriptions: [] };
         this.sessions.set(tab, session);
         if (!command) continue;
-        const child = spawn(resolveProgram(command.file), command.args ?? [], { name: 'xterm-256color', cols, rows,
+        const launch = resolveLaunch(command);
+        const child = spawn(launch.file, launch.args, { name: 'xterm-256color', cols, rows,
           cwd, env: { ...process.env, TERM: 'xterm-256color' }, useConpty: true, useConptyDll: false });
         session.process = child; session.status = 'running';
         // Device-status responses go only to the terminal that produced them.
@@ -133,7 +165,7 @@ export function attachTerminal(pair, { stdin = process.stdin, stdout = process.s
     const session = pair.sessions.get(tab);
     return session?.status === 'running' && Boolean(session.screen);
   };
-  let activeTab = running(initialTab) ? initialTab : ['claude', 'codex'].find(running) ?? initialTab;
+  let activeTab = running(initialTab) ? initialTab : AGENT_TABS.find(running) ?? initialTab;
   let disposed = false;
   const decoder = new StringDecoder('utf8');
   const previousRaw = stdin.isRaw;
@@ -157,8 +189,8 @@ export function attachTerminal(pair, { stdin = process.stdin, stdout = process.s
     const pieces = text.split('\x1d');
     pieces.forEach((piece, index) => {
       if (index) {
-        const other = activeTab === 'claude' ? 'codex' : 'claude';
-        if (running(other)) activeTab = other;
+        const activeIndex = AGENT_TABS.indexOf(activeTab);
+        activeTab = AGENT_TABS.slice(activeIndex + 1).concat(AGENT_TABS.slice(0, activeIndex + 1)).find(running) ?? activeTab;
         redraw();
       }
       if (piece) {

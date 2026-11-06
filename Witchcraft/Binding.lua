@@ -10,7 +10,7 @@ local KEYS = { "CTRL-ALT-SHIFT-F12", "CTRL-ALT-SHIFT-F11", "CTRL-ALT-SHIFT-F10",
 local ZERO, PROBE = "00000000", "PFAM_BIND_PROBE"
 local ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 local MAX_SEQ, MAX_PAYLOAD = 16777215, 32
-local tabCodes = { claude = 0, codex = 1 }
+local tabCodes = { claude = 0, codex = 1, copilot = 2 }
 local actionCodes = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5 }
 
 local function integer(value, low, high)
@@ -281,6 +281,19 @@ function methods:OfferContext(message)
         or type(message.text) ~= "string" or #message.text > 580 then return false end
     return self:Begin("context", "C" .. u24(message.id) .. message.text,
         "context:" .. message.epoch .. ":" .. message.id)
+end
+
+-- Drops a buffered input whose message the controller no longer queues. A claimed frame still awaiting
+-- the host is released first; in combat that waits for a later tick.
+function methods:Cancel(identity)
+    if not self.active or self.active.identity ~= identity then return false end
+    if self.outstanding then
+        if self:Combat() then self.status = "Carrier cleanup deferred"; return false end
+        if not self:ClearExact(self.outstanding.key, self.outstanding.action) then return false end
+        self.outstanding = nil
+    end
+    self.active, self.status = nil, "Carrier ready"
+    return true
 end
 
 function methods:Pump(slot)

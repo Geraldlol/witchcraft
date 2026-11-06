@@ -16,7 +16,7 @@ The addon and companion are **free and open source (MIT)**. Your Claude Code, Co
 
 | Feature | In game |
 |---|---|
-| **Three assistant terminals** | Claude, Codex and Copilot have separate tabs, unsent drafts, prompt history, colored output and scrollback. The footer shows model and context usage when available. |
+| **Three assistant terminals** | Claude, Codex and Copilot have separate tabs, unsent drafts, prompt history, colored output and scrollback. The Copilot tab appears in game only while Copilot is running or selected. The footer shows model and context usage when available. |
 | **Work on your projects** | Choose the agents' working folder. Continue a running Claude Code session or resume a Codex thread; ask them to inspect, edit and debug the files they can normally access. Their usual permissions still apply. |
 | **Answer terminal prompts** | Use the slash-command menu, numbered choice buttons and **Keys** for permission prompts, model pickers, Enter, Escape, arrows and Interrupt. Unread markers and optional sound/text alerts tell you when an agent needs attention or finishes. |
 | **Compose and reuse prompts** | Shift-click item, quest and spell links into your draft; recall previous prompts; save snippets; or use **/ > Write a long prompt** for multiple lines. Copy the last reply and search the scrollback. |
@@ -105,7 +105,7 @@ From `tools\witchcraft-daemon`, point `--cwd` at the existing project folder you
 node bin/witchcraft.js run --cwd 'C:\path\to\your\project'
 ```
 
-This starts Claude and Codex. Add `--with-copilot` to also start Copilot. **If you only have one assistant installed**, use one of these instead:
+This starts Claude and Codex. Add `--with-copilot` to also start Copilot. `--tab` only picks which terminal the daemon window shows first and never starts one, so `--tab copilot` needs `--with-copilot`, `--only copilot` or a configured `commands.copilot`. **If you only have one assistant installed**, use one of these instead:
 
 ```powershell
 node bin/witchcraft.js run --only claude --cwd 'C:\path\to\your\project'
@@ -114,6 +114,8 @@ node bin/witchcraft.js run --only copilot --cwd 'C:\path\to\your\project'
 ```
 
 By default, Claude mirrors the newest running interactive Claude Code session in that folder, and Codex resumes the newest top-level Codex thread there. Copilot starts fresh; use `/resume` in its tab to choose a saved conversation. Automatic folder-based session discovery applies to Claude and Codex. A tab with no matching session starts fresh. Add `--no-current` to start fresh deliberately. The daemon window tells you which sessions it joined.
+
+Updating from 0.1.x: update the addon and the daemon together. With an older two-tab daemon the addon hides the Copilot tab, falls back to Claude if Copilot was selected, and drops any queued Copilot messages with a chat notice.
 
 The desktop overlay is off by default. Add `--overlay`, or set `"overlay": true` in `.local/config.json`, to start it after the game link is up. In the overlay, HUD mode passes clicks through; **Ctrl+Shift+H** brings back the interactive workbench. `--no-overlay` overrides a saved setting.
 
@@ -181,7 +183,9 @@ The included [witchcraft-daemon skill](.claude/skills/witchcraft-daemon/SKILL.md
 
 | Symptom | Check |
 |---|---|
-| `Cannot find executable claude` or `codex` | Use `--only` for your installed assistant, or configure its native `.exe` path in [the daemon's local config](tools/witchcraft-daemon/README.md#custom-executable-paths). A working `.cmd` wrapper alone is insufficient. |
+| `Cannot find executable claude`, `codex` or `copilot` | Use `--only` for your installed assistant, or configure its native `.exe` path in [the daemon's local config](tools/witchcraft-daemon/README.md#custom-executable-paths). A working `.cmd` wrapper alone is insufficient; an npm-installed `@github/copilot` is found and run through Node. |
+| `--tab copilot names a terminal that is not started` | `--tab` never starts a terminal. Add `--with-copilot`, use `--only copilot`, or configure `commands.copilot`. |
+| No Copilot tab in game | The tab shows only while Copilot is running or selected. Start the daemon with Copilot, and make sure the addon and daemon are both 0.2.0 or newer; a 0.1.x daemon lists two tabs. |
 | No calibration strip found | Run `/witch calibrate`, leave the strip uncovered, and retry. Calibration captures the virtual desktop once; very large multi-monitor layouts can exceed its 16-million-pixel limit. |
 | Window opens but replies stop | Keep WoW in front when relying on the strip; check `/witch status`, the daemon console and calibration. After a daemon restart, `/reload`, then repeat `/witch bindprobe` outside combat. Combat pauses terminal updates by default. |
 | Joined Claude has no WoW tools | Run `mcp-setup --apply` with the same `--cwd`, then restart that Claude session and the daemon. The footer reports when the joined session lacks the tools. |

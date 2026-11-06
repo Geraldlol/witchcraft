@@ -6,7 +6,7 @@ export function selectAgentCommands(config = {}, options = {}, child = []) {
   const initialTab = options.tab ?? options.only ?? 'claude';
   if (options.only && options.tab && options.only !== options.tab) throw new Error('--tab must match --only when one terminal is started');
   const commands = { claude: { file: 'claude', args: [] }, codex: { file: 'codex', args: [] }, ...config.commands };
-  if ((options.withCopilot || initialTab === 'copilot') && !commands.copilot) commands.copilot = { file: 'copilot', args: [] };
+  if ((options.withCopilot || options.only === 'copilot') && !commands.copilot) commands.copilot = { file: 'copilot', args: [] };
   if (options.only) for (const tab of AGENT_TABS) if (tab !== options.only) commands[tab] = null;
   if (child.length) commands[initialTab] = { file: child[0], args: child.slice(1) };
   for (const entry of Object.values(commands)) {

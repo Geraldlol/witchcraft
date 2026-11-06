@@ -283,6 +283,19 @@ function methods:OfferContext(message)
         "context:" .. message.epoch .. ":" .. message.id)
 end
 
+-- Drops a buffered input whose message the controller no longer queues. A claimed frame still awaiting
+-- the host is released first; in combat that waits for a later tick.
+function methods:Cancel(identity)
+    if not self.active or self.active.identity ~= identity then return false end
+    if self.outstanding then
+        if self:Combat() then self.status = "Carrier cleanup deferred"; return false end
+        if not self:ClearExact(self.outstanding.key, self.outstanding.action) then return false end
+        self.outstanding = nil
+    end
+    self.active, self.status = nil, "Carrier ready"
+    return true
+end
+
 function methods:Pump(slot)
     if self.quarantined or self.outstanding or not self.active then return false end
     if self:Combat() then self.status = "Carrier paused in combat"; return false end

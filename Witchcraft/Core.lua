@@ -162,6 +162,13 @@ local function sessionListed(sessions, id)
     return false
 end
 
+local function queued(outbox, messageEpoch, messageId)
+    for _, message in ipairs(outbox) do
+        if message.epoch == messageEpoch and message.id == messageId then return true end
+    end
+    return false
+end
+
 local function emptySessions()
     return { { id = "claude", title = "Claude", lines = {}, status = "Waiting for host" },
         { id = "codex", title = "Codex", lines = {}, status = "Waiting for host" },
@@ -1119,7 +1126,12 @@ function methods:ReceiveChunk(payload)
     local dropped = 0
     for _, message in ipairs(global.outbox) do
         if message.epoch ~= result.epoch or message.id > result.ack then
-            if sessionListed(result.sessions, message.tab) then retained[#retained + 1] = message else dropped = dropped + 1 end
+            if sessionListed(result.sessions, message.tab) then retained[#retained + 1] = message
+            else
+                dropped = dropped + 1
+                -- A carrier transmission of a dropped message would wait forever for its acknowledgement.
+                if self.binding then self.binding:Cancel("input:" .. message.epoch .. ":" .. message.id) end
+            end
         end
     end
     global.outbox = retained
@@ -1277,6 +1289,12 @@ end
 
 function methods:BindingTick()
     if not self.active or not self.binding or self.binding.quarantined then return end
+    -- An input whose message is no longer queued is cancelled here too, which retries a cancel deferred in combat.
+    local active = self.binding.active
+    if active and active.kind == "input" then
+        local activeEpoch, activeId = active.identity:match("^input:(%x+):(%d+)$")
+        if not queued(self.global.outbox, activeEpoch, tonumber(activeId)) then self.binding:Cancel(active.identity) end
+    end
     if not self:Combat() and self.binding.enabled and not self.binding.active and not self.binding.outstanding then
         local message = self:PendingInput()
         if message then self.binding:OfferInput(message)

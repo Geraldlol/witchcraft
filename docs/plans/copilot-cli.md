@@ -12,7 +12,7 @@ The source branch `Gethe/wow-ui-source:forever` resolved on 2026-11-05 to
 `eac30af597e5aaa43a60f6675ef5fdcea100375f`, version `1.60.1.70790`.
 This is source metadata, not runtime qualification. Existing optional carrier pins remain unchanged.
 
-Copilot is opt-in (`--only copilot`, `--with-copilot`, `--tab copilot`, or a local command entry).
+Copilot is opt-in (`--only copilot`, `--with-copilot`, or a local command entry); `--tab copilot` only selects the tab.
 The default still launches Claude and Codex. Copilot starts fresh; `/resume` or configured
 `--resume SESSION_ID` supplies explicit continuation. Automatic Copilot transcript discovery,
 model/context footer metadata, and Copy last reply are outside this integration; screen copying works.

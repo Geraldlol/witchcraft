@@ -1062,14 +1062,17 @@ end
 function methods:Resend()
     if not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
     -- A message for a tab this host does not list would never be acknowledged: it is dropped, not requeued.
-    local kept, dropped = {}, 0
+    -- The saved queue changes only once the requeue is known to fit the ID space.
+    local kept, dropped, count = {}, 0, 0
     for _, message in ipairs(self.global.outbox) do
-        if sessionListed(self.sessions, message.tab) then kept[#kept + 1] = message else dropped = dropped + 1 end
+        if not sessionListed(self.sessions, message.tab) then dropped = dropped + 1
+        else
+            kept[#kept + 1] = message
+            if message.epoch ~= self.global.epoch then count = count + 1 end
+        end
     end
-    self.global.outbox = kept
-    local count = 0
-    for _, message in ipairs(self.global.outbox) do if message.epoch ~= self.global.epoch then count = count + 1 end end
     if self.global.nextId + count - 1 > 262143 then return false, "Message ID limit reached" end
+    self.global.outbox = kept
     for _, message in ipairs(self.global.outbox) do
         if message.epoch ~= self.global.epoch then
             message.epoch, message.id = self.global.epoch, self.global.nextId
@@ -1111,10 +1114,16 @@ function methods:ReceiveChunk(payload)
     end
     self:AcceptCooldownHost(result)
     local retained = {}
+    -- A queued message for a tab this host does not list would never be acknowledged and would hold
+    -- every message behind it; it is dropped here, whichever host queued it.
+    local dropped = 0
     for _, message in ipairs(global.outbox) do
-        if message.epoch ~= result.epoch or message.id > result.ack then retained[#retained + 1] = message end
+        if message.epoch ~= result.epoch or message.id > result.ack then
+            if sessionListed(result.sessions, message.tab) then retained[#retained + 1] = message else dropped = dropped + 1 end
+        end
     end
     global.outbox = retained
+    if dropped > 0 then self:Print("Witchcraft dropped " .. dropped .. " queued message(s) for a tab this host does not have") end
     -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
     if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then global.activeTab = "claude" end
     for _, session in ipairs(result.sessions) do

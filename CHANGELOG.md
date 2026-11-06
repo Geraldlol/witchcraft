@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Per-tab show/hide settings in a new Tabs section of the Options page. A hidden tab is not drawn, cycled or selectable; at least one tab stays visible, and hiding the active tab moves the selection.
+
 ## 0.2.0 - 2026-11-06
 
 - Add an opt-in GitHub Copilot CLI tab in game and in the desktop overlay, with terminal input, console attachment, keyboard navigation, and session-only WoW MCP configuration.

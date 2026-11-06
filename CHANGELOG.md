@@ -1,11 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-06
 
 - Add an opt-in GitHub Copilot CLI tab in game and in the desktop overlay, with terminal input, console attachment, keyboard navigation, and session-only WoW MCP configuration.
 - Support native and npm-installed Copilot on Windows; preserve the default Claude/Codex launch.
 - Accept Copilot in pixel/binding transports and saved settings while preserving existing wire IDs. Update addon and daemon together.
 - Add Node and Lua regression coverage for three-agent routing and lifecycle.
+- `--tab copilot` only selects the tab; a `--tab` that names a terminal with no launch is refused with a hint naming the opt-ins (`--only copilot`, `--with-copilot`, a configured `commands.copilot`).
+- The Copilot tab stays hidden in game until it is selected or its session has started; the daemon banner names the launched tabs.
+- The addon refuses input to a tab the connected host does not list, drops such queued messages on `Resend` and on the next accepted chunk, cancels a binding-carrier transmission of a dropped message, and a saved Copilot selection falls back to Claude on a two-session host.
+- `Resend` checks the message-ID capacity before touching the saved queue.
+- The desktop overlay's record and pending budgets scale with the tab count.
+- An absolute configured Windows command path keeps its previous behaviour; PATH-derived candidates must still be `.exe`.
 
 
 ## 0.1.1 - 2026-11-04

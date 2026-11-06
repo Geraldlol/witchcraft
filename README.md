@@ -16,7 +16,7 @@ The addon and companion are **free and open source (MIT)**. Your Claude Code, Co
 
 | Feature | In game |
 |---|---|
-| **Three assistant terminals** | Claude, Codex and Copilot have separate tabs, unsent drafts, prompt history, colored output and scrollback. The Copilot tab appears in game only while Copilot is running or selected. The footer shows model and context usage when available. |
+| **Three assistant terminals** | Claude, Codex and Copilot have separate tabs, unsent drafts, prompt history, colored output and scrollback. The Copilot tab appears in game only while Copilot is running or selected, and any tab can be hidden from the addon's Options page. The footer shows model and context usage when available. |
 | **Work on your projects** | Choose the agents' working folder. Continue a running Claude Code session or resume a Codex thread; ask them to inspect, edit and debug the files they can normally access. Their usual permissions still apply. |
 | **Answer terminal prompts** | Use the slash-command menu, numbered choice buttons and **Keys** for permission prompts, model pickers, Enter, Escape, arrows and Interrupt. Unread markers and optional sound/text alerts tell you when an agent needs attention or finishes. |
 | **Compose and reuse prompts** | Shift-click item, quest and spell links into your draft; recall previous prompts; save snippets; or use **/ > Write a long prompt** for multiple lines. Copy the last reply and search the scrollback. |

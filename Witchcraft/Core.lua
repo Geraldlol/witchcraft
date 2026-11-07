@@ -59,7 +59,7 @@ local SETTINGS = {
     alertText = { default = true }, alertSound = { default = true }, alertFinished = { default = true },
     combatUpdates = { default = false }, showChoices = { default = true }, showStatus = { default = true },
     minimap = { default = true }, historySize = { default = 50, values = { [20] = true, [50] = true, [100] = true } },
-    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = true },
+    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = false },
 }
 local function validSetting(key, value)
     local spec = SETTINGS[key]
@@ -76,6 +76,14 @@ local function presentTabs(controller)
     local tabs = {}
     for _, id in ipairs(TAB_ORDER) do if controller:TabPresent(id) then tabs[#tabs + 1] = id end end
     return tabs
+end
+-- A tab's saved value, else its default. Unknown ids resolve false.
+local function tabShown(settings, id)
+    local key = TAB_SETTING[id]
+    if not key then return false end
+    local value = settings and settings[key]
+    if value == nil then value = SETTINGS[key].default end
+    return value == true
 end
 
 local function validMessage(message)
@@ -121,7 +129,7 @@ function Persistence.Validate(raw)
             if SETTINGS[key] and not validSetting(key, value) then return false, "Invalid saved setting " .. tostring(key) end
         end
         -- One tab always stays visible.
-        if global.settings.tabClaude == false and global.settings.tabCodex == false and global.settings.tabCopilot == false then
+        if not tabShown(global.settings, "claude") and not tabShown(global.settings, "codex") and not tabShown(global.settings, "copilot") then
             return false, "Invalid saved tab settings"
         end
     end
@@ -227,7 +235,7 @@ function Core.New(global, api)
     -- never load them into the view or write new output to SavedVariables.
     self.sessions = emptySessions()
     -- A saved selection on a tab hidden since it was saved moves to the first tab still shown.
-    if global.settings[TAB_SETTING[global.activeTab]] == false then
+    if not tabShown(global.settings, global.activeTab) then
         global.activeTab = self:FirstPresentTab()
     end
     self.unread, self.screenText = { claude = false, codex = false, copilot = false }, {}
@@ -872,7 +880,7 @@ function methods:SetSetting(key, value)
     if tabSetting and value == false then
         local others = 0
         for _, id in ipairs(TAB_ORDER) do
-            if TAB_SETTING[id] ~= key and self.global.settings[TAB_SETTING[id]] ~= false then others = others + 1 end
+            if TAB_SETTING[id] ~= key and tabShown(self.global.settings, id) then others = others + 1 end
         end
         if others == 0 then return false, "At least one tab stays visible" end
     end
@@ -901,20 +909,9 @@ function methods:FocusInput()
     if self.view and self.view.FocusInput then self.view:FocusInput() end
     return true
 end
--- A tab hidden on the Options page is never present. Copilot is opt-in: its tab is present while
--- selected, once the host reports it started, or when it is the only tab left.
-function methods:TabPresent(id)
-    if not TAB_SETTING[id] or self.global.settings[TAB_SETTING[id]] == false then return false end
-    if id == "claude" or id == "codex" then return true end
-    -- Copilot is the only tab left, so it shows before the host starts it.
-    if self.global.settings.tabClaude == false and self.global.settings.tabCodex == false then return true end
-    if self.global.activeTab == "copilot" then return true end
-    for _, session in ipairs(self.sessions or {}) do
-        local status = session.id == "copilot" and session.status
-        if status and status ~= "not started" and status ~= "Waiting for host" then return true end
-    end
-    return false
-end
+-- A tab is present exactly when its setting resolves true. Copilot defaults off and is switched on
+-- by the first started Copilot session of a host epoch (ReceiveChunk).
+function methods:TabPresent(id) return tabShown(self.global.settings, id) end
 -- The selection that has to move goes to the first tab still shown; "claude" when none is.
 function methods:FirstPresentTab()
     for _, id in ipairs(TAB_ORDER) do if self:TabPresent(id) then return id end end
@@ -949,7 +946,7 @@ end
 
 function methods:SelectTab(tab)
     if tab ~= "claude" and tab ~= "codex" and tab ~= "copilot" then return false end
-    if self.global.settings[TAB_SETTING[tab]] == false then return false, "That tab is hidden" end
+    if not tabShown(self.global.settings, tab) then return false, "That tab is hidden" end
     self.global.activeTab = tab
     self:Render()
     return true
@@ -1178,6 +1175,17 @@ function methods:ReceiveChunk(payload)
     end
     global.outbox = retained
     if dropped > 0 then self:Print("Witchcraft dropped " .. dropped .. " queued message(s) for a tab this host does not have") end
+    -- The daemon starts Copilot only on request, so its first started session of a host epoch switches the tab on.
+    for _, session in ipairs(result.sessions) do
+        if session.id == "copilot" and session.status ~= "not started" and session.status ~= "Waiting for host"
+            and global.copilotRevealedEpoch ~= self.ring.epoch then
+            global.copilotRevealedEpoch = self.ring.epoch
+            if not tabShown(global.settings, "copilot") then
+                global.settings.tabCopilot = true
+                self:Print("Witchcraft shows the Copilot tab because the daemon started Copilot. Hide it under Options > Tabs.")
+            end
+        end
+    end
     -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
     if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then
         global.activeTab = self:FirstPresentTab()

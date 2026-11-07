@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Per-tab show/hide settings in a new Tabs section of the Options page. A hidden tab is not drawn, cycled or selectable; at least one tab stays visible, and hiding the active tab moves the selection.
+- The Copilot tab is an ordinary tab setting, off by default. The addon switches it on once per host session when the daemon starts Copilot (a chat line names Options > Tabs), and it stays as you set it afterwards. The old show-while-selected and last-tab rules are gone; one tab always stays visible.
 
 ## 0.2.0 - 2026-11-06
 

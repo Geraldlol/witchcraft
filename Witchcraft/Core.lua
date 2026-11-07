@@ -386,6 +386,21 @@ function methods:OfferHeartbeat()
     return written, reason
 end
 
+-- The strip reaches the host only while WoW is in front. After a stall, or while the host says a file
+-- lane last moved its cursor, the binding carrier advertises the ring slot instead.
+function methods:OfferBindingHeartbeat()
+    local carrier = self.binding
+    if not self.active or not carrier or carrier.enabled ~= true or not self.everLinked or carrier:Busy() ~= false then
+        return false
+    end
+    if not self.stalled and self.cursorLane ~= "file" then return false end
+    local written, reason = carrier:Heartbeat(self.ring.nextSeq, self:HeartbeatFlags())
+    local refused = not written and tostring(reason) or nil
+    if refused and refused ~= self.bindingHeartbeatReason then self:Trace("binding heartbeat refused: " .. refused) end
+    self.bindingHeartbeatReason = refused
+    return written, reason
+end
+
 -- Cleanup needs the same gate the writes do, so combat defers it to the next attempt.
 function methods:ReleaseCooldown(shutdown)
     local carrier = self.cooldown
@@ -1157,11 +1172,13 @@ function methods:ReceiveChunk(payload)
             self.stalled, self.ring.delay = true, self.stallDelay
             self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
         end
-        self.connected, self.contextProtocol = false, nil
+        self.connected, self.contextProtocol, self.cursorLane = false, nil, nil
+        self:OfferBindingHeartbeat()
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
     local global = self.global
     global.epoch, global.ack, global.reloadAwaitHost = result.epoch, result.ack, false
+    self.cursorLane = result.cursorLane
     global.nextId = math.max(global.nextId, result.ack + 1)
     if self.binding then
         local accepted, kind = self.binding:AcceptHost(result)
@@ -1314,6 +1331,7 @@ function methods:LoadTick()
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
     self:WarnRing()
     self:OfferHeartbeat()
+    self:OfferBindingHeartbeat()
     self:Render()
     if self:WantStream() then
         self:Schedule("load", self.ring.delay, self.LoadTick)
@@ -1427,6 +1445,7 @@ function methods:OnEvent(event)
         if self.resetRequested then self:Reset(); return end
         if self.cooldownDeferred then self:ReleaseCooldown() end
         self:OfferHeartbeat()
+        self:OfferBindingHeartbeat()
         if self:WantStream() then self:Schedule("load", 1, self.LoadTick) end
         if self.binding and (self.binding:Busy() or self.binding.enabled) then self:Schedule("binding", 0, self.BindingTick) end
     end
@@ -1554,7 +1573,8 @@ function methods:HandleSlash(input)
             self.reloadPending and " / reload pending" or ""))
         local detail = snapshot.cooldown.reason or snapshot.cooldown.quarantined
         local cooldown = snapshot.cooldown.status .. (detail and (" (" .. detail .. ")") or "")
-        self:Print(string.format("Witchcraft lanes: binding %s | cooldown %s", snapshot.binding.status or "?", cooldown))
+        self:Print(string.format("Witchcraft lanes: binding %s | cooldown %s | cursor %s", snapshot.binding.status or "?",
+            cooldown, self.cursorLane or "none"))
     else
         self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
             .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"

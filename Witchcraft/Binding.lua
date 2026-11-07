@@ -80,10 +80,18 @@ local function unbase32(value)
     return decoded
 end
 
+-- The one sequence-0 frame is a heartbeat: one part on a session's ids whose body is "H" and a flags
+-- byte of 0..3.
+local function heartbeatShape(frame)
+    return frame.seq == 0 and frame.part == 1 and frame.count == 1 and frame.epoch ~= ZERO
+        and type(frame.payload) == "string" and #frame.payload == 2 and frame.payload:sub(1, 1) == "H"
+        and frame.payload:byte(2) <= 3
+end
+
 local function actionFor(frame)
     if not hex8(frame.epoch, frame.epoch == ZERO) or not hex8(frame.nonce, frame.nonce == ZERO)
         or (frame.epoch == ZERO) ~= (frame.nonce == ZERO) or not hex8(frame.uiNonce)
-        or not integer(frame.slot, 1, 9999) or not integer(frame.seq, 1, MAX_SEQ)
+        or not integer(frame.slot, 1, 9999) or not integer(frame.seq, heartbeatShape(frame) and 0 or 1, MAX_SEQ)
         or not integer(frame.part, 1, 32) or not integer(frame.count, frame.part, 32)
         or type(frame.payload) ~= "string" or #frame.payload < 1 or #frame.payload > MAX_PAYLOAD then return nil end
     local core = string.format("WitchcraftCarrier_V1_%s_%s_%s_%04X_%06X_%02X_%02X_%s",
@@ -146,6 +154,9 @@ function methods:Combat()
 end
 
 function methods:Quarantine(reason)
+    -- A written heartbeat goes first, unless its own clear is the one quarantining; a refusal inside that
+    -- clear is overwritten by this reason.
+    if not self.clearingHeartbeat then self:ClearHeartbeat() end
     self.enabled, self.active, self.quarantined = false, nil, reason or "carrier ownership changed"
     self.status = "Quarantined: " .. self.quarantined
     return false, self.status
@@ -211,6 +222,7 @@ function methods:StartupScrub()
     self.mutating = nil
     if not saved then return self:Quarantine("startup carrier scrub save failed") end
     if changed then self.lastWriteAt = self:Now() end
+    self.heartbeat = nil
     return true
 end
 
@@ -224,18 +236,25 @@ function methods:RollbackClaim(key, action)
     return false, "Carrier frame was not persisted"
 end
 
-function methods:Claim(frame)
-    if self:Combat() then return false, "Carrier paused in combat" end
-    if self.quarantined then return false, self.status end
+-- Persists one frame on the key a written heartbeat holds, else on the first verified-empty key, so the
+-- file never holds two carrier frames. Returns the key and action, or false and the reason.
+function methods:Write(frame)
     if self.bindingSet == nil or self:CurrentSet() ~= self.bindingSet then return self:Quarantine("binding set changed") end
-    local key
-    for _, candidate in ipairs(KEYS) do if self:GetAction(candidate) == "" then key = candidate; break end end
+    local beat, key = self.heartbeat, nil
+    if beat then
+        if self:GetAction(beat.key) ~= beat.action then return self:Quarantine("reserved key ownership changed") end
+        key = beat.key
+    else
+        for _, candidate in ipairs(KEYS) do if self:GetAction(candidate) == "" then key = candidate; break end end
+    end
     if not key then return false, "No reserved carrier key is unbound" end
     local action = actionFor(frame)
     if not action then return false, "Invalid carrier frame" end
     self.mutating = true
     local ok, set = pcall(self.api.SetBinding or function() return false end, key, action)
     if not ok or not set then self.mutating = nil; return false, "SetBinding rejected the carrier frame" end
+    -- The key no longer holds the heartbeat, whatever happens next.
+    self.heartbeat = nil
     if self:GetAction(key) ~= action then self.mutating = nil; return self:Quarantine("carrier readback mismatch") end
     if not self:Save() then
         local restored, reason = self:RollbackClaim(key, action)
@@ -244,9 +263,69 @@ function methods:Claim(frame)
     end
     self.mutating = nil
     self.lastWriteAt = self:Now()
+    return key, action
+end
+
+function methods:Claim(frame)
+    if self:Combat() then return false, "Carrier paused in combat" end
+    if self.quarantined then return false, self.status end
+    local key, action = self:Write(frame)
+    if not key then return false, action end
     self.outstanding = { key = key, action = action, seq = frame.seq, probe = self.active.probe == true }
     self.status = self.outstanding.probe and "Probe persisted; waiting for host" or "Carrier frame persisted"
     return true
+end
+
+-- A heartbeat (sequence 0) names only the ring slot this UI session wants next, so the host follows the
+-- ring while the strip is unreadable. The host never acknowledges it; it holds its key until a data frame
+-- takes the key or Stop, Cancel or Quarantine clears it.
+function methods:Heartbeat(slot, flags)
+    if self.quarantined then return false, self.status end
+    if not self.enabled or not self.epoch or not self.nonce then return false, "carrier has no host session" end
+    if self.outstanding then return false, "waiting for host acknowledgement" end
+    if self.active then return false, "carrier has data to send" end
+    if self:Combat() then return false, "Carrier paused in combat" end
+    if self:Now() - self.lastWriteAt < 1 then return false, "carrier rate limit" end
+    if not integer(slot, 1, 9999) or not integer(flags, 0, 3) then return false, "Invalid carrier frame" end
+    local beat = self.heartbeat
+    if beat and beat.slot == slot and beat.flags == flags then return false, "heartbeat unchanged" end
+    local key, action = self:Write({ epoch = self.epoch, nonce = self.nonce, uiNonce = self.uiNonce, slot = slot,
+        seq = 0, part = 1, count = 1, payload = "H" .. string.char(flags) })
+    if not key then return false, action end
+    self.heartbeat = { key = key, action = action, slot = slot, flags = flags }
+    return true
+end
+
+-- Clears the heartbeat frame through the exact clear and drops its record once the key is no longer
+-- ours; in combat both wait.
+function methods:ClearHeartbeat()
+    local beat = self.heartbeat
+    if not beat then return true end
+    if self:Combat() then return false, "cleanup waits for combat to end" end
+    if self.clearingHeartbeat then return false, "carrier cleanup failed" end
+    self.clearingHeartbeat = true
+    local ok, reason
+    -- An unsaved record only saves while the live key is still empty: a frame the saved set put back
+    -- on the key must be cleared again first, and a key that now holds another frame is not ours to save.
+    if beat.unsaved and self:GetAction(beat.key) == "" then
+        -- The live key is already empty; only the saved set still carries the heartbeat.
+        self.mutating = true
+        ok = self:Save()
+        self.mutating = nil
+        if not ok then reason = "carrier cleanup failed" end
+    else
+        ok, reason = self:ClearExact(beat.key, beat.action)
+    end
+    self.clearingHeartbeat = nil
+    -- Keep the record while the key is still ours, or while that cannot be read, so a later Stop or
+    -- Cancel can finish the clear. An empty key after a failed clear means the live clear landed but
+    -- the save did not: the record stays and the next clear only saves. Drop it once the clear is
+    -- complete or the key is known to hold another frame.
+    local held = self:GetAction(beat.key)
+    if ok then self.heartbeat = nil
+    elseif held == "" then beat.unsaved = true
+    elseif held ~= nil and held ~= beat.action then self.heartbeat = nil end
+    return ok, reason
 end
 
 function methods:Begin(kind, body, identity)
@@ -292,6 +371,7 @@ function methods:Cancel(identity)
         if not self:ClearExact(self.outstanding.key, self.outstanding.action) then return false end
         self.outstanding = nil
     end
+    if not self:ClearHeartbeat() then return false end
     self.active, self.status = nil, "Carrier ready"
     return true
 end
@@ -354,6 +434,10 @@ function methods:OnBindingsChanged()
 end
 
 function methods:Stop()
+    if not self:ClearHeartbeat() then
+        if self:Combat() then self.status = "Carrier cleanup deferred until reload" end
+        return false
+    end
     if not self.outstanding then self.active, self.enabled = nil, false; return true end
     if self:Combat() then self.status = "Carrier cleanup deferred until reload"; return false end
     local ok = self:ClearExact(self.outstanding.key, self.outstanding.action)
@@ -367,7 +451,7 @@ end
 
 function methods:Snapshot()
     return { status = self.status, enabled = self.enabled == true, quarantined = self.quarantined,
-        seq = self.nextSeq, busy = self:Busy() }
+        seq = self.nextSeq, busy = self:Busy(), heartbeatSlot = self.heartbeat and self.heartbeat.slot or nil }
 end
 
 Binding.Keys, Binding.ActionFor, Binding.ParseAction = KEYS, actionFor, parseAction

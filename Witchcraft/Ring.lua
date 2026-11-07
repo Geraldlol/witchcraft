@@ -159,7 +159,7 @@ function methods:OnChunk(payload)
     if not integer(payload.ringSize, payload.seq, 9999) then return self:Reject("ring size") end
     if payload.ready == false then
         self.ringSize, self.nextSeq = payload.ringSize, self.nextSeq + 1
-        self.status, self.delay = "Waiting for host", 8
+        self.status, self.delay, self.cursorLane = "Waiting for host", 8, nil
         return { accepted = true, placeholder = true, changed = false, delay = 8 }
     end
     if payload.ready ~= true or not epoch(payload.epoch) or type(payload.changed) ~= "boolean" then
@@ -221,6 +221,8 @@ function methods:OnChunk(payload)
     self.ringSize, self.nextSeq, self.accepted = payload.ringSize, self.nextSeq + 1, self.accepted + 1
     self.delay = (payload.changed or newEpoch) and self.baseDelay or math.min(8, self.delay * 2)
     self.status = "Connected"
+    -- The lane whose request last moved the host's cursor; any other value is unknown, not a fault.
+    self.cursorLane = (payload.cursorLane == "strip" or payload.cursorLane == "file") and payload.cursorLane or nil
     return {
         accepted = true, changed = payload.changed, delay = self.delay, newEpoch = newEpoch,
         epoch = incomingEpoch, ack = payload.ack, cols = payload.cols, rows = payload.rows, sessions = copied,
@@ -229,6 +231,7 @@ function methods:OnChunk(payload)
         bindingProtocol = payload.bindingProtocol, bindingNonce = payload.bindingNonce, bindingAck = payload.bindingAck,
         cooldownProtocol = payload.cooldownProtocol, cooldownNonce = payload.cooldownNonce,
         cooldownAck = payload.cooldownAck, cooldownChecksum = payload.cooldownChecksum,
+        cursorLane = self.cursorLane,
     }
 end
 
@@ -248,5 +251,6 @@ end
 function methods:Snapshot()
     return { nextSeq = self.nextSeq, seq = self.nextSeq - 1, ringSize = self.ringSize, epoch = self.epoch,
         delay = self.delay, ack = self.ack, status = self.status, accepted = self.accepted, exhausted = self:Exhausted(),
-        bindingProtocol = self.bindingProtocol, bindingNonce = self.bindingNonce, bindingAck = self.bindingAck }
+        bindingProtocol = self.bindingProtocol, bindingNonce = self.bindingNonce, bindingAck = self.bindingAck,
+        cursorLane = self.cursorLane }
 end

@@ -66,7 +66,7 @@ Copilot starts a new interactive session. Use `/resume` in the Copilot tab, or c
 
 Recognized `copilot` / `copilot.exe` commands receive the WoW server via `--additional-mcp-config`, scoped to that launch. Existing arguments are preserved; no tool approval flags are added. `--no-mcp` skips injection. Windows npm installations are supported by resolving `@github/copilot`'s JavaScript bin from absolute PATH directories and running it with Node, without invoking a shell. Native `copilot.exe` takes priority.
 
-To mirror an existing console, use `--only copilot --attach copilot=PID` (or `copilot=pick`). As with other attached consoles, configure MCP in that Copilot session yourself before attaching; Witchcraft cannot inject launch arguments into an existing process. See [Copilot MCP setup](../../docs/MCP.md#copilot-cli).
+To mirror an existing console, use `--only copilot --attach copilot=PID` (or `copilot=pick`, or `copilot=~copilot` for the newest console running Copilot). As with other attached consoles, configure MCP in that Copilot session yourself before attaching; Witchcraft cannot inject launch arguments into an existing process. See [Copilot MCP setup](../../docs/MCP.md#copilot-cli).
 
 Update the addon and daemon together. The new addon accepts older two-tab snapshots, but older addons cannot consume the new three-tab snapshots.
 
@@ -79,6 +79,8 @@ Overlay startup failure, renderer failure and bounded restart exhaustion leave t
 Attached-console frames refresh the overlay using plain text, without the game's color tags. When any tab mirrors a console you own, Witchcraft stays active until explicitly stopped, including after the spawned agent exits. An entirely spawned set still ends when all launched agents exit. Shutdown cancels pending startup and retains the bridge lock until all acquired resources are cleaned up.
 
 `witchcraft run` joins the sessions already running in `--cwd` unless `--no-current` is passed. The Claude tab mirrors the newest live interactive Claude Code session there, found in `~/.claude/sessions/<pid>.json`. The Codex tab launches `codex resume <id>` for the most recently written top-level Codex thread there, read from the first line of each rollout under `~/.codex/sessions`; subagent and `exec` threads are skipped, and folder names compare without case. The VS Code Codex extension has no console to mirror, so this is a second client on its thread: both sides append to the same thread, and the extension's panel does not show turns typed in game until it reloads the thread. An explicit `--attach` or child command overrides discovery for that tab; `--only` leaves the other tab stopped. A tab with nothing found starts fresh. The daemon window prints what it joined.
+
+`--attach tab=~TEXT` names a console by what runs in it: the newest console whose running program or command line contains TEXT, ignoring case (`witchcraft consoles` shows both). A pattern that matches nothing stops the start. When a mirrored console closes, its tab reads `exited (console N closed)` and Witchcraft looks for a successor every five seconds: the joined Claude tab takes the newest live Claude session in `--cwd`, and a `~TEXT` tab the newest console matching TEXT. The tab then mirrors that console and takes input again, and the daemon window prints the new process. A tab attached by process id or `pick` stays closed until Witchcraft restarts.
 
 Each published session also carries what the screen says the agent is doing (`state`: working while "esc to interrupt" shows, waiting while a marked numbered menu is on screen, with its `choices`, otherwise idle) and, from the agent's own session files, `info` (model, effort, context used and window) and its last `reply` as lines. Claude's come from its transcript, found through `~/.claude/sessions/<pid>.json`; Codex's from the resumed rollout or the newest thread in `--cwd`.
 
@@ -110,6 +112,14 @@ An explicit child command replaces the initial tab's agent. Native executables a
 ```
 
 If a CLI works in PowerShell but Witchcraft reports `Cannot find executable`, check whether the shell command resolves to a wrapper. Point `commands.<agent>.file` at the actual `.exe`. The daemon searches absolute `PATH` entries and also checks `%USERPROFILE%\.local\bin\claude.exe` for Claude.
+
+To mirror the same consoles on every run, add `attach` with the `--attach` forms (`PID`, `pick` or `~TEXT`). An attached tab ignores its `commands` entry; `--attach` on the command line overrides a tab, `--only` drops the other tabs' entries, and a child command drops its tab's:
+
+```json
+{
+  "attach": { "claude": "~claude", "codex": "~codex" }
+}
+```
 
 ## Transport and lifecycle
 

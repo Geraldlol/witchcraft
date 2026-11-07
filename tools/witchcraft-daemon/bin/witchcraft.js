@@ -11,6 +11,7 @@ import { TerminalPair, attachTerminal } from '../src/pty.js';
 import { SessionSet } from '../src/sessions.js';
 import { listConsoles } from '../src/console-list.js';
 import { candidateRow, pickConsole } from '../src/console-pick.js';
+import { matchConsole, parseAttachTarget } from '../src/console-match.js';
 import { Outbox, watchSavedVariables } from '../src/outbox.js';
 import { PixelDecoder, ContextDecoder, decodeHeartbeat, sampleFrame, calibrate } from '../src/pixel.js';
 import { Capture, captureOnce } from '../src/capture.js';
@@ -50,13 +51,13 @@ export function parseArgs(argv) {
     if (token === '--all') { options.all = true; continue; }
     if (token === '--apply') { options.apply = true; continue; }
     if (token === '--attach') {
-      const value = rest[++index];
-      const [tab, target] = String(value ?? '').split('=');
-      if (!AGENT_TABS.includes(tab) || !target) throw new Error(`--attach takes claude=PID|pick, codex=PID|pick, or copilot=PID|pick`);
+      // Split at the first '=' only: a ~TEXT pattern may itself contain one.
+      const value = String(rest[++index] ?? ''), at = value.indexOf('=');
+      const tab = at < 0 ? value : value.slice(0, at), target = at < 0 ? '' : value.slice(at + 1);
+      if (!AGENT_TABS.includes(tab) || !target) throw new Error(`--attach takes claude=PID|pick|~TEXT, codex=PID|pick|~TEXT, or copilot=PID|pick|~TEXT`);
       options.attach ??= {};
       if (options.attach[tab] !== undefined) throw new Error(`--attach names the ${tab} tab more than once; a tab mirrors one console`);
-      if (target !== 'pick' && !/^[1-9][0-9]*$/u.test(target)) throw new Error(`--attach ${tab}= takes a process id or pick, not ${target}`);
-      options.attach[tab] = target === 'pick' ? 'pick' : Number(target);
+      options.attach[tab] = parseAttachTarget(target, `--attach ${tab}=`);
       continue;
     }
     if (!token.startsWith('--') || !values.has(token.slice(2)) || rest[index + 1] === undefined) throw new Error(`Unknown or incomplete option: ${token}`);
@@ -84,7 +85,13 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   // Join the conversations already running here: the Claude tab mirrors the newest Claude Code
   // console in this folder, and the Codex tab resumes the newest top-level Codex thread (the VS Code
   // extension's, which has no console to mirror). An explicit --attach, --only or child command wins.
-  const requested = { ...options.attach }, current = [];
+  // config.attach is a standing choice of console per tab, and --attach overrides it tab by tab. A
+  // tab that --only silences, or whose command a child command replaces, is not attached from it.
+  const standing = Object.entries(config.attach ?? {})
+    .filter(([tab]) => (!options.only || tab === options.only) && !(child.length && tab === initialTab));
+  const requested = { ...Object.fromEntries(standing), ...options.attach }, current = [];
+  // What named each attached tab's console, so a console that closes can be found again.
+  const identity = {};
   let resumedCodexFile, joinedClaude;
   const joinCwd = path.resolve(options.cwd ?? config.repoRoot);
   if (!options.noCurrent) {
@@ -95,7 +102,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     if (spawned('claude')) {
       const session = await findClaude({ cwd });
       if (session) {
-        requested.claude = joinedClaude = session.pid;
+        requested.claude = { pid: joinedClaude = session.pid };
+        identity.claude = { kind: 'claude-session', cwd: joinCwd };
         current.push(`Claude tab mirrors the running session in this folder (process ${session.pid})`);
       }
     }
@@ -116,8 +124,20 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   const attach = {};
   const consoles = adapters.listConsoles ?? listConsoles, choose = adapters.pickConsole ?? pickConsole;
   for (const [tab, target] of Object.entries(requested)) {
-    if (target !== 'pick') { attach[tab] = target; continue; }
-    const picked = await choose({ candidates: await consoles({}), tab });
+    // A pattern is looked up again when its console closes; a pid or a pick is that process only.
+    identity[tab] ??= target.pattern === undefined ? { kind: 'pid' } : { kind: 'pattern', pattern: target.pattern };
+    if (target.pid) { attach[tab] = target.pid; continue; }
+    if (target.pattern !== undefined) {
+      // The daemon is named so its own console, whose command line carries the pattern, is passed over.
+      const found = matchConsole(target.pattern, await consoles({ self: process.pid }));
+      if (!found) {
+        throw new Error(`No console matches ~${target.pattern} for the ${tab} tab, so nothing was started; `
+          + 'witchcraft consoles lists the consoles a tab can mirror.');
+      }
+      attach[tab] = found.pid;
+      continue;
+    }
+    const picked = await choose({ candidates: await consoles({ self: process.pid }), tab });
     if (!picked) throw new Error(`No console chosen for the ${tab} tab, so nothing was started.`);
     attach[tab] = picked.pid;
   }
@@ -169,6 +189,32 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         + `"node bin/witchcraft.js mcp-setup --apply${where}" once, restart that session (claude --continue), then restart Witchcraft.\n`);
     }
     void publish();
+  }
+  // A mirrored console that closed is found again by what named it: the newest live Claude session
+  // in the folder, or the newest console matching the pattern. A console named by pid is never
+  // replaced, a running tab is never touched, and finding nothing means waiting for the next poll.
+  let following = false;
+  async function followConsoles() {
+    if (following || stopped || !pair) return;
+    following = true;
+    try {
+      const find = adapters.findClaudeSession ?? findClaudeSession, list = adapters.listConsoles ?? listConsoles;
+      for (const [tab, named] of Object.entries(identity)) {
+        const before = pair.sessions.get(tab);
+        if (named.kind === 'pid' || !String(before?.status ?? '').startsWith('exited')) continue;
+        const pid = named.kind === 'claude-session'
+          ? (await find({ cwd: named.cwd }).catch(() => undefined))?.pid
+          : matchConsole(named.pattern, await list({ self: process.pid }).catch(() => []))?.pid;
+        if (!pid || pid === before.pid || stopped) continue;
+        let session;
+        try { session = pair.reattach(tab, pid); } catch (error) { events.error('mirror', error); continue; }
+        if (named.kind === 'claude-session') joinedClaude = pid;
+        events.note({ kind: 'reattach', tab, pid });
+        process.stderr.write(`\nWitchcraft: ${AGENT_TITLES[tab]} tab now mirrors process ${pid}\n`);
+        overlay?.publishStatus(tab, session.status);
+        void publish();
+      }
+    } finally { following = false; }
   }
   let cooldownCarrierReader, cooldownReceiver, startCooldownSession;
   let stopped = false, oldScreen = '', writing = false, dirty = false;
@@ -380,9 +426,10 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     terminal = Display(pair, { initialTab });
     sessionInfo = (adapters.createSessionInfo ?? createSessionInfo)({ cwd: path.resolve(options.cwd ?? config.repoRoot),
       pid: tab => pair?.pid?.(tab), codexFile: resumedCodexFile, onChange: () => { if (!stopped) void publish(); } }).start();
-    if (joinedClaude) {
-      void checkClaudeTools();
-      toolsTimer = setInterval(() => void checkClaudeTools(), adapters.presencePollMs ?? 5000);
+    if (joinedClaude) void checkClaudeTools();
+    // One poll serves both the joined session's tools notice and finding a closed console again.
+    if (joinedClaude || Object.values(identity).some(named => named.kind !== 'pid')) {
+      toolsTimer = setInterval(() => { void checkClaudeTools(); void followConsoles(); }, adapters.presencePollMs ?? 5000);
       toolsTimer.unref?.();
     }
     const lifetime = pair.attached.size ? 'Attached mode stays active until Witchcraft is stopped.' : 'Close all launched agents to stop.';
@@ -646,12 +693,15 @@ export async function main(argv = process.argv.slice(2)) {
       `witchcraft burst-probe [--timeout 30]     (show /witch burstprobe first)\n` +
       `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--overlay|--no-overlay] [--no-pixels]\n` +
       `witchcraft run --only claude -- <executable> <args...>\n` +
-      `witchcraft run --attach claude=PID|pick [--attach codex=PID|pick] [--attach copilot=PID|pick]\n` +
+      `witchcraft run --attach claude=PID|pick|~TEXT [--attach codex=PID|pick|~TEXT] [--attach copilot=PID|pick|~TEXT]\n` +
       `witchcraft consoles [--all]                (the consoles a tab can mirror)\n` +
       `witchcraft mcp-setup [--apply]             (give a joined Claude session the WoW tools)\n\n` +
       `run starts Claude and Codex by default. --only claude|codex|copilot starts one. --with-copilot adds Copilot.\n` +
       `--attach mirrors a console you started yourself instead of launching that tab;\n` +
       `type in that console's own window. Its colour is the sixteen ANSI colours.\n` +
+      `~TEXT names the newest console whose program or command line contains TEXT. When a joined\n` +
+      `or ~TEXT console closes, its tab mirrors the next one that matches. "attach" in\n` +
+      `.local/config.json takes the same PID|pick|~TEXT per tab; --attach overrides it.\n` +
       `WoW MCP is added to recognized Claude/Codex/Copilot commands. --no-mcp skips it.\n` +
       `The desktop overlay is off; --overlay or overlay: true starts it, and --no-overlay overrides config.\n` +
       `A saved calibration starts fallback screen capture; --no-pixels disables it.\n` +

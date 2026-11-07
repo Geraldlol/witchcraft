@@ -17,7 +17,7 @@ const image = entry => String(entry.name ?? '').toLowerCase();
  * buffer above the window, because a pseudoconsole leaves the scrollback to the terminal's own
  * renderer, where the console API cannot reach it.
  */
-export function consoleCandidates(processes, { windows = null, all = false } = {}) {
+export function consoleCandidates(processes, { windows = null, all = false, self = null } = {}) {
   // Without window information nothing can be judged background, so everything stands.
   const seen = windows instanceof Set ? windows : null;
   const rows = (Array.isArray(processes) ? processes : []).filter(entry => entry && Number.isInteger(entry.pid));
@@ -85,7 +85,8 @@ export function consoleCandidates(processes, { windows = null, all = false } = {
   // same screen. Only the innermost is offered, because that is the shell the reader is looking at.
   const ancestors = pid => {
     const chain = new Set();
-    for (let entry = byPid.get(pid), depth = 0; entry && depth < 16; entry = byPid.get(entry.parentPid), depth++) {
+    // Depth 0 is the process itself, so 17 steps collect 16 ancestors: as deep as innermost() descends.
+    for (let entry = byPid.get(pid), depth = 0; entry && depth < 17; entry = byPid.get(entry.parentPid), depth++) {
       if (entry.pid !== pid) chain.add(entry.pid);
     }
     return chain;
@@ -101,6 +102,38 @@ export function consoleCandidates(processes, { windows = null, all = false } = {
       // window and no console, and the helper's console is not on screen because of it.
       if (seen?.has(pid)) candidate.visible = true;
     }
+  }
+  // The daemon's own console never answers a pattern (console-match.js): the shell it runs in
+  // reports the daemon's command line, pattern included, as what is running there, and a child of
+  // the daemon can hold a console of its own. `self` is the daemon's pid; `own` marks the daemon,
+  // its ancestors, its descendants and anything sharing its console. Without `self`, nothing is.
+  // Every console the daemon touches counts: a daemon started in a classic console inherits it,
+  // and the pseudoconsole it makes for its tabs is a second conhost of its own. A process that
+  // only shares the inherited one would mirror the daemon's own window, so it is own as well.
+  // The walk ends at the enclosing console: a process with a visible conhost of its own, or one
+  // served by a conhost parent, was given a new console rather than its parent's, so the consoles
+  // above it were never shared. A headless conhost is a pseudoconsole the process made for
+  // others and says nothing about where the process itself is running.
+  const consolesOf = pid => {
+    const hosts = new Set();
+    for (let entry = byPid.get(pid), depth = 0; entry && depth < 17; entry = byPid.get(entry.parentPid), depth++) {
+      let enclosing = false;
+      for (const child of children.get(entry.pid) ?? []) {
+        if (image(child) !== 'conhost.exe') continue;
+        hosts.add(child.pid);
+        if (!/--headless/i.test(String(child.commandLine ?? ''))) enclosing = true;
+      }
+      const parent = byPid.get(entry.parentPid);
+      if (parent && image(parent) === 'conhost.exe') { hosts.add(parent.pid); enclosing = true; }
+      if (enclosing) break;
+    }
+    return hosts;
+  };
+  const known = byPid.has(self);
+  const above = known ? ancestors(self) : new Set(), ownConsoles = known ? consolesOf(self) : new Set();
+  for (const candidate of found) {
+    candidate.own = known && (candidate.pid === self || above.has(candidate.pid) || ancestors(candidate.pid).has(self)
+      || (candidate.console !== null && ownConsoles.has(candidate.console)));
   }
   // A console window nobody can see is background work — an editor's helper or a language
   // server — and listing dozens of those buries the one console the reader means. A shell inside
@@ -135,11 +168,11 @@ async function queryProcesses() {
 }
 
 /** The candidates, or an empty list when the process table cannot be read. */
-export async function listConsoles({ query = queryProcesses, all = false } = {}) {
+export async function listConsoles({ query = queryProcesses, all = false, self = null } = {}) {
   try {
     const result = await query();
     const processes = Array.isArray(result) ? result : result?.processes;
     const windows = Array.isArray(result?.windows) ? new Set(result.windows) : null;
-    return consoleCandidates(processes, { windows, all });
+    return consoleCandidates(processes, { windows, all, self });
   } catch { return []; }
 }

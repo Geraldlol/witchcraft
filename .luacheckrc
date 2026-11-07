@@ -9,6 +9,8 @@ exclude_files = {
 }
 
 globals = {
+  -- Witchcraft: the exhausted-ring reload dialog registers itself
+  "StaticPopupDialogs",
   -- Witchcraft: generated chunk addons call this entry point
   "Witchcraft_ReceiveChunk",
 }
@@ -19,6 +21,7 @@ read_globals = {
   -- WoW API (extend as needed)
   "CreateFrame", "UIParent", "GetTime", "C_Timer", "C_AddOns",
   "IsAddOnLoadOnDemand", "LoadAddOn", "ReloadUI", "InCombatLockdown", "GetPhysicalScreenSize", "debugprofilestop",
+  "StaticPopup_Show",
   "GetBindingAction", "SetBinding", "SaveBindings", "GetCurrentBindingSet",
   "UnitName", "UnitClass", "UnitRace", "UnitLevel", "GetRealmName", "GetNormalizedRealmName", "GetLocale",
   "UnitExists", "UnitIsPlayer", "UnitCanAttack", "UnitCanCooperate", "UnitFullName", "UnitGUID",

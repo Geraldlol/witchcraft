@@ -20,7 +20,8 @@ local PAGE = {
     { key = "tabClaude", label = "Claude tab", tooltip = "Show the Claude tab. A hidden tab is skipped when cycling; at least one tab stays visible." },
     { key = "tabCodex", label = "Codex tab", tooltip = "Show the Codex tab. A hidden tab is skipped when cycling; at least one tab stays visible." },
     { key = "tabCopilot", label = "Copilot tab",
-      tooltip = "Show the Copilot tab while the daemon runs Copilot. A hidden tab is skipped when cycling; at least one tab stays visible." },
+      tooltip = "Show the Copilot tab. Off until the daemon starts Copilot, which switches it on;"
+          .. " a hidden tab is skipped when cycling and at least one tab stays visible." },
     { section = "Alerts" },
     { key = "alertText", label = "Raid warning text", tooltip = "Say which agent needs you or finished, while you look elsewhere." },
     { key = "alertSound", label = "Alert sound", tooltip = "Play the raid warning sound with an alert." },

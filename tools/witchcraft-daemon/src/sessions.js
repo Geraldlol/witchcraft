@@ -13,10 +13,15 @@ const TITLES = AGENT_TITLES;
  * addon, is unchanged.
  */
 export class SessionSet {
+  #Mirror;
+  #handlers;
+
   constructor({ commands, attach = {}, cwd, cols = 120, rows = CONSOLE_DEFAULT_ROWS, history = 200,
     onData = () => {}, onFrame = () => {}, onExit = () => {}, onError = () => {},
     TerminalPair = SpawnedPair, ConsoleMirror = Mirror, spawn } = {}) {
-    this.cols = cols; this.rows = rows;
+    this.cols = cols; this.rows = rows; this.history = history;
+    this.#Mirror = ConsoleMirror;
+    this.#handlers = { onData, onFrame, onExit, onError };
     this.attached = new Map();
     this.sessions = new Map();
 
@@ -27,22 +32,44 @@ export class SessionSet {
 
     for (const tab of TABS) {
       if (!attach[tab]) { this.sessions.set(tab, this.pair.sessions.get(tab)); continue; }
-      // No `screen`: an attached tab carries no xterm buffer, and the local display reads one.
-      const session = { id: tab, title: TITLES[tab], status: 'running', pid: attach[tab], mirrored: true };
-      const mirror = new ConsoleMirror({
-        pid: attach[tab], rows, cols, historyRows: history,
-        onError,
-        onExit: () => {
-          if (session.status !== 'running') return;
-          session.status = `exited (console ${attach[tab]} closed)`;
-          onExit(tab, { exitCode: 0 });
-        },
-        onFrame: () => { onFrame(tab); onData(tab, ''); },
-      });
-      mirror.start();
-      this.attached.set(tab, mirror);
-      this.sessions.set(tab, session);
+      this.#mirror(tab, attach[tab]);
     }
+  }
+
+  // Each mirror gets a session record of its own, so a replaced mirror's late exit cannot mark the
+  // console that took its place as closed.
+  #mirror(tab, pid) {
+    const { onData, onFrame, onExit, onError } = this.#handlers;
+    // No `screen`: an attached tab carries no xterm buffer, and the local display reads one.
+    const session = { id: tab, title: TITLES[tab], status: 'running', pid, mirrored: true };
+    const mirror = new this.#Mirror({
+      pid, rows: this.rows, cols: this.cols, historyRows: this.history,
+      onError,
+      onExit: () => {
+        if (session.status !== 'running') return;
+        session.status = `exited (console ${session.pid} closed)`;
+        onExit(tab, { exitCode: 0 });
+      },
+      onFrame: () => { onFrame(tab); onData(tab, ''); },
+    });
+    mirror.start();
+    this.attached.set(tab, mirror);
+    this.sessions.set(tab, session);
+    return session;
+  }
+
+  /**
+   * Point a mirrored tab at another console in place, typically the same agent restarted in a new
+   * terminal. The old mirror is put down even when its console already closed; a tab the daemon
+   * spawned has no console to swap and is refused.
+   */
+  reattach(tab, pid) {
+    if (!this.attached.has(tab)) {
+      throw Object.assign(new Error(`${tab} is not mirrored from a console, so it cannot be re-attached`), { code: 'TAB_NOT_ATTACHED' });
+    }
+    if (!Number.isInteger(pid) || pid <= 0) throw new TypeError('A console mirror needs the process id of a console');
+    this.attached.get(tab).stop();
+    return this.#mirror(tab, pid);
   }
 
   /**

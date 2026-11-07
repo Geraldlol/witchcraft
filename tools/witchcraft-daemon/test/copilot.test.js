@@ -18,7 +18,7 @@ import { validateHostMessage, validateChildMessage, OVERLAY_PROTOCOL_VERSION as 
 test('Copilot selection and attach validation', () => {
   assert.equal(parseArgs(['run', '--only', 'copilot']).options.only, 'copilot');
   assert.equal(parseArgs(['run', '--with-copilot']).options.withCopilot, true);
-  assert.equal(parseArgs(['run', '--tab', 'copilot', '--attach', 'copilot=pick']).options.attach.copilot, 'pick');
+  assert.deepEqual(parseArgs(['run', '--tab', 'copilot', '--attach', 'copilot=pick']).options.attach.copilot, { pick: true });
   for (const only of AGENT_TABS) for (const other of AGENT_TABS.filter(tab => tab !== only)) {
     assert.throws(() => parseArgs(['run', '--only', only, '--attach', `${other}=123`]), /cannot also be attached/u);
   }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Background operation: while WoW is not the foreground window the addon advertises its ring slot through the binding carrier (a seq-0 heartbeat frame), so the terminal keeps updating without the pixel strip. The strip stays preferred while it is seen; the file lane takes over after a second of strip silence, and every chunk names the lane in use (`/witch status` shows `cursor <lane>`). Not yet validated in game.
 - A stalled ring retry backs off from 2 s to a 30 s ceiling instead of retrying every 2 s; the footer warns at 90% of the ring; an exhausted ring no longer reloads the UI on its own but asks first (`/witch reload` or the confirmation dialog).
 - Per-tab show/hide settings in a new Tabs section of the Options page. A hidden tab is not drawn, cycled or selectable; at least one tab stays visible, and hiding the active tab moves the selection.
 

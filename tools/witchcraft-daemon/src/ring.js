@@ -97,16 +97,24 @@ function serializeHistoryChunk(payload) {
   return serializeChunk({ ...payload, sessions });
 }
 
+// A file lane may name itself only after the strip has been quiet this long.
+const STRIP_QUIET_MS = 1000;
+
 export class RingWriter {
-  constructor({ addonsDir, ringSize = 3000, epoch, write = atomicWrite, check = assertOwnedChunk }) {
+  constructor({ addonsDir, ringSize = 3000, epoch, write = atomicWrite, check = assertOwnedChunk, now = () => performance.now() }) {
     if (!Number.isInteger(ringSize) || ringSize < 3 || ringSize > 9999 || !/^[0-9a-f]{8}$/u.test(epoch) || epoch === '00000000') {
       throw new Error('Invalid ring configuration');
     }
-    Object.assign(this, { addonsDir: path.resolve(addonsDir), ringSize, epoch, write, check });
+    Object.assign(this, { addonsDir: path.resolve(addonsDir), ringSize, epoch, write, check, now });
     this.cursor = 1; this.generation = 0; this.chain = Promise.resolve(); this.stopped = false;
     this.uiNonce = '00000000'; this.retired = new Set(); this.changed = false; this.written = new Set();
+    this.cursorLane = null; this.stripSeenAt = null;
   }
-  request(heartbeat) {
+  // lane names who asked: 'strip' (the pixel heartbeat) or 'file' (a carrier); chunks echo it so the
+  // addon knows whether the strip is moving the cursor. The strip wins while it is alive; a file lane
+  // names itself when no strip has been seen or the strip has been quiet for a second. The clock is
+  // monotonic, so a wall-clock change cannot flip the lane.
+  request(heartbeat, lane) {
     if (this.stopped || !heartbeat || !/^[0-9a-f]{8}$/u.test(heartbeat.epoch)
       || !/^[0-9a-f]{8}$/u.test(heartbeat.uiNonce) || heartbeat.uiNonce === '00000000'
       || !Number.isInteger(heartbeat.nextSeq) || heartbeat.nextSeq < 1 || heartbeat.nextSeq > this.ringSize) return false;
@@ -120,9 +128,11 @@ export class RingWriter {
     if (heartbeat.nextSeq < this.cursor) return false;
     if (heartbeat.nextSeq !== this.cursor) this.changed = false;
     this.cursor = heartbeat.nextSeq;
+    if (lane === 'strip') { this.stripSeenAt = this.now(); this.cursorLane = 'strip'; }
+    else if (lane === 'file' && (this.stripSeenAt === null || this.now() - this.stripSeenAt > STRIP_QUIET_MS)) this.cursorLane = 'file';
     return true;
   }
-  reset() { this.generation++; this.cursor = 1; this.changed = false; }
+  reset() { this.generation++; this.cursor = 1; this.changed = false; this.cursorLane = null; this.stripSeenAt = null; }
   publish(snapshot) {
     // Protocol 4: game context is pulled on demand, never streamed. contextWant is the request
     // id and contextWantMask names the domains (1 player, 2 quests, 4 progress, 8 errors) it asks for.
@@ -146,7 +156,7 @@ export class RingWriter {
     const generation = this.generation, seq = this.cursor;
     this.changed ||= snapshot.changed === true;
     const payload = { ...snapshot, changed: this.changed, protocol: 1, ready: true, epoch: this.epoch,
-      uiNonce: this.uiNonce, seq, ringSize: this.ringSize };
+      uiNonce: this.uiNonce, cursorLane: this.cursorLane, seq, ringSize: this.ringSize };
     const source = serializeHistoryChunk(payload);
     const operation = this.chain.catch(() => {}).then(async () => {
       if (this.stopped || generation !== this.generation || seq !== this.cursor) return false;

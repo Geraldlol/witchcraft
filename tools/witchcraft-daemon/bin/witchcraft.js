@@ -244,7 +244,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   // The file lanes advertise the addon's ring demand on every frame; both follow it the same way.
   function followCursor({ uiNonce, nextSeq }) {
     const previousSeq = writer.cursor, previousNonce = writer.uiNonce;
-    if (!writer.request({ epoch: ZERO_EPOCH, uiNonce, nextSeq })) return false;
+    if (!writer.request({ epoch: ZERO_EPOCH, uiNonce, nextSeq }, 'file')) return false;
     if (context.setSession(epoch, writer.uiNonce)) {
       contextGeneration++; contextAck = 0; contextDecoder.clear(); decoder.clear(); resetCooldownReceiver(); forgetWants();
     }
@@ -403,7 +403,14 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       const Receiver = adapters.BindingReceiver ?? BindingReceiver;
       const Carrier = adapters.BindingCarrier ?? BindingCarrier;
       bindingReceiver = new Receiver({ epoch, nonce: bindingNonce,
-        onCursor: frame => followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot }),
+        // A heartbeat (sequence 0) carries only the slot, so a moved cursor is published at once;
+        // data frames publish on their acknowledgement as before.
+        onCursor: frame => {
+          const previous = writer.cursor, nonce = writer.uiNonce;
+          const moved = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
+          if (moved && frame.seq === 0 && (writer.cursor !== previous || writer.uiNonce !== nonce)) void publish();
+          return moved;
+        },
         onMessage: message => {
           if (message.kind === 'context') {
             const result = context.accept(message);
@@ -467,7 +474,7 @@ Cooldown carrier retained for inspection: ${error.message}
         if (stopped || !image.foreground) return;
         const heartbeat = decodeHeartbeat(sampleFrame(image, { row: 1 }));
         const previousSeq = writer.cursor, previousNonce = writer.uiNonce;
-        const currentHeartbeat = heartbeat && writer.request(heartbeat);
+        const currentHeartbeat = heartbeat && writer.request(heartbeat, 'strip');
         if (currentHeartbeat) {
           if (context.setSession(epoch, writer.uiNonce)) {
             contextGeneration++;

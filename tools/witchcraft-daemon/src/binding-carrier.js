@@ -73,6 +73,11 @@ const fixedHex = (value, label, zero = false) => {
   return value.toUpperCase();
 };
 
+// The one sequence-0 frame is a heartbeat: a single part on a session's ids whose body is H and a flags
+// byte of 0..3.
+const heartbeatShape = ({ epoch, seq, part, count, payload }) => seq === 0 && part === 1 && count === 1
+  && epoch !== ZERO && payload.length === 2 && payload[0] === 0x48 && payload[1] <= 3;
+
 export function encodeBindingAction({ epoch, nonce, uiNonce, slot, seq, part, count, payload }) {
   const bytes = Buffer.from(payload ?? []);
   if (bytes.length < 1 || bytes.length > 32) throw new TypeError('Carrier payload must be 1..32 bytes');
@@ -80,7 +85,8 @@ export function encodeBindingAction({ epoch, nonce, uiNonce, slot, seq, part, co
   const fields = ['V1', fixedHex(epoch, 'epoch', allowZero), fixedHex(nonce, 'nonce', allowZero),
     fixedHex(uiNonce, 'UI nonce'), hex(slot, 4, 'slot'), hex(seq, 6, 'sequence'), hex(part, 2, 'part'),
     hex(count, 2, 'part count'), encodeBase32(bytes)];
-  if (part < 1 || count < 1 || part > count || count > 32 || slot < 1 || slot > 9999 || seq < 1) {
+  if (part < 1 || count < 1 || part > count || count > 32 || slot < 1 || slot > 9999
+    || (seq < 1 && !heartbeatShape({ epoch, seq, part, count, payload: bytes }))) {
     throw new TypeError('Invalid carrier frame coordinates');
   }
   const core = `WitchcraftCarrier_${fields.join('_')}`;
@@ -99,7 +105,7 @@ export function parseBindingAction(action) {
   const frame = { action, epoch: epochRaw.toLowerCase(), nonce: nonceRaw.toLowerCase(), uiNonce: uiRaw.toLowerCase(),
     slot: Number.parseInt(slotRaw, 16), seq: Number.parseInt(seqRaw, 16), part: Number.parseInt(partRaw, 16),
     count: Number.parseInt(countRaw, 16), payload };
-  if (frame.slot < 1 || frame.slot > 9999 || frame.seq < 1 || frame.part < 1 || frame.count < 1
+  if (frame.slot < 1 || frame.slot > 9999 || (frame.seq < 1 && !heartbeatShape(frame)) || frame.part < 1 || frame.count < 1
     || frame.count > 32 || frame.part > frame.count || frame.uiNonce === ZERO
     || ((frame.epoch === ZERO) !== (frame.nonce === ZERO))) throw new Error('Carrier frame coordinates');
   return frame;
@@ -166,6 +172,11 @@ function parseApplicationBody(body, frame, startedAt, now) {
     return { kind: 'context', epoch: frame.epoch, uiNonce: frame.uiNonce, id,
       text: decoder.decode(body.subarray(4)), transportAgeSeconds: Math.max(0, now - startedAt) / 1000 };
   }
+  if (type === 'H') {
+    // Bit 0 combat, bit 1 reload: the strip heartbeat's flags, and no other bits.
+    if (body.length !== 2 || body[1] > 3) throw new Error('Invalid heartbeat carrier body');
+    return { kind: 'heartbeat', flags: body[1] };
+  }
   throw new Error('Unknown carrier application kind');
 }
 
@@ -175,20 +186,46 @@ export class BindingReceiver {
     this.nonce = fixedHex(nonce, 'host nonce').toLowerCase();
     Object.assign(this, { onCursor, onMessage, onAck, now });
     this.ack = 0; this.uiNonce = null; this.pending = null; this.seen = new Map(); this.quarantined = false;
+    this.cursor = null;
   }
 
   quarantine(reason) { this.quarantined = reason; throw new Error(`Binding carrier quarantined: ${reason}`); }
 
+  // Every frame names the slot its UI session wants next; remember the last one the writer took.
+  async offer(frame) {
+    if (await this.onCursor(frame) !== true) return false;
+    this.cursor = { uiNonce: frame.uiNonce, slot: frame.slot };
+    return true;
+  }
+
+  // A sequence-0 heartbeat only names the slot its session wants next. It is never acknowledged,
+  // leaves the stop-and-wait state alone and is offered again on every re-read of the file.
+  async acceptHeartbeat(frame) {
+    if (frame.epoch !== this.epoch || frame.nonce !== this.nonce || frame.uiNonce !== this.uiNonce) {
+      return { accepted: false, reason: 'session', ack: this.ack };
+    }
+    let body = null;
+    try { body = parseApplicationBody(frame.payload, frame, 0, 0); } catch { /* refused below */ }
+    if (frame.part !== 1 || frame.count !== 1 || body?.kind !== 'heartbeat') {
+      return { accepted: false, reason: 'malformed heartbeat', ack: this.ack };
+    }
+    const previous = this.cursor;
+    if (!(await this.offer(frame))) return { accepted: false, reason: 'cursor', ack: this.ack };
+    return { accepted: true, heartbeat: true,
+      cursorMoved: previous?.uiNonce !== frame.uiNonce || previous?.slot !== frame.slot };
+  }
+
   async accept(frame) {
     if (this.quarantined) return { accepted: false, reason: this.quarantined, ack: this.ack };
+    if (frame.seq === 0) return this.acceptHeartbeat(frame);
     const fingerprint = frame.action;
     if (this.seen.has(frame.seq)) {
       if (this.seen.get(frame.seq) !== fingerprint) return this.quarantine('sequence mutation');
-      if (await this.onCursor(frame) !== true) return { accepted: false, reason: 'cursor', ack: this.ack };
+      if (!(await this.offer(frame))) return { accepted: false, reason: 'cursor', ack: this.ack };
       await this.onAck(this.ack, frame, { duplicate: true });
       return { accepted: true, duplicate: true, ack: this.ack };
     }
-    if (await this.onCursor(frame) !== true) return { accepted: false, reason: 'cursor', ack: this.ack };
+    if (!(await this.offer(frame))) return { accepted: false, reason: 'cursor', ack: this.ack };
     const probe = frame.epoch === ZERO && frame.nonce === ZERO;
     if (probe) {
       if (this.ack !== 0 || frame.seq !== 1 || frame.part !== 1 || frame.count !== 1 || !frame.payload.equals(PROBE_BODY)) {
@@ -213,6 +250,7 @@ export class BindingReceiver {
       const pending = this.pending;
       try {
         message = parseApplicationBody(Buffer.concat(pending.chunks), frame, pending.startedAt, this.now());
+        if (message.kind === 'heartbeat') throw new Error('Heartbeat outside sequence 0');
       } catch (error) {
         // The same bytes can never parse, so this is consumed once as rejected rather than
         // retried on every scan; only a delivery failure below is worth retrying.

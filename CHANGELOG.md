@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--attach tab=~TEXT` mirrors the newest console running TEXT, and `attach` in `.local/config.json` makes that the default. A mirrored console that closes is followed to its successor (the joined Claude session, or the newest `~TEXT` match) instead of staying dead until a restart. The daemon's own consoles never answer a pattern.
 - Per-tab show/hide settings in a new Tabs section of the Options page. A hidden tab is not drawn, cycled or selectable; at least one tab stays visible, and hiding the active tab moves the selection.
 
 ## 0.2.0 - 2026-11-06

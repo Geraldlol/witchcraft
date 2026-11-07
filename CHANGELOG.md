@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A stalled ring retry backs off from 2 s to a 30 s ceiling instead of retrying every 2 s; the footer warns at 90% of the ring; an exhausted ring no longer reloads the UI on its own but asks first (`/witch reload` or the confirmation dialog).
 - Per-tab show/hide settings in a new Tabs section of the Options page. A hidden tab is not drawn, cycled or selectable; at least one tab stays visible, and hiding the active tab moves the selection.
 - The Copilot tab is an ordinary tab setting, off by default. The addon switches it on once per host session when the daemon starts Copilot (a chat line names Options > Tabs), and it stays as you set it afterwards. The old show-while-selected and last-tab rules are gone; one tab always stays visible.
 

@@ -15,7 +15,9 @@ local actions = { text = true, enter = true, interrupt = true, escape = true, up
 -- backs off from the ring's own toward a two-minute floor until something proves a host is there.
 local HEARTBEAT_BASE, HEARTBEAT_CEILING = 8, 120
 -- Seconds between slot loads while the host cannot hear this client (WoW in the background).
-local PAUSED_RETRY = 2
+-- Every try spends a ring slot, so each further silent slot doubles the wait up to the ceiling.
+local PAUSED_RETRY, PAUSED_CEILING = 2, 30
+local RELOAD_NOTICE = "Ring exhausted. Reload to continue: /witch reload"
 -- Capture order: progress is one cheap part and answers "how far to level", so it precedes
 -- the multi-part quest batch. Errors come last and only when a want names them. Bits are the
 -- chunk's contextWantMask.
@@ -250,6 +252,7 @@ function Core.New(global, api)
     self.scroll = { claude = 0, codex = 0, copilot = 0 }
     self.scrolledAt = { claude = 0, codex = 0, copilot = 0 }
     self.heartbeatBackoff, self.heartbeatNextAt = HEARTBEAT_BASE, 0
+    self.stallDelay, self.ringWarned, self.reloadPending = PAUSED_RETRY, false, false
     if api.Context ~= nil then self.context = api.Context
     elseif ns.Context then self.context = ns.Context.New() end
     -- Errors.lua has been recording since it loaded; the saved list joins it here.
@@ -726,7 +729,9 @@ function methods:Snapshot()
     local status = self:InboundPaused() and "Paused: combat (outbound remains active)" or ring.status
     if self.stalled then status = "Waiting for the desktop; updates pause while WoW is in the background" end
     if stale > 0 then status = status .. " / " .. stale .. " stale: /witch resend to retry" end
-    if self.notice then status = self.notice end
+    -- A pending reload is derived from state, so neither input (which clears the notice) nor a later
+    -- notice such as a resend can hide it.
+    if self.reloadPending then status = RELOAD_NOTICE elseif self.notice then status = self.notice end
     local context = { enabled = self.global.contextEnabled, status = self.global.contextEnabled and self.contextStatus
         or (self.contextOffPending and "Turning off" or "Off"),
         age = self.contextUpdatedAt and math.floor(math.max(0, self:ContextNow() - self.contextUpdatedAt)) or nil }
@@ -1146,8 +1151,12 @@ function methods:ReceiveChunk(payload)
     local result = self.ring:OnChunk(payload)
     if not result.accepted then return false end
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
+    self:WarnRing()
     if result.placeholder then
-        if self.everLinked then self.stalled, self.ring.delay = true, math.min(self.ring.delay, PAUSED_RETRY) end
+        if self.everLinked then
+            self.stalled, self.ring.delay = true, self.stallDelay
+            self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
+        end
         self.connected, self.contextProtocol = false, nil
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
@@ -1240,25 +1249,34 @@ function methods:ReceiveChunk(payload)
         self.scrolledAt[id] = scrolled
     end
     for tab in pairs(self.scroll) do self.scroll[tab] = math.min(self.scroll[tab], self:ScrollMaximum(tab)) end
-    self.connected, self.notice, self.everLinked, self.stalled = true, nil, true, false
+    self.connected, self.notice, self.everLinked, self.stalled, self.stallDelay = true, nil, true, false, PAUSED_RETRY
     self:ResetHeartbeatBackoff()
     self:AcceptContext(result)
     self:Render()
     return true
 end
 
+-- Every slot is single-use within a UI session, so the player hears once, at 90%, that a reload is coming.
+function methods:WarnRing()
+    if self.ringWarned or self.ring.nextSeq <= self.ring.ringSize * 0.9 then return end
+    self.ringWarned = true
+    self:Print(string.format("Witchcraft ring 90%% used (%d of %d slots); a reload will be needed soon",
+        self.ring.nextSeq - 1, self.ring.ringSize))
+end
+
+-- An exhausted ring never reloads on its own. It asks once; only the player's /witch reload, or the
+-- dialog's Reload button, which runs the same Reset, reloads the interface.
 function methods:MaybeReload()
-    if not self.active or self:Combat() or self.reloading then return false end
+    if not self.active or self:Combat() or self.reloading or self.reloadPending then return false end
     if self.ring.accepted == 0 or self.global.reloadAwaitHost then
         self.notice = "Ring exhausted without a fresh host. Start host, then /witch reset"
         self:Render()
         return false
     end
-    self:Print("Witchcraft ring exhausted; reloading once outside combat")
-    self.global.reloadAwaitHost, self.reloading = true, true
-    self:CancelTimer("load")
-    self:OfferHeartbeat()
-    if self.api.ReloadUI then self.api.ReloadUI() end
+    self.reloadPending, self.notice = true, RELOAD_NOTICE
+    self:Print("Witchcraft ring exhausted; reload to continue (/witch reload)")
+    self:Render()
+    if self.api.ConfirmReload then self.api.ConfirmReload(function() self:Reset() end) end
     return true
 end
 
@@ -1285,13 +1303,16 @@ function methods:LoadTick()
     else self:Trace(string.format("slot %d accepted", seq)) end
     self.ring:Consumed(seq, loaded == true)
     -- A slot the host has not written yet, after a live session, means it cannot hear this client:
-    -- WoW is in the background and the strip is unreadable. That is a pause, not an error, and the
-    -- next slot is tried soon so the link returns within a couple of seconds of coming back.
+    -- WoW is in the background and the strip is unreadable. That is a pause, not an error. The first
+    -- retry is quick so the link returns soon after coming back; each further silent slot doubles the
+    -- wait up to PAUSED_CEILING, because every try spends a ring slot.
     if refused and loaded == true and self.everLinked then
-        self.stalled, self.ring.delay = true, math.min(self.ring.delay, PAUSED_RETRY)
+        self.stalled, self.ring.delay = true, self.stallDelay
+        self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
     end
     if not ok then self.notice = "Chunk load failed; retrying safely" end
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
+    self:WarnRing()
     self:OfferHeartbeat()
     self:Render()
     if self:WantStream() then
@@ -1415,6 +1436,7 @@ end
 function methods:Reset()
     if self:Combat() then self.resetRequested = true; self:Print("Witchcraft reset waits until combat ends"); return false end
     self.resetRequested, self.global.reloadAwaitHost, self.reloading = nil, false, true
+    self.reloadPending = false
     self:CancelTimer("load")
     self:OfferHeartbeat()
     if self.api.ReloadUI then self.api.ReloadUI() end
@@ -1527,8 +1549,9 @@ function methods:HandleSlash(input)
         local ok, reason = self:Resend(); if not ok then self:Print(reason) end
     elseif command == "status" then
         local snapshot = self:Snapshot()
-        self:Print(string.format("Witchcraft %s / %s / ring %d/%d / queued %d / host %s / UI %s", BUILD,
-            snapshot.status, snapshot.seq, snapshot.ringSize, snapshot.queued, self.global.epoch or "none", self.uiNonce))
+        self:Print(string.format("Witchcraft %s / %s / ring %d/%d / queued %d / host %s / UI %s%s", BUILD,
+            snapshot.status, snapshot.seq, snapshot.ringSize, snapshot.queued, self.global.epoch or "none", self.uiNonce,
+            self.reloadPending and " / reload pending" or ""))
         local detail = snapshot.cooldown.reason or snapshot.cooldown.quarantined
         local cooldown = snapshot.cooldown.status .. (detail and (" (" .. detail .. ")") or "")
         self:Print(string.format("Witchcraft lanes: binding %s | cooldown %s", snapshot.binding.status or "?", cooldown))
@@ -1579,6 +1602,14 @@ if LibStub then
             end,
             InCombatLockdown = function() return InCombatLockdown and InCombatLockdown() or false end,
             ReloadUI = function() ReloadUI() end,
+            ConfirmReload = function(accept)
+                StaticPopupDialogs.WITCHCRAFT_RELOAD = StaticPopupDialogs.WITCHCRAFT_RELOAD or {
+                    text = "Witchcraft has used its whole update ring. Reload the interface to keep the terminal updating?",
+                    button1 = "Reload", button2 = "Not now", OnAccept = function() accept() end,
+                    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+                }
+                StaticPopup_Show("WITCHCRAFT_RELOAD")
+            end,
             Print = function(message) self:Print(message) end,
             CreateView = function(owner) return ns.View.Create(owner) end,
             GetTime = function() return GetTime() end,

@@ -15,7 +15,9 @@ local actions = { text = true, enter = true, interrupt = true, escape = true, up
 -- backs off from the ring's own toward a two-minute floor until something proves a host is there.
 local HEARTBEAT_BASE, HEARTBEAT_CEILING = 8, 120
 -- Seconds between slot loads while the host cannot hear this client (WoW in the background).
-local PAUSED_RETRY = 2
+-- Every try spends a ring slot, so each further silent slot doubles the wait up to the ceiling.
+local PAUSED_RETRY, PAUSED_CEILING = 2, 30
+local RELOAD_NOTICE = "Ring exhausted. Reload to continue: /witch reload"
 -- Capture order: progress is one cheap part and answers "how far to level", so it precedes
 -- the multi-part quest batch. Errors come last and only when a want names them. Bits are the
 -- chunk's contextWantMask.
@@ -59,7 +61,7 @@ local SETTINGS = {
     alertText = { default = true }, alertSound = { default = true }, alertFinished = { default = true },
     combatUpdates = { default = false }, showChoices = { default = true }, showStatus = { default = true },
     minimap = { default = true }, historySize = { default = 50, values = { [20] = true, [50] = true, [100] = true } },
-    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = true },
+    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = false },
 }
 local function validSetting(key, value)
     local spec = SETTINGS[key]
@@ -76,6 +78,14 @@ local function presentTabs(controller)
     local tabs = {}
     for _, id in ipairs(TAB_ORDER) do if controller:TabPresent(id) then tabs[#tabs + 1] = id end end
     return tabs
+end
+-- A tab's saved value, else its default. Unknown ids resolve false.
+local function tabShown(settings, id)
+    local key = TAB_SETTING[id]
+    if not key then return false end
+    local value = settings and settings[key]
+    if value == nil then value = SETTINGS[key].default end
+    return value == true
 end
 
 local function validMessage(message)
@@ -121,7 +131,7 @@ function Persistence.Validate(raw)
             if SETTINGS[key] and not validSetting(key, value) then return false, "Invalid saved setting " .. tostring(key) end
         end
         -- One tab always stays visible.
-        if global.settings.tabClaude == false and global.settings.tabCodex == false and global.settings.tabCopilot == false then
+        if not tabShown(global.settings, "claude") and not tabShown(global.settings, "codex") and not tabShown(global.settings, "copilot") then
             return false, "Invalid saved tab settings"
         end
     end
@@ -227,7 +237,7 @@ function Core.New(global, api)
     -- never load them into the view or write new output to SavedVariables.
     self.sessions = emptySessions()
     -- A saved selection on a tab hidden since it was saved moves to the first tab still shown.
-    if global.settings[TAB_SETTING[global.activeTab]] == false then
+    if not tabShown(global.settings, global.activeTab) then
         global.activeTab = self:FirstPresentTab()
     end
     self.unread, self.screenText = { claude = false, codex = false, copilot = false }, {}
@@ -242,6 +252,7 @@ function Core.New(global, api)
     self.scroll = { claude = 0, codex = 0, copilot = 0 }
     self.scrolledAt = { claude = 0, codex = 0, copilot = 0 }
     self.heartbeatBackoff, self.heartbeatNextAt = HEARTBEAT_BASE, 0
+    self.stallDelay, self.ringWarned, self.reloadPending = PAUSED_RETRY, false, false
     if api.Context ~= nil then self.context = api.Context
     elseif ns.Context then self.context = ns.Context.New() end
     -- Errors.lua has been recording since it loaded; the saved list joins it here.
@@ -718,7 +729,9 @@ function methods:Snapshot()
     local status = self:InboundPaused() and "Paused: combat (outbound remains active)" or ring.status
     if self.stalled then status = "Waiting for the desktop; updates pause while WoW is in the background" end
     if stale > 0 then status = status .. " / " .. stale .. " stale: /witch resend to retry" end
-    if self.notice then status = self.notice end
+    -- A pending reload is derived from state, so neither input (which clears the notice) nor a later
+    -- notice such as a resend can hide it.
+    if self.reloadPending then status = RELOAD_NOTICE elseif self.notice then status = self.notice end
     local context = { enabled = self.global.contextEnabled, status = self.global.contextEnabled and self.contextStatus
         or (self.contextOffPending and "Turning off" or "Off"),
         age = self.contextUpdatedAt and math.floor(math.max(0, self:ContextNow() - self.contextUpdatedAt)) or nil }
@@ -872,7 +885,7 @@ function methods:SetSetting(key, value)
     if tabSetting and value == false then
         local others = 0
         for _, id in ipairs(TAB_ORDER) do
-            if TAB_SETTING[id] ~= key and self.global.settings[TAB_SETTING[id]] ~= false then others = others + 1 end
+            if TAB_SETTING[id] ~= key and tabShown(self.global.settings, id) then others = others + 1 end
         end
         if others == 0 then return false, "At least one tab stays visible" end
     end
@@ -901,20 +914,9 @@ function methods:FocusInput()
     if self.view and self.view.FocusInput then self.view:FocusInput() end
     return true
 end
--- A tab hidden on the Options page is never present. Copilot is opt-in: its tab is present while
--- selected, once the host reports it started, or when it is the only tab left.
-function methods:TabPresent(id)
-    if not TAB_SETTING[id] or self.global.settings[TAB_SETTING[id]] == false then return false end
-    if id == "claude" or id == "codex" then return true end
-    -- Copilot is the only tab left, so it shows before the host starts it.
-    if self.global.settings.tabClaude == false and self.global.settings.tabCodex == false then return true end
-    if self.global.activeTab == "copilot" then return true end
-    for _, session in ipairs(self.sessions or {}) do
-        local status = session.id == "copilot" and session.status
-        if status and status ~= "not started" and status ~= "Waiting for host" then return true end
-    end
-    return false
-end
+-- A tab is present exactly when its setting resolves true. Copilot defaults off and is switched on
+-- by the first started Copilot session of a host epoch (ReceiveChunk).
+function methods:TabPresent(id) return tabShown(self.global.settings, id) end
 -- The selection that has to move goes to the first tab still shown; "claude" when none is.
 function methods:FirstPresentTab()
     for _, id in ipairs(TAB_ORDER) do if self:TabPresent(id) then return id end end
@@ -949,7 +951,7 @@ end
 
 function methods:SelectTab(tab)
     if tab ~= "claude" and tab ~= "codex" and tab ~= "copilot" then return false end
-    if self.global.settings[TAB_SETTING[tab]] == false then return false, "That tab is hidden" end
+    if not tabShown(self.global.settings, tab) then return false, "That tab is hidden" end
     self.global.activeTab = tab
     self:Render()
     return true
@@ -1149,8 +1151,12 @@ function methods:ReceiveChunk(payload)
     local result = self.ring:OnChunk(payload)
     if not result.accepted then return false end
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
+    self:WarnRing()
     if result.placeholder then
-        if self.everLinked then self.stalled, self.ring.delay = true, math.min(self.ring.delay, PAUSED_RETRY) end
+        if self.everLinked then
+            self.stalled, self.ring.delay = true, self.stallDelay
+            self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
+        end
         self.connected, self.contextProtocol = false, nil
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
@@ -1178,6 +1184,17 @@ function methods:ReceiveChunk(payload)
     end
     global.outbox = retained
     if dropped > 0 then self:Print("Witchcraft dropped " .. dropped .. " queued message(s) for a tab this host does not have") end
+    -- The daemon starts Copilot only on request, so its first started session of a host epoch switches the tab on.
+    for _, session in ipairs(result.sessions) do
+        if session.id == "copilot" and session.status ~= "not started" and session.status ~= "Waiting for host"
+            and global.copilotRevealedEpoch ~= self.ring.epoch then
+            global.copilotRevealedEpoch = self.ring.epoch
+            if not tabShown(global.settings, "copilot") then
+                global.settings.tabCopilot = true
+                self:Print("Witchcraft shows the Copilot tab because the daemon started Copilot. Hide it under Options > Tabs.")
+            end
+        end
+    end
     -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
     if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then
         global.activeTab = self:FirstPresentTab()
@@ -1232,25 +1249,34 @@ function methods:ReceiveChunk(payload)
         self.scrolledAt[id] = scrolled
     end
     for tab in pairs(self.scroll) do self.scroll[tab] = math.min(self.scroll[tab], self:ScrollMaximum(tab)) end
-    self.connected, self.notice, self.everLinked, self.stalled = true, nil, true, false
+    self.connected, self.notice, self.everLinked, self.stalled, self.stallDelay = true, nil, true, false, PAUSED_RETRY
     self:ResetHeartbeatBackoff()
     self:AcceptContext(result)
     self:Render()
     return true
 end
 
+-- Every slot is single-use within a UI session, so the player hears once, at 90%, that a reload is coming.
+function methods:WarnRing()
+    if self.ringWarned or self.ring.nextSeq <= self.ring.ringSize * 0.9 then return end
+    self.ringWarned = true
+    self:Print(string.format("Witchcraft ring 90%% used (%d of %d slots); a reload will be needed soon",
+        self.ring.nextSeq - 1, self.ring.ringSize))
+end
+
+-- An exhausted ring never reloads on its own. It asks once; only the player's /witch reload, or the
+-- dialog's Reload button, which runs the same Reset, reloads the interface.
 function methods:MaybeReload()
-    if not self.active or self:Combat() or self.reloading then return false end
+    if not self.active or self:Combat() or self.reloading or self.reloadPending then return false end
     if self.ring.accepted == 0 or self.global.reloadAwaitHost then
         self.notice = "Ring exhausted without a fresh host. Start host, then /witch reset"
         self:Render()
         return false
     end
-    self:Print("Witchcraft ring exhausted; reloading once outside combat")
-    self.global.reloadAwaitHost, self.reloading = true, true
-    self:CancelTimer("load")
-    self:OfferHeartbeat()
-    if self.api.ReloadUI then self.api.ReloadUI() end
+    self.reloadPending, self.notice = true, RELOAD_NOTICE
+    self:Print("Witchcraft ring exhausted; reload to continue (/witch reload)")
+    self:Render()
+    if self.api.ConfirmReload then self.api.ConfirmReload(function() self:Reset() end) end
     return true
 end
 
@@ -1277,13 +1303,16 @@ function methods:LoadTick()
     else self:Trace(string.format("slot %d accepted", seq)) end
     self.ring:Consumed(seq, loaded == true)
     -- A slot the host has not written yet, after a live session, means it cannot hear this client:
-    -- WoW is in the background and the strip is unreadable. That is a pause, not an error, and the
-    -- next slot is tried soon so the link returns within a couple of seconds of coming back.
+    -- WoW is in the background and the strip is unreadable. That is a pause, not an error. The first
+    -- retry is quick so the link returns soon after coming back; each further silent slot doubles the
+    -- wait up to PAUSED_CEILING, because every try spends a ring slot.
     if refused and loaded == true and self.everLinked then
-        self.stalled, self.ring.delay = true, math.min(self.ring.delay, PAUSED_RETRY)
+        self.stalled, self.ring.delay = true, self.stallDelay
+        self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
     end
     if not ok then self.notice = "Chunk load failed; retrying safely" end
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
+    self:WarnRing()
     self:OfferHeartbeat()
     self:Render()
     if self:WantStream() then
@@ -1407,6 +1436,7 @@ end
 function methods:Reset()
     if self:Combat() then self.resetRequested = true; self:Print("Witchcraft reset waits until combat ends"); return false end
     self.resetRequested, self.global.reloadAwaitHost, self.reloading = nil, false, true
+    self.reloadPending = false
     self:CancelTimer("load")
     self:OfferHeartbeat()
     if self.api.ReloadUI then self.api.ReloadUI() end
@@ -1519,8 +1549,9 @@ function methods:HandleSlash(input)
         local ok, reason = self:Resend(); if not ok then self:Print(reason) end
     elseif command == "status" then
         local snapshot = self:Snapshot()
-        self:Print(string.format("Witchcraft %s / %s / ring %d/%d / queued %d / host %s / UI %s", BUILD,
-            snapshot.status, snapshot.seq, snapshot.ringSize, snapshot.queued, self.global.epoch or "none", self.uiNonce))
+        self:Print(string.format("Witchcraft %s / %s / ring %d/%d / queued %d / host %s / UI %s%s", BUILD,
+            snapshot.status, snapshot.seq, snapshot.ringSize, snapshot.queued, self.global.epoch or "none", self.uiNonce,
+            self.reloadPending and " / reload pending" or ""))
         local detail = snapshot.cooldown.reason or snapshot.cooldown.quarantined
         local cooldown = snapshot.cooldown.status .. (detail and (" (" .. detail .. ")") or "")
         self:Print(string.format("Witchcraft lanes: binding %s | cooldown %s", snapshot.binding.status or "?", cooldown))
@@ -1571,6 +1602,14 @@ if LibStub then
             end,
             InCombatLockdown = function() return InCombatLockdown and InCombatLockdown() or false end,
             ReloadUI = function() ReloadUI() end,
+            ConfirmReload = function(accept)
+                StaticPopupDialogs.WITCHCRAFT_RELOAD = StaticPopupDialogs.WITCHCRAFT_RELOAD or {
+                    text = "Witchcraft has used its whole update ring. Reload the interface to keep the terminal updating?",
+                    button1 = "Reload", button2 = "Not now", OnAccept = function() accept() end,
+                    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+                }
+                StaticPopup_Show("WITCHCRAFT_RELOAD")
+            end,
             Print = function(message) self:Print(message) end,
             CreateView = function(owner) return ns.View.Create(owner) end,
             GetTime = function() return GetTime() end,

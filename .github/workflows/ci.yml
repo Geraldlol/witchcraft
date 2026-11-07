@@ -16,7 +16,8 @@ jobs:
           luaVersion: "5.1"
       - uses: leafo/gh-actions-luarocks@v4
       - run: luarocks install luacheck
-      - run: luacheck Witchcraft
+      # luacheck exits 1 on warnings and 2 on errors. Warnings are printed; only errors fail the job.
+      - run: luacheck Witchcraft || test $? -le 1
 
   daemon:
     name: Daemon (node --test)

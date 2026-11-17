@@ -2,8 +2,12 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { win32 } from 'node:path';
 
-const HELPER = fileURLToPath(new URL('../capture/capture-strip.ps1', import.meta.url));
+const WINDOWS = process.platform === 'win32';
+// Linux reads the game's own X window (X11 or XWayland) through a Python helper that speaks the
+// same protocol. Its coordinates are game pixels inside that window, scaled by region.scale.
+const HELPER = fileURLToPath(new URL(WINDOWS ? '../capture/capture-strip.ps1' : '../capture/capture-strip.py', import.meta.url));
 const POWERSHELL = win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const PROGRAM = WINDOWS ? POWERSHELL : 'python3';
 const WIDTH = 132;
 const HEIGHT = 12;
 const PROFILES = Object.freeze({ strip: { width: WIDTH, height: HEIGHT }, burst: { width: WIDTH, height: 144 } });
@@ -22,12 +26,21 @@ export function validateRegion(region, profile = 'strip') {
     || (region.cellSize !== undefined && region.cellSize !== 6)) {
     throw new RangeError(`The ${profile} capture must be ${geometry.width} by ${geometry.height} pixels with 6-pixel cells`);
   }
-  return { x, y, width: geometry.width, height: geometry.height };
+  const scale = validateScale(region.scale);
+  return { x, y, width: geometry.width, height: geometry.height, ...(scale === undefined ? {} : { scale }) };
 }
 
-function command(region, calibration, once) {
-  const args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER,
+/** Window pixels per game pixel, for a client that renders below its window size. Linux only. */
+export function validateScale(scale) {
+  if (scale === undefined) return undefined;
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale < 1 || scale > 4) throw new RangeError('Capture scale must be 1..4');
+  return scale;
+}
+
+function command(region, calibration, once, scale) {
+  const args = [...(WINDOWS ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'] : []), HELPER,
     '-Mode', once ? 'Once' : 'Stream'];
+  if (!WINDOWS && scale !== undefined) args.push('-Scale', String(scale));
   if (calibration) args.push('-Calibration');
   else args.push('-X', String(region.x), '-Y', String(region.y), '-Width', String(region.width), '-Height', String(region.height));
   return args;
@@ -62,7 +75,9 @@ function parseFrame(line, { region, calibration }) {
   }
   const data = Buffer.from(rgba, 'base64');
   if (data.length !== bytes) throw new Error('Capture helper returned the wrong RGBA byte count');
-  return { width, height, data, x, y, captureMs, foreground };
+  // The Linux helper reports the window scale it used or measured; calibration stores it.
+  const scale = typeof frame.scale === 'number' && Number.isFinite(frame.scale) && frame.scale >= 1 && frame.scale <= 4 ? frame.scale : undefined;
+  return { width, height, data, x, y, captureMs, foreground, ...(scale === undefined ? {} : { scale }) };
 }
 
 // Accumulate buffers once per complete record. Calibration can be large; this
@@ -105,7 +120,7 @@ function detach(child, handlers) {
   if (!child.killed) child.kill?.();
 }
 
-function runHelper({ region, calibration, once, spawn, receive, idle = () => {}, fail }) {
+function runHelper({ region, calibration, once, scale, spawn, receive, idle = () => {}, fail }) {
   let child, parser, stopped = false, stderr = '', startup;
   const stop = () => {
     if (stopped) return;
@@ -131,7 +146,7 @@ function runHelper({ region, calibration, once, spawn, receive, idle = () => {},
     else if (frame) receive(frame, stop);
   });
   try {
-    child = spawn(POWERSHELL, command(region, calibration, once), { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(PROGRAM, command(region, calibration, once, scale ?? region?.scale), { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     if (!child?.stdout || !child.stderr || typeof child.on !== 'function') throw new Error('Capture helper did not expose piped output');
     child.stdout.on('data', handlers.data); child.stderr.on('data', handlers.stderr);
     child.on('error', handlers.error); child.on('exit', handlers.exit);
@@ -181,12 +196,14 @@ export class Capture {
 }
 
 /** Calibration captures the virtual desktop once (at most sixteen million pixels). */
-export function captureOnce({ region, calibration = false, spawn = nodeSpawn } = {}) {
+export function captureOnce({ region, calibration = false, scale, spawn = nodeSpawn } = {}) {
   return new Promise((resolve, reject) => {
     if (typeof calibration !== 'boolean' || typeof spawn !== 'function') { reject(new TypeError('Invalid capture options')); return; }
     let validated;
     try { validated = calibration ? null : validateRegion(region); } catch (error) { reject(error); return; }
-    runHelper({ region: validated, calibration, once: true, spawn,
+    let validScale;
+    try { validScale = validateScale(scale); } catch (error) { reject(error); return; }
+    runHelper({ region: validated, calibration, once: true, scale: validScale, spawn,
       receive(frame, stop) { stop(); resolve(frame); }, fail: reject });
   });
 }

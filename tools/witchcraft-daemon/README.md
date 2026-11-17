@@ -135,6 +135,16 @@ Input is routed only to the named PTY. Retransmissions are deduplicated within a
 
 The current node-pty 1.1.0 Windows adapter can retain a worker after the child has exited. Witchcraft verifies owned child PIDs have exited, releases its resources and lock, drains stdout/stderr, then ends the CLI host process. Cleanup failures produce a nonzero exit.
 
+## Linux (experimental)
+
+The strip reader also runs on Linux when the client is an X11 or XWayland window (Proton/Wine). `capture/capture-strip.py` reads the game window with `XGetImage` and speaks the same protocol as the PowerShell helper; it needs `python3` and `libX11`, nothing else. Run `calibrate` and `run` as on Windows.
+
+- Coordinates are relative to the game window, not the desktop. `calibrate` measures the window's upscale ratio from the strip and stores it as `region.scale`, so a client rendering below its window size (for example 2560x1440 in a 3840x2160 window) still decodes. Recalibrate after changing resolution, window size or UI scale.
+- Keep overlays such as MangoHud off the top-left corner.
+- A native Wayland game window cannot be read this way.
+- Tested on one machine: WoW Forever under GE-Proton on GNOME/XWayland, Claude tab only. On that client `bindings-cache.wtf` was written only at `/reload` or logout, so the binding carrier did not qualify and the strip carried all traffic; do not pass `--no-pixels` there.
+- Joining a running console (`--attach`, the default Claude join) still needs PowerShell. Use `--no-current`.
+
 ## Trust boundary
 
 Every addon enabled in the same client can type into every running agent session and read their transcripts while the daemon runs; WoW gives addons no isolation from one another. Treat enabling an addon as granting it a shell. Input decisions and carrier errors are logged without their text to `.local/events.log`.

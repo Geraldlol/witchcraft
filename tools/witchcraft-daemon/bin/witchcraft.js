@@ -632,7 +632,7 @@ export function runBurstProbe(config, options = {}, adapters = {}) {
       }, seconds * 1000);
       timer.unref?.();
     };
-    capture = new CaptureStream({ region: { x: config.region.x, y: config.region.y }, profile: 'burst',
+    capture = new CaptureStream({ region: { x: config.region.x, y: config.region.y, scale: config.region.scale }, profile: 'burst',
       onError: error => finish(error),
       onIdle: () => { stats.foregroundIdleRecords++; awaitingRecovery = true; },
       onFrame: image => {
@@ -743,10 +743,12 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(JSON.stringify(result, null, 2));
     console.log('Restart WoW after creating chunk addons. Existing unrelated or unmarked folders are preserved.');
   } else if (command === 'calibrate') {
+    // Windows captures the desktop at its own pixels. Linux captures the game window, which a client
+    // rendering below its window size has upscaled; its helper measures that ratio from the strip.
     const image = await captureOnce({ calibration: true });
     const found = calibrate(image);
     if (!found) throw new Error('No exact Witchcraft calibration strip found. Show /witch calibrate and keep WoW visible.');
-    const region = { ...found, x: found.x + image.x, y: found.y + image.y };
+    const region = { ...found, x: found.x + image.x, y: found.y + image.y, ...(image.scale === undefined ? {} : { scale: image.scale }) };
     await saveConfig(config, { region, account: config.account });
     console.log(JSON.stringify({ region, captureMs: image.captureMs }, null, 2));
     console.log('Calibration saved. Run /witch calibrate off to return to the live strip.');

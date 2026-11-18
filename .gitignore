@@ -2,3 +2,4 @@ node_modules/
 .local/
 wow.config.json
 *.zip
+__pycache__/

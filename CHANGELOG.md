@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-18
+
+- Experimental Linux support for the strip reader, contributed by @josephrclick: on Linux the daemon reads the game's X11 or XWayland window (Wine or Proton) through a small Python helper (`python3`, `libX11`, `libXRes`). `calibrate` measures the window's upscale ratio and stores it as `region.scale`, so a client rendering below its window size still decodes. The window must belong to a `wow*` process (Wine names it after the exe); `WITCHCRAFT_WINDOW_ID` selects it explicitly. Joining a running console still needs Windows (`--no-current`). **Linux testers wanted:** this has run on one machine, and the fixes made after review are covered by unit tests only. Windows behaviour is unchanged.
 - Background operation: while WoW is not the foreground window the addon advertises its ring slot through the binding carrier (a seq-0 heartbeat frame), so the terminal keeps updating without the pixel strip. The strip stays preferred while it is seen; the file lane takes over after a second of strip silence, and every chunk names the lane in use (`/witch status` shows `cursor <lane>`). Not yet validated in game.
 - `--attach tab=~TEXT` mirrors the newest console running TEXT, and `attach` in `.local/config.json` makes that the default. A mirrored console that closes is followed to its successor (the joined Claude session, or the newest `~TEXT` match) instead of staying dead until a restart. The daemon's own consoles never answer a pattern.
 - A stalled ring retry backs off from 2 s to a 30 s ceiling instead of retrying every 2 s; the footer warns at 90% of the ring; an exhausted ring no longer reloads the UI on its own but asks first (`/witch reload` or the confirmation dialog).

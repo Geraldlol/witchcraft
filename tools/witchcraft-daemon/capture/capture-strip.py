@@ -4,9 +4,15 @@
 Speaks the same JSON-lines protocol as capture-strip.ps1. Coordinates are relative to the
 game window, in game pixels: -Scale is window pixels per game pixel, so a client rendering
 2560x1440 into a 3840x2160 window uses 1.5 and each sampled pixel is the centre of its
-upscaled block. Frames are refused unless the game window holds X input focus.
+upscaled block. Stream frames are refused unless the game window holds X input focus. The single
+calibration capture is taken regardless, as on Windows: calibrate runs from a terminal that holds
+the focus, and its image only locates the strip.
 
-The window is found by title ("World of Warcraft"); WITCHCRAFT_WINDOW_ID overrides it.
+Requires libX11 and libXRes (the X-Resource extension client library). The window is found by
+title ("World of Warcraft") and accepted only when the X server reports that it belongs to a
+process whose name starts with "wow" (read from /proc/<pid>/comm); a window whose
+process cannot be verified is never chosen. WITCHCRAFT_WINDOW_ID selects the window explicitly
+and is used without the process check.
 """
 import argparse
 import base64
@@ -21,6 +27,11 @@ from array import array
 MAX_PIXELS = 16_000_000
 TITLE = b"World of Warcraft"
 ZPIXMAP, ALL_PLANES = 2, ctypes.c_ulong(-1).value
+XRES_CLIENT_ID_PID_MASK = 2
+
+
+class GrabFailed(RuntimeError):
+    """The window could not be read this time (unmapped, minimized or partly off screen)."""
 
 
 class XImage(ctypes.Structure):
@@ -43,9 +54,23 @@ class XWindowAttributes(ctypes.Structure):
                 ("border_width", ctypes.c_int), ("depth", ctypes.c_int), ("pad", ctypes.c_byte * 256)]
 
 
+class XResClientIdSpec(ctypes.Structure):
+    _fields_ = [("client", ctypes.c_ulong), ("mask", ctypes.c_uint)]
+
+
+class XResClientIdValue(ctypes.Structure):
+    _fields_ = [("spec", XResClientIdSpec), ("length", ctypes.c_long), ("value", ctypes.c_void_p)]
+
+
 def write(record):
     sys.stdout.write(json.dumps(record, separators=(",", ":")) + "\n")
     sys.stdout.flush()
+
+
+def game_process(comm):
+    """Whether a /proc/<pid>/comm name is the game: Wine names a process after its exe (WowB.exe)."""
+    name = comm.strip().lower()
+    return name.startswith("wow")
 
 
 class Screen:
@@ -69,6 +94,7 @@ class Screen:
         x.XGetInputFocus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int)]
         x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWindowAttributes)]
         x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.xres = self._load_xres()
         self.failed = False
         handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(self._error)
         self._handler = handler  # keep the callback alive
@@ -78,6 +104,24 @@ class Screen:
             raise RuntimeError("No X display. The game must run under X11 or XWayland and DISPLAY must be set.")
         self.root = x.XDefaultRootWindow(self.display)
         self.window = self._find()
+
+    @staticmethod
+    def _load_xres():
+        """libXRes, or None; a missing library only makes the process check fail."""
+        name = ctypes.util.find_library("XRes")
+        if not name:
+            return None
+        try:
+            xres = ctypes.CDLL(name)
+            xres.XResQueryClientIds.restype = ctypes.c_int
+            xres.XResQueryClientIds.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.POINTER(XResClientIdSpec),
+                                                ctypes.POINTER(ctypes.c_long),
+                                                ctypes.POINTER(ctypes.POINTER(XResClientIdValue))]
+            xres.XResClientIdsDestroy.restype = None
+            xres.XResClientIdsDestroy.argtypes = [ctypes.c_long, ctypes.POINTER(XResClientIdValue)]
+        except (OSError, AttributeError):
+            return None
+        return xres
 
     def _error(self, _display, _event):
         self.failed = True
@@ -102,11 +146,43 @@ class Screen:
             self.x.XFree(name)
         return value
 
+    def _pid(self, window):
+        """The PID the X server records for the client that owns window, or None."""
+        if not self.xres:
+            return None
+        spec = XResClientIdSpec(window, XRES_CLIENT_ID_PID_MASK)
+        count = ctypes.c_long(0)
+        ids = ctypes.POINTER(XResClientIdValue)()
+        self.failed = False
+        try:
+            status = self.xres.XResQueryClientIds(self.display, 1, ctypes.byref(spec), ctypes.byref(count),
+                                                  ctypes.byref(ids))
+            if status != 0 or self.failed:
+                return None
+            for i in range(count.value):  # zero ids also means the extension is missing
+                value = ids[i]
+                if value.spec.mask & XRES_CLIENT_ID_PID_MASK and value.length >= 4 and value.value:
+                    return ctypes.c_uint32.from_address(value.value).value
+            return None
+        finally:
+            if ids:  # libXRes frees and nulls the list itself on a failed reply, leaving the count set
+                self.xres.XResClientIdsDestroy(count.value, ids)
+
+    def _owned_by_game(self, window):
+        try:
+            pid = self._pid(window)
+            if not pid:
+                return False
+            with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as comm:
+                return game_process(comm.read())
+        except Exception:
+            return False
+
     def _find(self):
         override = os.environ.get("WITCHCRAFT_WINDOW_ID")
         if override:
-            return int(override, 0)
-        best, queue, seen = None, [self.root], 0
+            return int(override, 0)  # an explicit operator choice, used without the process check
+        matches, queue, seen = [], [self.root], 0
         while queue and seen < 4096:
             window = queue.pop(0)
             seen += 1
@@ -114,11 +190,15 @@ class Screen:
             queue.extend(kids)
             if self._name(window) == TITLE:
                 width, height = self.size(window)
-                if width * height > (best[1] if best else 0):
-                    best = (window, width * height)
-        if not best:
+                matches.append((width * height, window))
+        if not matches:
             raise RuntimeError("No World of Warcraft window found. Start the game, or set WITCHCRAFT_WINDOW_ID.")
-        return best[0]
+        for _, window in sorted(matches, key=lambda match: match[0], reverse=True):
+            if self._owned_by_game(window):
+                return window
+        raise RuntimeError("A World of Warcraft window was found, but its process could not be verified as the "
+                           "game (this needs libXRes and a readable /proc). Set WITCHCRAFT_WINDOW_ID to select "
+                           "the window explicitly.")
 
     def size(self, window=None):
         attributes = XWindowAttributes()
@@ -145,7 +225,7 @@ class Screen:
         image = self.x.XGetImage(self.display, self.window, x, y, width, height, ALL_PLANES, ZPIXMAP)
         self.x.XSync(self.display, 0)
         if not image or self.failed:
-            raise RuntimeError("The game window could not be read. Keep it visible and not minimized.")
+            raise GrabFailed("The game window could not be read. Keep it visible and not minimized.")
         try:
             shot = image.contents
             if shot.bits_per_pixel != 32 or shot.red_mask != 0xFF0000 or shot.blue_mask != 0xFF:
@@ -184,6 +264,17 @@ def real_pixel(v, scale):
     return int(start + 1.5 + (k + 0.5) * (width - 3) / CELL)
 
 
+def calibration_size(window_width, window_height, scale):
+    """The largest game-pixel capture whose last row and column still map inside the window."""
+    size = []
+    for window in (window_width, window_height):
+        count = int(window / scale)
+        while count > 1 and real_pixel(count - 1, scale) >= window:  # real_pixel never decreases in v
+            count -= 1
+        size.append(count)
+    return size[0], size[1]
+
+
 def calibration_cells():
     colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0)]
     colors += [((i % 4) * 85, (i // 4) * 85, ((i + 1) % 4) * 85) for i in range(16)]
@@ -205,19 +296,25 @@ def level(word):
 def measure_scale(screen, window_width):
     """Window pixels per game pixel, measured from the /witch calibrate strip at the window origin.
 
-    The ratio is rarely a round number (a 2560x1440 client in a 3840x2160 window measured 1.515), and
-    1% of error walks a whole pixel across the 22 cells, so every ratio that reads all four corners of
-    every cell correctly is collected and the middle of the longest run of them is used.
+    An unscaled window returns exactly 1.0. Otherwise the ratio is rarely a round number (a 2560x1440
+    client in a 3840x2160 window measured 1.515), and 1% of error walks a whole pixel across the 22
+    cells, so every ratio that reads all four corners of every cell correctly is collected and the
+    middle of the longest run of them is used.
     """
     width = min(window_width, CELLS * CELL * 4 + 8)
     row = screen.grab(0, 4, width, 1)
     expected = [level((r << 16) | (g << 8) | b) for r, g, b in calibration_cells()]
+
+    def passes(scale):
+        return real_pixel(CELLS * CELL - 1, scale) < width and all(
+            level(row[real_pixel(i * CELL + k, scale)]) == expected[i] for i in range(CELLS) for k in (0, CELL - 1))
+
+    if passes(1.0):
+        return 1.0
     runs, run = [], []
     for step in range(1000, 4001):
         scale = step / 1000
-        ok = real_pixel(CELLS * CELL - 1, scale) < width and all(
-            level(row[real_pixel(i * CELL + k, scale)]) == expected[i] for i in range(CELLS) for k in (0, CELL - 1))
-        if ok:
+        if passes(scale):
             run.append(scale)
         elif run:
             runs.append(run)
@@ -251,6 +348,26 @@ def sample(screen, x, y, width, height, scale):
     return base64.b64encode(bytes(rgba)).decode("ascii")
 
 
+def frame_record(screen, mode, x, y, width, height, scale):
+    """One cycle's record: a frame, or idle in Stream mode when the game is not focused or not readable."""
+    before = screen.focused()
+    if mode == "Stream" and not before:
+        return {"protocol": 1, "type": "idle", "foreground": False}
+    started = time.monotonic()
+    try:
+        encoded = sample(screen, x, y, width, height, scale)
+    except GrabFailed:
+        if mode == "Stream":
+            return {"protocol": 1, "type": "idle", "foreground": False}
+        raise
+    elapsed = (time.monotonic() - started) * 1000
+    foreground = before and screen.focused()
+    if mode == "Stream" and not foreground:
+        return {"protocol": 1, "type": "idle", "foreground": False}
+    return {"protocol": 1, "type": "frame", "x": x, "y": y, "width": width, "height": height,
+            "captureMs": elapsed, "foreground": bool(foreground), "scale": scale, "rgba": encoded}
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-Mode", choices=["Stream", "Once"], default="Stream")
@@ -278,24 +395,13 @@ def main():
             window_width, window_height = screen.size()
             x, y, width, height = args.X, args.Y, args.Width, args.Height
             if args.Calibration:
-                x, y, width, height = 0, 0, int(window_width / args.Scale), int(window_height / args.Scale)
+                x, y = 0, 0
+                width, height = calibration_size(window_width, window_height, args.Scale)
             if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
                 raise RuntimeError("Capture exceeds the bounded dimensions (sixteen million pixels).")
             if x < 0 or y < 0 or real_pixel(x + width - 1, args.Scale) >= window_width or real_pixel(y + height - 1, args.Scale) >= window_height:
                 raise RuntimeError("The calibrated strip is outside the game window. Calibrate again.")
-            before = screen.focused()
-            if args.Mode == "Stream" and not before:
-                write({"protocol": 1, "type": "idle", "foreground": False})
-            else:
-                started = time.monotonic()
-                encoded = sample(screen, x, y, width, height, args.Scale)
-                elapsed = (time.monotonic() - started) * 1000
-                foreground = before and screen.focused()
-                if args.Mode == "Stream" and not foreground:
-                    write({"protocol": 1, "type": "idle", "foreground": False})
-                else:
-                    write({"protocol": 1, "type": "frame", "x": x, "y": y, "width": width, "height": height,
-                           "captureMs": elapsed, "foreground": bool(foreground), "scale": args.Scale, "rgba": encoded})
+            write(frame_record(screen, args.Mode, x, y, width, height, args.Scale))
             if args.Mode == "Once":
                 break
             time.sleep(max(0.001, 0.2 - (time.monotonic() - cycle)))

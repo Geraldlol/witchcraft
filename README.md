@@ -40,6 +40,7 @@ Guides and Adventures use a small, source-linked **Classic reference catalog**: 
 ## Requirements
 
 - Windows 10 or 11 and the **WoW Forever** client, interface `16001`.
+- Linux is experimental and **needs testers**: since 0.3.0 the daemon can read the game's X11 or XWayland window under Wine or Proton. It has run on one contributor's machine only. See [Linux (experimental)](tools/witchcraft-daemon/README.md#linux-experimental) and please report what you find.
 - [Node.js](https://nodejs.org/) **24 or newer**.
 - [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started), installed and already signed in. The daemon uses native executables (`claude.exe` / `codex.exe` / `copilot.exe`). For npm-installed Copilot on Windows it can also launch the package with Node directly; other `.cmd` and `.bat` wrappers do not work. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if yours are not found.
 - PowerShell for setup. The optional Claude Code management skill requires **PowerShell 7** (`pwsh`).

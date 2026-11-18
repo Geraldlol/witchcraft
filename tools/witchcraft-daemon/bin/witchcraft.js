@@ -632,7 +632,7 @@ export function runBurstProbe(config, options = {}, adapters = {}) {
       }, seconds * 1000);
       timer.unref?.();
     };
-    capture = new CaptureStream({ region: { x: config.region.x, y: config.region.y, scale: config.region.scale }, profile: 'burst',
+    capture = new CaptureStream({ region: { x: config.region.x, y: config.region.y, ...(config.region.scale === undefined ? {} : { scale: config.region.scale }) }, profile: 'burst',
       onError: error => finish(error),
       onIdle: () => { stats.foregroundIdleRecords++; awaitingRecovery = true; },
       onFrame: image => {

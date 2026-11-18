@@ -137,10 +137,14 @@ The current node-pty 1.1.0 Windows adapter can retain a worker after the child h
 
 ## Linux (experimental)
 
-The strip reader also runs on Linux when the client is an X11 or XWayland window (Proton/Wine). `capture/capture-strip.py` reads the game window with `XGetImage` and speaks the same protocol as the PowerShell helper; it needs `python3` and `libX11`, nothing else. Run `calibrate` and `run` as on Windows.
+The strip reader also runs on Linux when the client is an X11 or XWayland window (Proton/Wine). `capture/capture-strip.py` reads the game window with `XGetImage` and speaks the same protocol as the PowerShell helper; it needs `python3`, `libX11` and `libXRes`, nothing else. Run `calibrate` and `run` as on Windows.
 
+**Linux testers wanted.** This lane was contributed from one machine and the maintainer has no Linux setup, so the changes made after review (calibration bounds, the idle record on a failed read, the process check) are covered by unit tests only and have never run on X11. If you try it, please open an issue with your distribution, session type (X11 or XWayland), Wine or Proton version, the `region.scale` that `calibrate` saved, and what worked or failed.
+
+- The game window is found by its title and accepted only when the X server reports that it belongs to a process named `wow*` (through libXRes and `/proc/<pid>/comm`; Wine names a process after its exe, such as `WowB.exe`). If that cannot be verified, for example when Wine has not renamed the process or when the game runs in another PID namespace such as Flatpak, the helper refuses to start; set `WITCHCRAFT_WINDOW_ID` to the game's window id (`xwininfo` prints it) and that window is used without the process check.
+- The helper keeps the window it found at start. Restart `run` after restarting the game.
 - Coordinates are relative to the game window, not the desktop. `calibrate` measures the window's upscale ratio from the strip and stores it as `region.scale`, so a client rendering below its window size (for example 2560x1440 in a 3840x2160 window) still decodes. Recalibrate after changing resolution, window size or UI scale.
-- Keep overlays such as MangoHud off the top-left corner.
+- Keep overlays such as MangoHud off the top-left corner. While the game window is unmapped, minimized or partly off screen the helper reports idle, as it does when the game is not focused.
 - A native Wayland game window cannot be read this way.
 - Tested on one machine: WoW Forever under GE-Proton on GNOME/XWayland, Claude tab only. On that client `bindings-cache.wtf` was written only at `/reload` or logout, so the binding carrier did not qualify and the strip carried all traffic; do not pass `--no-pixels` there.
 - Joining a running console (`--attach`, the default Claude join) still needs PowerShell. Use `--no-current`.

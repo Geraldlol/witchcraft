@@ -6,8 +6,9 @@ import path from 'node:path';
 import { CONTEXT_DOMAINS, CONTEXT_WANT_TTL_MS, contextWantPath, readContextWant, readContextWants, requestContext, unansweredWants } from '../src/context-want.js';
 
 async function scratch(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'witchcraft-want-'));
-  t.after(async () => { assert.equal(path.dirname(dir), await fs.realpath(os.tmpdir())); await fs.rm(dir, { recursive: true, force: true }); });
+  const temp = await fs.realpath(os.tmpdir());
+  const dir = await fs.mkdtemp(path.join(temp, 'witchcraft-want-'));
+  t.after(async () => { assert.equal(path.dirname(await fs.realpath(dir)), temp); await fs.rm(dir, { recursive: true, force: true }); });
   return path.join(dir, 'wow-context.json');
 }
 

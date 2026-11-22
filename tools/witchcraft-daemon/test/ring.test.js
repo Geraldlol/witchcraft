@@ -10,8 +10,9 @@ import { MAX_CHUNK_BYTES } from '../src/lua.js';
 import { Screen } from '../src/screen.js';
 
 async function workspace(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'witchcraft-ring-'));
-  t.after(async () => { assert.equal(path.dirname(root), os.tmpdir()); await fs.rm(root, { recursive: true, force: true }); });
+  const temp = await fs.realpath(os.tmpdir());
+  const root = await fs.mkdtemp(path.join(temp, 'witchcraft-ring-'));
+  t.after(async () => { assert.equal(path.dirname(await fs.realpath(root)), temp); await fs.rm(root, { recursive: true, force: true }); });
   return root;
 }
 test('init produces marked LoD slots and preserves unrelated directories', async t => {

@@ -30,10 +30,10 @@ export function validateRegion(region, profile = 'strip') {
   return { x, y, width: geometry.width, height: geometry.height, ...(scale === undefined ? {} : { scale }) };
 }
 
-/** Window pixels per game pixel, for a client that renders below its window size. Linux only. */
+/** Window pixels per game pixel (0.5..4), for upscaled or nominal-point Retina windows. */
 export function validateScale(scale) {
   if (scale === undefined) return undefined;
-  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale < 1 || scale > 4) throw new RangeError('Capture scale must be 1..4');
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale < 0.5 || scale > 4) throw new RangeError('Capture scale must be 0.5..4');
   return scale;
 }
 
@@ -75,8 +75,8 @@ function parseFrame(line, { region, calibration }) {
   }
   const data = Buffer.from(rgba, 'base64');
   if (data.length !== bytes) throw new Error('Capture helper returned the wrong RGBA byte count');
-  // The Linux helper reports the window scale it used or measured; calibration stores it.
-  const scale = typeof frame.scale === 'number' && Number.isFinite(frame.scale) && frame.scale >= 1 && frame.scale <= 4 ? frame.scale : undefined;
+  // The Linux/macOS helper reports the window scale it used or measured; calibration stores it.
+  const scale = typeof frame.scale === 'number' && Number.isFinite(frame.scale) && frame.scale >= 0.5 && frame.scale <= 4 ? frame.scale : undefined;
   return { width, height, data, x, y, captureMs, foreground, ...(scale === undefined ? {} : { scale }) };
 }
 

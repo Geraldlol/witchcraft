@@ -67,12 +67,23 @@ The default binding carrier is not build-pinned; qualify it once per daemon/UI s
 
    Use your actual Forever client path, with forward slashes or doubled backslashes. Log into that client at least once so it has a `WTF\Account` folder.
 
-4. **Set up the daemon.** Open PowerShell in the source root, then run:
+4. **Set up the daemon.** Open a terminal in the source root, then run:
+
+   On Windows (PowerShell):
 
    ```powershell
    cd tools\witchcraft-daemon
    npm.cmd ci --ignore-scripts --no-fund
    npm.cmd rebuild node-pty --ignore-scripts=false --foreground-scripts
+   node bin/witchcraft.js init --ring 3000
+   ```
+
+   On macOS and Linux:
+
+   ```sh
+   cd tools/witchcraft-daemon
+   npm ci --ignore-scripts --no-fund
+   npm rebuild node-pty --ignore-scripts=false --foreground-scripts
    node bin/witchcraft.js init --ring 3000
    ```
 

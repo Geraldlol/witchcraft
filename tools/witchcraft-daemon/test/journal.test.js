@@ -270,6 +270,174 @@ test('a clear that lands while a delayed writer renames its file discards the ol
   assert.deepEqual(events, [3]);
 });
 
+test('an append made while a local clear is still running follows that clear\'s marker and persists', async t => {
+  const file = await scratch(t), reported = [];
+  let held, release;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  // The clear is held on its marker write, so the append below is made before the marker exists.
+  const store = new JournalStore({ file, now: () => 1000, onError: error => reported.push(error.message),
+    write: async (target, text, options) => {
+      if (target === markerFor(file)) { held(); await gate; }
+      return atomicWrite(target, text, options);
+    } });
+  assert.equal(await store.append([money(1)], { epoch: '0123abcd' }), true);
+  const before = store.append([money(2)], { epoch: '0123abcd' });
+  const clearing = store.clear();
+  await holding;
+  const after = store.append([money(3)], { epoch: '0123abcd' });
+  // Long enough for a fence read made at once to finish before the clear writes its marker.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  release();
+  assert.equal(await before, false, 'a batch queued before the clear is dropped');
+  assert.equal(await clearing, true);
+  assert.equal(await after, true, 'the batch made during the clear is written');
+  assert.deepEqual((await store.read()).segments.flatMap(segment => segment.events.map(event => event.at)), [3]);
+  assert.deepEqual(reported, []);
+});
+
+test('an append queued behind a local clear whose lock another process reclaimed and cleared under is dropped', async t => {
+  const file = await scratch(t), lock = `${markerFor(file)}.lock`, reported = [];
+  let held, release;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const store = new JournalStore({ file, now: () => 1000, onError: error => reported.push(error.message),
+    write: async (target, text, options) => {
+      if (target === markerFor(file)) { held(); await gate; }
+      return atomicWrite(target, text, options);
+    } });
+  const other = new JournalStore({ file, now: () => 6000 });
+  assert.equal(await store.append([money(1)], { epoch: '0123abcd' }), true);
+  const clearing = store.clear();
+  await holding;
+  const appending = store.append([money(2)], { epoch: '0123abcd' });
+  // Long enough for the call-time fence read to finish before the other process clears.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  // The held clear's lock has outlived its lease: the other store reclaims it and clears.
+  const past = new Date(Date.now() - 60_000);
+  await fs.utimes(lock, past, past);
+  assert.equal(await other.clear(), true);
+  release();
+  assert.equal(await clearing, false, 'the local clear lost its lock');
+  assert.equal(await appending, false, 'a batch recorded before the foreign clear is dropped');
+  assert.deepEqual((await store.read())?.segments ?? [], [], 'the journal holds no event');
+  assert.deepEqual(JSON.parse(await fs.readFile(markerFor(file), 'utf8')), { clearedAt: 6000 });
+  assert.deepEqual(reported, ['Session journal clear lock lost']);
+});
+
+test('a local clear whose marker rename lands after another process reclaimed its lock and cleared records no link, so an append queued behind it is dropped', async t => {
+  const file = await scratch(t), lock = `${markerFor(file)}.lock`, reported = [];
+  let held, release;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  // The marker rename is held after the write's ownership check passed, then lands as it was asked to.
+  const rename = async (from, to) => {
+    if (to === markerFor(file)) { held(); await gate; }
+    return fs.rename(from, to);
+  };
+  const store = new JournalStore({ file, now: () => 1000, onError: error => reported.push(error.message),
+    write: (target, text, options) => atomicWrite(target, text, { ...options, rename }) });
+  const other = new JournalStore({ file, now: () => 5000 });
+  assert.equal(await store.append([money(1)], { epoch: '0123abcd' }), true);
+  const clearing = store.clear();
+  await holding;
+  const appending = store.append([money(2)], { epoch: '0123abcd' });
+  // Long enough for the call-time fence read (marker 0) to finish before the other process clears.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const past = new Date(Date.now() - 60_000);
+  await fs.utimes(lock, past, past);
+  assert.equal(await other.clear(), true);
+  release();
+  assert.equal(await clearing, false, 'the local clear lost its lock');
+  assert.deepEqual(JSON.parse(await fs.readFile(markerFor(file), 'utf8')), { clearedAt: 1000 }, 'the held rename landed');
+  assert.equal(await appending, false, 'a batch recorded before the foreign clear is dropped');
+  assert.deepEqual((await store.read())?.segments ?? [], [], 'the journal holds no event of that batch');
+  assert.deepEqual(reported, ['Session journal clear lock lost']);
+});
+
+test('a foreign marker rename that lands after a local clear moved the marker past it drops an append that followed the local clear', async t => {
+  const file = await scratch(t), lock = `${markerFor(file)}.lock`, reported = [], foreignReported = [];
+  let held, release;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  // The foreign marker rename is held after the write's ownership check passed, then lands as it was asked to.
+  const rename = async (from, to) => {
+    if (to === markerFor(file)) { held(); await gate; }
+    return fs.rename(from, to);
+  };
+  const other = new JournalStore({ file, now: () => 1000, onError: error => foreignReported.push(error.message),
+    write: (target, text, options) => atomicWrite(target, text, { ...options, rename }) });
+  let foreignClearing;
+  // Right after the local marker (6000) is written, the foreign rename (1000) lands on top of it.
+  const store = new JournalStore({ file, now: () => 6000, onError: error => reported.push(error.message),
+    write: async (target, text, options) => {
+      if (target !== markerFor(file)) return atomicWrite(target, text, options);
+      const result = await atomicWrite(target, text, options);
+      release();
+      await foreignClearing;
+      return result;
+    } });
+  assert.equal(await store.append([money(1)], { epoch: '0123abcd' }), true);
+  foreignClearing = other.clear();
+  await holding;
+  // The foreign clear's lock has outlived its lease: the local clear reclaims it.
+  const past = new Date(Date.now() - 60_000);
+  await fs.utimes(lock, past, past);
+  const clearing = store.clear();
+  const appending = store.append([money(2)], { epoch: '0123abcd' });
+  assert.equal(await clearing, true, 'the local clear kept its lock and deleted the journal');
+  assert.equal(await foreignClearing, false, 'the foreign clear lost its lock');
+  assert.deepEqual(JSON.parse(await fs.readFile(markerFor(file), 'utf8')), { clearedAt: 1000 }, 'the held foreign rename landed last');
+  assert.equal(await appending, false, 'a marker lower than the fence is another clear, so the batch is dropped');
+  assert.deepEqual((await store.read())?.segments ?? [], [], 'the journal holds no event of that batch');
+  assert.deepEqual(reported, []);
+  assert.deepEqual(foreignReported, ['Session journal clear lock lost']);
+});
+
+test('an append made after two queued local clears follows both markers and persists', async t => {
+  const file = await scratch(t), reported = [];
+  let held, release, markerWrites = 0;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const store = new JournalStore({ file, now: () => 1000, onError: error => reported.push(error.message),
+    write: async (target, text, options) => {
+      if (target === markerFor(file) && ++markerWrites === 1) { held(); await gate; }
+      return atomicWrite(target, text, options);
+    } });
+  assert.equal(await store.append([money(1)], { epoch: '0123abcd' }), true);
+  const first = store.clear(), second = store.clear();
+  await holding;
+  const appending = store.append([money(3)], { epoch: '0123abcd' });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  release();
+  assert.equal(await first, true);
+  assert.equal(await second, false, 'the second clear found no journal to delete');
+  assert.equal(await appending, true, 'only this store moved the marker, so the batch is written');
+  assert.deepEqual(JSON.parse(await fs.readFile(markerFor(file), 'utf8')), { clearedAt: 1001 });
+  assert.deepEqual((await store.read()).segments.flatMap(segment => segment.events.map(event => event.at)), [3]);
+  assert.deepEqual(reported, []);
+});
+
+test('a foreign clear landing before a queued local clear reads its marker drops an append made in between', async t => {
+  const file = await scratch(t), reported = [];
+  let held, release, loads = 0;
+  const holding = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  // The first append is held right after it loads the file, so the clear queued behind it has not read the marker yet.
+  const store = new JournalStore({ file, now: () => 1000, onError: error => reported.push(error.message), onLoaded: async () => {
+    if (loads++ === 0) { held(); await gate; }
+  } });
+  const other = new JournalStore({ file, now: () => 5000 });
+  const first = store.append([money(1)], { epoch: '0123abcd' });
+  await holding;
+  const clearing = store.clear();
+  const appending = store.append([money(3)], { epoch: '0123abcd' });
+  // Long enough for the call-time fence read to finish before the other process clears.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(await other.clear(), false, 'there was no journal file yet');
+  release();
+  assert.equal(await first, false, 'the held batch meets the foreign marker');
+  assert.equal(await clearing, false);
+  assert.deepEqual(JSON.parse(await fs.readFile(markerFor(file), 'utf8')), { clearedAt: 5001 }, 'the local clear wrote on top of the foreign one');
+  assert.equal(await appending, false, 'a batch recorded before the foreign clear is dropped');
+  assert.deepEqual((await store.read())?.segments ?? [], [], 'the journal holds no event');
+  assert.deepEqual(reported, []);
+});
+
 test('a clear delayed past its lock lease neither replaces the marker nor deletes a newer writer\'s journal', async t => {
   const file = await scratch(t), lock = `${markerFor(file)}.lock`, reported = [];
   let held, release;
@@ -498,14 +666,14 @@ test('close with an idle chain returns at once; a batch closed under it before i
 
 test('presentation defaults to the current session/character, labels event origin, and supports explicit history and paused notes', () => {
   assert.deepEqual(presentJournal(null), { status: 'missing', segments: [], events: [] });
-  assert.equal(presentJournal({ schemaVersion: 1, segments: [] }).status, 'empty');
+  assert.equal(presentJournal({ schemaVersion: 1, segments: [] }, { session: { epoch: '89abcdef' } }).status, 'empty');
   const document = { schemaVersion: 1, segments: [
     { epoch: '0123abcd', uiNonce: 'abcd0123', startedAt: 1000, endedAt: 3000, character: { name: 'Jaina', class: 'Mage' },
       events: [money(1000), { at: 2000, domain: 'progress', revision: 2, kind: 'died' }] },
     { epoch: '89abcdef', uiNonce: 'ef012345', startedAt: 3000, endedAt: null, character: { name: 'Thrall', class: 'Shaman' },
       events: [money(4000)] },
   ] };
-  const current = presentJournal(document, {}, 10_000);
+  const current = presentJournal(document, { session: { epoch: '89abcdef', uiNonce: 'ef012345' } }, 10_000);
   assert.equal(current.status, 'ready');
   assert.equal(current.scope, 'current');
   assert.equal(current.segments.length, 1, 'current-session summary only includes the active segment');
@@ -534,6 +702,22 @@ test('presentation defaults to the current session/character, labels event origi
   const paused = presentJournal(document, { sharing: false }, 10_000);
   assert.equal(paused.sharing, 'paused');
   assert.match(paused.note, /WoW context sharing is paused/u);
+});
+
+test('without a known current session nothing stored is served as current; history still reads as before', () => {
+  // The newest stored segment can be another character's: the daemon cache is still waiting for this session.
+  const document = { schemaVersion: 1, segments: [
+    { epoch: '89abcdef', uiNonce: 'ef012345', startedAt: 3000, endedAt: null, character: { name: 'Jaina', class: 'Mage' },
+      events: [money(4000)] },
+  ] };
+  assert.deepEqual(presentJournal(document, {}, 10_000), { status: 'waiting', scope: 'current', segments: [], events: [] });
+  assert.deepEqual(presentJournal(document, { session: { uiNonce: 'ef012345' } }, 10_000).events, [], 'a nonce without an epoch is no session');
+  const history = presentJournal(document, { includeHistory: true }, 10_000);
+  assert.equal(history.status, 'ready');
+  assert.equal(history.scope, 'all');
+  assert.deepEqual(history.events.map(event => [event.character?.name, event.money]), [['Jaina', 4000]]);
+  assert.deepEqual(presentJournal(document, { includeHistory: true }, 10_000),
+    presentJournal(document, { includeHistory: true, session: { epoch: '89abcdef' } }, 10_000), 'history does not depend on the session');
 });
 
 test('a clear still inside its marker write when close gives up does not delete the journal a successor keeps', async t => {

@@ -571,3 +571,42 @@ print(json.dumps(out))`);
   assert.deepEqual(result.first, ['frame', 2, 1]);
   assert.deepEqual(result.unfocused, ['idle', 1, 0]);
 });
+
+test('a macOS grab whose display density changed since the probe captures once more, and a second change is an idle', { skip: !python }, () => {
+  const result = runHelper(`${MAC_WINDOWS}
+def run(backing, densities, mode="Stream"):
+    screen = mac_screen()
+    screen._backing = backing
+    screen._windows = lambda on_screen_only=True: [wow]
+    screen._refresh_backing = lambda: None  # the density changes between backing probes
+    state = {"rects": [], "released": 0}
+    class FakeCG:
+        def CGWindowListCreateImage(self, rect, flags, window, options):
+            density = densities[len(state["rects"]) % len(densities)]
+            state["rects"].append([rect.origin.x, rect.origin.y, rect.size.width, rect.size.height])
+            return (int(rect.size.width * density), int(rect.size.height * density))
+        def CGImageGetWidth(self, image): return image[0]
+        def CGImageGetHeight(self, image): return image[1]
+        def CGColorSpaceCreateDeviceRGB(self): return 1
+        def CGColorSpaceRelease(self, space): pass
+        def CGBitmapContextCreate(self, *args): return 1
+        def CGContextDrawImage(self, ctx, rect, image): pass
+        def CGContextRelease(self, ctx): pass
+        def CGImageRelease(self, image): state["released"] += 1
+    screen.cg = FakeCG()
+    try:
+        record = helper.cycle_record(screen, mode, 0, 0, 132, 12, 1.0)["type"]
+    except helper.GrabFailed as error:
+        record = "raised: " + str(error)
+    return {"record": record, "rects": state["rects"], "released": state["released"], "backing": screen._backing}
+print(json.dumps({"down": run(2.0, [1]), "up": run(1.0, [2]), "flip": run(2.0, [1, 2]),
+                  "flip_once": run(2.0, [1, 2], "Once")}))`);
+  // Bounds X 10, Y 20. Density 1 under a stale 2.0: half the strip asked for, then the full strip in points.
+  assert.deepEqual(result.down, { record: 'frame', rects: [[10, 20, 66, 6], [10, 20, 132, 12]], released: 2, backing: 1 });
+  assert.deepEqual(result.up, { record: 'frame', rects: [[10, 20, 132, 12], [10, 20, 66, 6]], released: 2, backing: 2 });
+  assert.equal(result.flip.record, 'idle');
+  assert.equal(result.flip.rects.length, 2);
+  assert.equal(result.flip.released, 2);
+  assert.equal(result.flip_once.record, 'raised: The game window changed display scale during the read. Keep it on one display.');
+  assert.equal(result.flip_once.released, 2);
+});

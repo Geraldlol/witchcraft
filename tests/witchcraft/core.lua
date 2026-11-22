@@ -955,7 +955,8 @@ test("a long or multi-line prompt queues as marked parts on UTF-8 boundaries, wh
     local c, s = fixture()
     s:Accept()
     s:Accept({ promptProtocol = 1, promptResults = {} })
-    assert(c:SendLong("claude", "short prompt")); equal(c.global.outbox[1].text, "short prompt", "one short line is an ordinary send")
+    assert(c:SendLong("claude", "short prompt")); equal(c.global.outbox[1].prompt, true, "one short line takes the receipt path")
+    equal(ns.Prompts.Group(c.global.outbox, c.global.outbox[1]), "short prompt")
     assert(c:SendLong("codex", "first line\r\nsecond line\n"))
     equal(ns.Prompts.Group(c.global.outbox, c.global.outbox[2]), "first line\nsecond line\n", "newlines and the final line survive")
     local long = string.rep("\195\169", 700) -- 1400 bytes of a two-byte letter
@@ -987,17 +988,86 @@ test("SendLong cleans pasted tabs and control bytes and names the waiting host",
     s:Accept()
     s:Accept({ promptProtocol = 1, promptResults = {} })
     assert(c:SendLong("claude", "a\tb"))
-    equal(#c.global.outbox, 1); equal(c.global.outbox[1].prompt, nil); equal(c.global.outbox[1].text, "a    b")
+    equal(#c.global.outbox, 1); equal(c.global.outbox[1].prompt, true)
+    equal(ns.Prompts.Group(c.global.outbox, c.global.outbox[1]), "a    b")
     assert(c:SendLong("claude", "def f():\n\tif x:\n\t\treturn 1\n"))
     equal(c.global.outbox[2].prompt, true)
     equal(ns.Prompts.Group(c.global.outbox, c.global.outbox[2]), "def f():\n    if x:\n        return 1\n",
         "tab indentation survives as four spaces per tab")
     local before = #c.global.outbox
     assert(c:SendLong("claude", "a\0b\27c\127d"))
-    equal(#c.global.outbox, before + 1); equal(c.global.outbox[before + 1].text, "abcd", "NUL, ESC and DEL are removed")
+    equal(#c.global.outbox, before + 1)
+    equal(ns.Prompts.Group(c.global.outbox, c.global.outbox[before + 1]), "abcd", "NUL, ESC and DEL are removed")
     ok, reason = c:SendLong("claude", "\0\1\27\127")
     equal(ok, false); equal(reason, "Nothing to send")
     equal(#c.global.outbox, before + 1)
+end)
+
+test("a short prompt to a current host takes the receipt path, so one the host could not deliver stays for resend", function()
+    local c, s = fixture()
+    s:Accept()
+    s:Accept({ promptProtocol = 1, promptResults = {} })
+    assert(c:SendLong("claude", string.rep("x", 600)))
+    local rows = {}
+    for i, message in ipairs(c.global.outbox) do rows[i] = message; equal(message.prompt, true) end
+    assert(#rows >= 1)
+    equal(ns.Prompts.Group(c.global.outbox, rows[1]), string.rep("x", 600))
+    -- The host acknowledges the prompt without a submitted receipt (the terminal could not take it).
+    s:Accept({ promptProtocol = 1, promptResults = {}, ack = rows[#rows].id })
+    equal(#c.global.outbox, #rows, "an undelivered short prompt is not dropped")
+    for i, message in ipairs(c.global.outbox) do equal(message, rows[i]); equal(message.review, "unconfirmed") end
+    -- A short line the host confirms as submitted leaves the outbox.
+    local done, ds = fixture()
+    ds:Accept()
+    ds:Accept({ promptProtocol = 1, promptResults = {} })
+    assert(done:SendLong("claude", "short prompt"))
+    local sent = done.global.outbox[#done.global.outbox]
+    equal(sent.prompt, true)
+    ds:Accept({ promptProtocol = 1, promptResults = { sent.id }, ack = sent.id })
+    equal(#done.global.outbox, 0, "a confirmed short prompt is finished")
+    -- With a current host a line over 600 bytes is a multi-part prompt rather than a refusal.
+    assert(done:SendLong("claude", string.rep("y", 601)))
+    equal(#done.global.outbox, 2); equal(done.global.outbox[1].prompt, true); equal(done.global.outbox[2].prompt, true)
+end)
+
+test("an older host keeps short prompts on the plain path and refuses a line over 600 bytes", function()
+    local old, olds = fixture()
+    olds:Accept()
+    equal(old.promptProtocol, nil)
+    assert(old:SendLong("claude", string.rep("x", 600)))
+    equal(#old.global.outbox, 1); equal(old.global.outbox[1].prompt, nil); equal(old.global.outbox[1].text, string.rep("x", 600))
+    local ok, reason = old:SendLong("claude", string.rep("y", 601))
+    equal(ok, false); equal(reason, "Update the desktop daemon to send this prompt; the draft is retained")
+    equal(#old.global.outbox, 1)
+end)
+
+test("a short prompt retained from a current host resends plain to an older host; a multi-line one stays", function()
+    local c, s = fixture()
+    s:Accept()
+    s:Accept({ promptProtocol = 1, promptResults = {} })
+    assert(c:SendLong("claude", "short prompt"))
+    local kept = c.global.outbox[1]
+    equal(#c.global.outbox, 1); equal(kept.prompt, true)
+    -- The host restarts as an older daemon: the prompt group is retained under the earlier epoch.
+    s:Accept({ epoch = "87654321" })
+    equal(c.promptProtocol, nil); equal(c:Retained(kept.id), kept)
+    assert(c:Resend(kept.id))
+    equal(#c.global.outbox, 1, "the retained rows leave as the plain row is queued")
+    local row = c.global.outbox[1]
+    assert(row ~= kept, "the old row is gone")
+    equal(row.action, "text"); equal(row.text, "short prompt"); equal(row.prompt, nil); equal(row.epoch, "87654321")
+    -- A retained multi-line prompt still needs a current host.
+    local m, ms = fixture()
+    ms:Accept()
+    ms:Accept({ promptProtocol = 1, promptResults = {} })
+    assert(m:SendLong("claude", "first line\nsecond line"))
+    local rows = {}
+    for i, message in ipairs(m.global.outbox) do rows[i] = message end
+    ms:Accept({ epoch = "87654321" })
+    local ok, reason = m:Resend(rows[1].id)
+    equal(ok, false); equal(reason, "Update the desktop daemon to send this prompt; the draft is retained")
+    equal(#m.global.outbox, #rows)
+    for i, message in ipairs(m.global.outbox) do equal(message, rows[i], "the retained rows stay") end
 end)
 
 test("settings default, validate, persist and apply through one controller path", function()

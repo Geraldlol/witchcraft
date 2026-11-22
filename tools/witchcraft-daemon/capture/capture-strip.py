@@ -318,49 +318,56 @@ class MacScreen:
 
     def grab(self, x, y, width, height):
         self._screen_list = None  # the focus check after this read must see a fresh window list
-        scale = max(1.0, float(self._backing))
-        pt_x0 = int(x // scale)
-        pt_y0 = int(y // scale)
-        pt_w = max(1, int(-(-(x + width) // scale)) - pt_x0)
-        pt_h = max(1, int(-(-(y + height) // scale)) - pt_y0)
-        ox = float(self._bounds.get("X", 0.0)) + pt_x0
-        oy = float(self._bounds.get("Y", 0.0)) + pt_y0
-        rect = CGRect(CGPoint(ox, oy), CGSize(float(pt_w), float(pt_h)))
-        image = self.cg.CGWindowListCreateImage(rect, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_FRAMELESS)
-        if not image:
-            raise GrabFailed("The game window could not be read. Grant Screen Recording permission in System Settings > Privacy & Security, and keep the game visible.")
-        try:
-            img_w = self.cg.CGImageGetWidth(image)
-            img_h = self.cg.CGImageGetHeight(image)
-            if img_w <= 0 or img_h <= 0:
-                raise GrabFailed("The game window could not be read. Keep it visible and not minimized.")
-            actual_scale = img_w / pt_w
-            if actual_scale >= 1.0 and abs(actual_scale - self._backing) > 0.01:
-                self._backing = actual_scale
-            sub_x = max(0, min(max(0, img_w - width), int(round(x - pt_x0 * actual_scale))))
-            sub_y = max(0, min(max(0, img_h - height), int(round(y - pt_y0 * actual_scale))))
-            buf = (ctypes.c_ubyte * (width * height * 4))()
-            space = self.cg.CGColorSpaceCreateDeviceRGB()
-            if not space:
-                raise RuntimeError("Could not create CGColorSpace")
+        # The backing probe runs only once a second or on a bounds change, so the display density can
+        # change under an unchanged window. An image at another scale than its request was built with
+        # does not cover the requested pixels: correct the scale and capture once more.
+        for attempt in range(2):
+            scale = max(1.0, float(self._backing))
+            pt_x0 = int(x // scale)
+            pt_y0 = int(y // scale)
+            pt_w = max(1, int(-(-(x + width) // scale)) - pt_x0)
+            pt_h = max(1, int(-(-(y + height) // scale)) - pt_y0)
+            ox = float(self._bounds.get("X", 0.0)) + pt_x0
+            oy = float(self._bounds.get("Y", 0.0)) + pt_y0
+            rect = CGRect(CGPoint(ox, oy), CGSize(float(pt_w), float(pt_h)))
+            image = self.cg.CGWindowListCreateImage(rect, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_FRAMELESS)
+            if not image:
+                raise GrabFailed("The game window could not be read. Grant Screen Recording permission in System Settings > Privacy & Security, and keep the game visible.")
             try:
-                ctx = self.cg.CGBitmapContextCreate(buf, width, height, 8, width * 4, space, self.K_BITMAP_BGRX_32LE)
-                if not ctx:
-                    raise RuntimeError("Could not create CGBitmapContext")
+                img_w = self.cg.CGImageGetWidth(image)
+                img_h = self.cg.CGImageGetHeight(image)
+                if img_w <= 0 or img_h <= 0:
+                    raise GrabFailed("The game window could not be read. Keep it visible and not minimized.")
+                actual_scale = img_w / pt_w
+                if actual_scale >= 1.0 and abs(actual_scale - scale) > 0.01:
+                    if attempt:
+                        raise GrabFailed("The game window changed display scale during the read. Keep it on one display.")
+                    self._backing = actual_scale
+                    continue  # the finally below releases this image first
+                sub_x = max(0, min(max(0, img_w - width), int(round(x - pt_x0 * actual_scale))))
+                sub_y = max(0, min(max(0, img_h - height), int(round(y - pt_y0 * actual_scale))))
+                buf = (ctypes.c_ubyte * (width * height * 4))()
+                space = self.cg.CGColorSpaceCreateDeviceRGB()
+                if not space:
+                    raise RuntimeError("Could not create CGColorSpace")
                 try:
-                    draw_rect = CGRect(CGPoint(-float(sub_x), float(height - img_h + sub_y)), CGSize(float(img_w), float(img_h)))
-                    self.cg.CGContextDrawImage(ctx, draw_rect, image)
+                    ctx = self.cg.CGBitmapContextCreate(buf, width, height, 8, width * 4, space, self.K_BITMAP_BGRX_32LE)
+                    if not ctx:
+                        raise RuntimeError("Could not create CGBitmapContext")
+                    try:
+                        draw_rect = CGRect(CGPoint(-float(sub_x), float(height - img_h + sub_y)), CGSize(float(img_w), float(img_h)))
+                        self.cg.CGContextDrawImage(ctx, draw_rect, image)
+                    finally:
+                        self.cg.CGContextRelease(ctx)
                 finally:
-                    self.cg.CGContextRelease(ctx)
+                    self.cg.CGColorSpaceRelease(space)
+                words = array("I")
+                words.frombytes(bytes(buf))
+                if sys.byteorder != "little":
+                    words.byteswap()
+                return words
             finally:
-                self.cg.CGColorSpaceRelease(space)
-            words = array("I")
-            words.frombytes(bytes(buf))
-            if sys.byteorder != "little":
-                words.byteswap()
-            return words
-        finally:
-            self.cg.CGImageRelease(image)
+                self.cg.CGImageRelease(image)
 
 
 class Screen:

@@ -188,7 +188,7 @@ test('wow_get_session_log reads only the journal, filters it, and is listed with
   };
   assert.deepEqual(await call({}), { status: 'missing', segments: [], events: [] });
   await fs.writeFile(journal, JSON.stringify({ schemaVersion: 1, segments: [] }));
-  assert.equal((await call({})).status, 'empty');
+  assert.equal((await call({})).status, 'waiting', 'no cache, so no current session is known');
   const now = Date.now();
   const events = [
     { at: now - 3000, domain: 'player', revision: 2, kind: 'level-up', from: 10, to: 11 },
@@ -204,6 +204,11 @@ test('wow_get_session_log reads only the journal, filters it, and is listed with
       character: { name: 'Thrall', class: 'Shaman' }, events },
   ] });
   await fs.writeFile(journal, document);
+  // Until the daemon cache names a session, the newest stored segment is not served as current.
+  assert.deepEqual(await call({}), { status: 'waiting', scope: 'current', segments: [], events: [] });
+  assert.deepEqual((await call({ includeHistory: true })).events.map(event => event.character?.name), ['Jaina', 'Thrall', 'Thrall', 'Thrall']);
+  assert.equal(await exists(file), false, 'the tool never creates the cache');
+  await fs.writeFile(file, JSON.stringify(snapshot(now)));
   const current = await call({});
   assert.equal(current.status, 'ready');
   assert.equal(current.scope, 'current');
@@ -240,7 +245,6 @@ test('wow_get_session_log reads only the journal, filters it, and is listed with
     assert.equal((await client.callTool({ name: 'wow_get_session_log', arguments: bad })).isError, true, JSON.stringify(bad));
   }
   assert.equal(await fs.readFile(journal, 'utf8'), document, 'the tool never changes the journal');
-  assert.equal(await exists(file), false, 'the tool never creates the cache');
   assert.equal(await exists(contextWantPath(file, 'player')), false, 'nor asks the game for anything');
 
   // When context sharing is paused in the cache, the tool explains that history remains readable until cleared.

@@ -73,7 +73,7 @@ export function parseArgs(argv) {
 
 export async function runBridge(config, options = {}, child = [], adapters = {}) {
   // Doctor and setup must start even before the native terminal dependencies load.
-  const [{ TerminalPair, attachTerminal }, { SessionSet }, { listConsoles }, { Outbox, watchSavedVariables },
+  const [{ TerminalPair, attachTerminal }, { SessionSet, addonSessions }, { listConsoles }, { Outbox, watchSavedVariables },
     { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants },
     { JournalStore, journalPath, observe }] = await Promise.all([
     import('../src/pty.js'), import('../src/sessions.js'), import('../src/console-list.js'), import('../src/outbox.js'),
@@ -370,8 +370,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         const cooldown = startCooldownSession
           ? { cooldownProtocol: 2, cooldownNonce, cooldownAck: cooldownReceiver?.ack ?? 0,
             cooldownChecksum: cooldownReceiver?.lastChecksum ?? 0 } : {};
-        // The model, context and last reply come from each agent's own session files.
-        const sessions = pair.snapshot().map(session => ({ ...session, ...sessionInfo?.get(session.id),
+        // The model, context and last reply come from each agent's own session files. A not-started
+        // AGY is left out, so a 0.3.1 addon (at most three sessions) still takes the frame.
+        const sessions = addonSessions(pair.snapshot()).map(session => ({ ...session, ...sessionInfo?.get(session.id),
           ...(session.id === 'claude' && claudeTools === false ? { tools: false } : {}) }));
         const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, cooldown });
         const published = await writer.publish({ changed: signature !== oldScreen, ack: outbox.ack,

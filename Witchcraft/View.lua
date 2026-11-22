@@ -870,7 +870,7 @@ function View:Send()
     if not self.activeTab then return end
     local body = inputText(self.input:GetText())
     if body == "" then self.message = "Type a prompt, or use Enter to accept a terminal choice."; self:RenderStatus(); return end
-    local ok, reason = self.controller:Send(self.activeTab, typed(body))
+    local ok, reason = self.controller:SendLong(self.activeTab, typed(body))
     if ok then
         local list = self.history[self.activeTab]
         if list[#list] ~= body then list[#list + 1] = body end

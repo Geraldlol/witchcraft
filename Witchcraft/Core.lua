@@ -1124,7 +1124,9 @@ function methods:SendLong(tab, text, replace)
     -- Pasted text: normalise line ends, keep tab indentation as four spaces, drop other control bytes.
     text = text:gsub("\r\n?", "\n"):gsub("\t", "    "):gsub("[%z\1-\8\11-\31\127]", "")
     if not text:find("%S") then return false, "Nothing to send" end
-    if not replace and #text <= 600 and not text:find("[\r\n]") and not Prompts.Reserved(text) then return self:Send(tab, text) end
+    if #text <= 600 and not text:find("[\r\n]") and not Prompts.Reserved(text) and self.promptProtocol ~= 1 then
+        return self:QueueBatch(tab, { { action = "text", text = text } }, replace)
+    end
     if not self.active or not self.connected then return false, "Wait for the terminal host" end
     if self.promptProtocol ~= 1 then return false, "Update the desktop daemon to send this prompt; the draft is retained" end
     local parts, reason = Prompts.Parts(text)

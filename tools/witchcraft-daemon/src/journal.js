@@ -132,8 +132,9 @@ export function observe(previous, raw, now) {
 /**
  * What wow_get_session_log returns: segment summaries and the newest `limit` matching events,
  * oldest first, with ISO times, ages and segment origin (epoch, uiNonce, character) on every read.
- * By default (`includeHistory = false`), only the current session/character segment is included;
- * pass `includeHistory: true` to read across retained historical segments.
+ * By default (`includeHistory = false`), only the current session/character segment is included,
+ * and status 'waiting' with nothing in it while no session epoch is known; pass
+ * `includeHistory: true` to read across retained historical segments.
  */
 export function presentJournal(document, { since, limit = 100, kinds, includeHistory = false, character, session, sharing } = {}, now = Date.now()) {
   const paused = sharing === false || sharing === 'disabled';
@@ -143,10 +144,15 @@ export function presentJournal(document, { since, limit = 100, kinds, includeHis
   if (!document) {
     return { status: 'missing', ...(paused ? { sharing: 'paused', note: pauseNote } : {}), segments: [], events: [] };
   }
+  // Without a session epoch the current segment is not known yet (the daemon cache is still
+  // waiting): the newest stored segment may be another character's, so nothing is served as current.
+  if (!session?.epoch && !includeHistory) {
+    return { status: 'waiting', scope: 'current', ...(paused ? { sharing: 'paused', note: pauseNote } : {}), segments: [], events: [] };
+  }
   const iso = at => new Date(at).toISOString();
   const activeSegment = session?.epoch
     ? [...document.segments].reverse().find(seg => seg.epoch === session.epoch && (!session.uiNonce || seg.uiNonce === session.uiNonce))
-    : document.segments.at(-1);
+    : undefined;
   const selectedSegments = document.segments.filter(seg => {
     if (character && (seg.character?.name ?? '').toLowerCase() !== character.toLowerCase()) return false;
     if (includeHistory) return true;
@@ -192,6 +198,9 @@ export class JournalStore {
     this.markerReported = false;
     this.closed = false;
     this.clearGeneration = 0;
+    // One { previous, value } per clear marker this store wrote. A clear is a rare manual command,
+    // so the list is not pruned.
+    this.ownClears = [];
     this.chain = Promise.resolve();
   }
 
@@ -256,10 +265,16 @@ export class JournalStore {
   append(events, { epoch = null, uiNonce = null, character = null } = {}) {
     if (this.closed) return Promise.resolve(false);
     const generation = this.clearGeneration;
+    // The fence is the marker as this read finds it. A clear by another process that the read
+    // already shows counts as before the batch (the two were concurrent); one after it drops the batch.
     const startFencePromise = this.#readMarker();
+    const from = this.ownClears.length;
     const run = this.chain.then(async () => {
-      const startFence = await startFencePromise;
-      return this.#write(events, epoch, uiNonce, character, generation, startFence);
+      let fence = await startFencePromise;
+      // A local clear queued before this batch moved the marker itself. Follow its writes link by
+      // link from the fence read at call time, so only a marker another process wrote drops the batch.
+      for (const own of this.ownClears.slice(from)) if (own.previous === fence) fence = own.value;
+      return this.#write(events, epoch, uiNonce, character, generation, fence);
     });
     this.chain = run;
     return run;
@@ -295,6 +310,7 @@ export class JournalStore {
         this.onError(new Error('Session journal clear lock lost'));
         return false;
       }
+      this.ownClears.push({ previous, value });
       if (beforeStamp === null || !sameStamp(beforeStamp, await this.#stamp())) return false;
       const removed = await fs.unlink(this.file).then(() => true, error => {
         if (error.code === 'ENOENT') return false;
@@ -377,12 +393,12 @@ export class JournalStore {
       // is stamped when read and again just before the write; when it changed in between due to
       // another append in the same clear generation, this document is discarded and the file read
       // again, at most three times. If a clear landed after this batch was queued (clearGeneration
-      // changed or the marker moved past startFence), the older batch is discarded.
+      // changed or the marker is no longer startFence), the older batch is discarded.
       for (let attempt = 0; attempt <= 3; attempt++) {
         if (this.closed || generation !== this.clearGeneration) return false;
         const now = this.now();
         const fence = await this.#readMarker();
-        if (fence === null || fence > startFence || generation !== this.clearGeneration) return false;
+        if (fence === null || fence !== startFence || generation !== this.clearGeneration) return false;
         const { document: stored, stamp } = await this.#load();
         await this.onLoaded();
         if (this.closed || generation !== this.clearGeneration) return false;

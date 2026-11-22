@@ -521,7 +521,8 @@ test('bridge: heartbeat to real chunk, both tab inputs, ACK and clean resource t
   f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
   const payload = await f.payload(2, value => value.uiNonce === nonce && value.ready);
   assert.equal(payload.epoch, JSON.parse(await fs.readFile(f.lockPath, 'utf8')).epoch);
-  assert.deepEqual(payload.sessions.map(session => session.id), ['claude', 'codex', 'copilot', 'agy']);
+  // AGY was not started, so the addon is not sent its slot; a not-started Copilot keeps its place.
+  assert.deepEqual(payload.sessions.map(session => session.id), ['claude', 'codex', 'copilot']);
   const heartbeat = encodeHeartbeat(payload.epoch, 2, 0, nonce);
   const first = { epoch: payload.epoch, id: 1, tab: 'codex', action: 'text', text: 'Codex request' };
   for (let repeat = 0; repeat < 2; repeat++) for (const frame of encodeMessage(first)) f.state.capture.emit(image(frame, heartbeat));
@@ -1022,7 +1023,7 @@ test('bridge: a published chunk carries the session history the pair provides', 
   const payload = await f.payload(2, value => value.uiNonce === nonce && value.ready);
   assert.deepEqual(payload.sessions.map(session => session.history),
     [['claude earlier |cffff0000red|r', 'claude later'], ['codex earlier |cffff0000red|r', 'codex later'],
-      ['copilot earlier |cffff0000red|r', 'copilot later'], ['agy earlier |cffff0000red|r', 'agy later']]);
+      ['copilot earlier |cffff0000red|r', 'copilot later']]);
   assert.equal(payload.sessions[0].lines.length, 10);
   f.state.pair.finish(); assert.equal(await within(f.running), undefined);
 });

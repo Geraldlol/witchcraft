@@ -57,6 +57,10 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
     ? `Cannot use the client ring at ${path.dirname(lockPath)} (${reason}). Check the ring lock at ${lockPath}.`
     : `A Witchcraft bridge owns ${lockPath} (${reason}). Stop it first; `
       + 'the witchcraft-daemon skill\'s status action shows whether that process is still the bridge.'), { code: 'LOCK_HELD' });
+  const judge = name => staleReason(name, { now, bootTime, isAlive, fs, recordType }).catch(error => {
+    if (error.code === 'ENOENT') return { gone: true };
+    throw error;
+  });
   const reclaimed = [];
   try {
     await handle.writeFile(JSON.stringify(record));
@@ -78,10 +82,6 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
       const claim = recordType && `${lockPath}.recover-${verdict.identity.dev}-${verdict.identity.ino}`;
       if (claim) {
         const claimed = held => refuse(`recovery is already claimed; retry, or if its recorded process has exited and no operation is running, set aside ${held}`);
-        const judge = name => staleReason(name, { now, bootTime, isAlive, fs, recordType }).catch(error => {
-          if (error.code === 'ENOENT') return { gone: true };
-          throw error;
-        });
         for (let retry = 0; ; retry++) {
           try { await fs.link(temporary, claim); break; }
           catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -107,7 +107,14 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
         }
       }
       try {
-        if (claim && !same(await fs.lstat(lockPath, { bigint: true }), verdict.identity)) throw refuse('another operation took it');
+        if (claim) {
+          // Judged again under the claim: the decision to set a lock aside rests on the record that is
+          // there now, not only on an inode number, which a new live lock can reuse after a clean release.
+          const again = await judge(lockPath);
+          if (again.gone) continue;
+          if (again.live) throw refuse(again.live);
+          if (!same(again.identity, verdict.identity)) throw refuse('another operation took it');
+        }
         // Set-aside files are kept on purpose: each pins the judged inode, so it is never reused.
         await fs.rename(lockPath, aside);
       } catch (error) { if (error.code === 'ENOENT') continue; throw error; }

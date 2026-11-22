@@ -274,3 +274,43 @@ test('two concurrent recoveries of a dead lock and a dead claim never make two o
     }
   }
 });
+
+// A dead ring lock and a recoverer whose fs runs `before` once, just before it links the recovery claim.
+async function deadLockWithClaimHook(t, before) {
+  const root = await sandbox(t), lockPath = path.join(root, RING_LOCK_NAME), recordType = 'witchcraft-ring-v1';
+  await fs.writeFile(lockPath, JSON.stringify({ type: recordType, pid: process.pid + 1, startedAt: new Date().toISOString() }));
+  let fired = false;
+  const files = { ...fs, async link(from, to) {
+    if (!fired && to.startsWith(lockPath + '.recover-')) { fired = true; await before(lockPath); }
+    return fs.link(from, to);
+  } };
+  const take = () => acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid, tag: 'A' },
+    tag: 'A', fs: files, isAlive: pid => pid === process.pid });
+  return { root, lockPath, take, fired: () => fired };
+}
+
+test('a recoverer never sets aside a live lock that reuses the judged inode after a clean release', async t => {
+  const live = JSON.stringify({ type: 'witchcraft-ring-v1', pid: process.pid, startedAt: new Date().toISOString(), tag: 'B' });
+  // The dead owner's lock is released and B's new lock gets the same inode: an in-place rewrite keeps it.
+  const { root, lockPath, take, fired } = await deadLockWithClaimHook(t, file => fs.writeFile(file, live));
+  const judged = await fs.stat(lockPath, { bigint: true });
+  await assert.rejects(take(), { code: 'LOCK_HELD' });
+  assert.ok(fired());
+  assert.equal((await fs.stat(lockPath, { bigint: true })).ino, judged.ino);
+  assert.equal(await fs.readFile(lockPath, 'utf8'), live);
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.stale-') || name.includes('.recover-')), []);
+});
+
+test('a dead lock that vanishes before the recovery claim is taken on the retry', async t => {
+  const { root, lockPath, take, fired } = await deadLockWithClaimHook(t, file => fs.unlink(file));
+  const taken = await take();
+  try {
+    assert.ok(fired());
+    assert.equal(JSON.parse(await fs.readFile(lockPath, 'utf8')).tag, 'A');
+    assert.deepEqual(taken.reclaimed, []);
+    assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.recover-')), []);
+  } finally {
+    await taken.handle.close();
+    await releaseOwnedLock({ lockPath, identity: taken.identity, tag: 'A' });
+  }
+});

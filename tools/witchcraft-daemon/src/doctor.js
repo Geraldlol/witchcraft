@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AGENT_TABS, selectAgentCommands } from './agents.js';
-import { pidAlive } from './bridge-lock.js';
+import { RING_LOCK_NAME, pidAlive } from './bridge-lock.js';
 import { validateRegion } from './capture.js';
 import { checkClientBuild } from './client-build.js';
 import { LOCAL_DIR, REPO_ROOT, loadConfig } from './config.js';
@@ -139,6 +139,14 @@ export async function runDoctor({ options = {}, repoRoot = REPO_ROOT, localDir =
   const startedAt = Date.parse(lock?.startedAt);
   if (!Number.isSafeInteger(lock?.pid) || lock.pid <= 0 || !isAlive(lock.pid) || !Number.isFinite(startedAt)
       || !/^[0-9a-f]{8}$/u.test(lock.epoch) || lock.epoch === '00000000') {
+    // Another installation may hold the client's ring lock; a start here would be refused. Read only.
+    let ring;
+    try { ring = await json(path.join(config.addonsDir, RING_LOCK_NAME)); } catch { /* No readable ring lock. */ }
+    if (ring?.type === 'witchcraft-ring-v1' && Number.isSafeInteger(ring.pid) && ring.pid > 0 && isAlive(ring.pid)) {
+      add('daemon', 'wait', `Another process holds this client's ring lock (pid ${ring.pid}).`,
+        "Stop the other installation's witchcraft run, or wait for its init to finish, then start here.");
+      return result();
+    }
     add('daemon', 'wait', 'No live daemon observed for this installation.', 'Start witchcraft run with your chosen assistant.');
     return result();
   }

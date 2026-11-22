@@ -106,8 +106,9 @@ class MacScreen:
     """macOS Quartz / CoreGraphics window reader speaking the same interface as Screen."""
 
     K_ON_SCREEN_NO_DESKTOP = 1 | 16
+    K_ALL_NO_DESKTOP = 16
     K_INCLUDING_WINDOW = 8
-    K_IMAGE_NOMINAL_FRAMELESS = 1 | 16
+    K_IMAGE_FRAMELESS = 1
     K_PLIST_XML = 100
     K_BITMAP_BGRX_32LE = 6 | (2 << 12)
 
@@ -147,11 +148,13 @@ class MacScreen:
         cf.CFRelease.restype = None
         cf.CFRelease.argtypes = [ctypes.c_void_p]
         self._bounds = {"X": 0.0, "Y": 0.0, "Width": 0.0, "Height": 0.0}
+        self._backing = 1.0
         self.pid = None
         self.window = self._find()
 
-    def _windows(self):
-        info = self.cg.CGWindowListCopyWindowInfo(self.K_ON_SCREEN_NO_DESKTOP, 0)
+    def _windows(self, on_screen_only=True):
+        flags = self.K_ON_SCREEN_NO_DESKTOP if on_screen_only else self.K_ALL_NO_DESKTOP
+        info = self.cg.CGWindowListCopyWindowInfo(flags, 0)
         if not info:
             return []
         try:
@@ -170,23 +173,34 @@ class MacScreen:
         finally:
             self.cf.CFRelease(info)
 
+    def _refresh_backing(self):
+        probe = CGRect(CGPoint(float(self._bounds.get("X", 0.0)), float(self._bounds.get("Y", 0.0))), CGSize(1.0, 1.0))
+        image = self.cg.CGWindowListCreateImage(probe, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_FRAMELESS)
+        if not image:
+            return
+        try:
+            img_w = self.cg.CGImageGetWidth(image)
+            if img_w > 0:
+                self._backing = max(1.0, float(img_w))
+        finally:
+            self.cg.CGImageRelease(image)
+
     def _find(self):
         override = os.environ.get("WITCHCRAFT_WINDOW_ID")
-        windows = self._windows()
+        windows = self._windows(on_screen_only=True)
         if override:
             target = int(override, 0)
-            for entry in windows:
+            for entry in windows or self._windows(on_screen_only=False):
                 if entry.get("kCGWindowNumber") == target:
                     self._bounds = entry.get("kCGWindowBounds") or self._bounds
                     self.pid = entry.get("kCGWindowOwnerPID")
                     break
             return target
-        matches = []
-        for entry in windows:
-            if mac_game_window(entry):
-                bounds = entry["kCGWindowBounds"]
-                area = int(bounds.get("Width", 0)) * int(bounds.get("Height", 0))
-                matches.append((area, entry))
+        matches = [(int(entry["kCGWindowBounds"].get("Width", 0)) * int(entry["kCGWindowBounds"].get("Height", 0)), entry)
+                   for entry in windows if mac_game_window(entry)]
+        if not matches:
+            matches = [(int(entry["kCGWindowBounds"].get("Width", 0)) * int(entry["kCGWindowBounds"].get("Height", 0)), entry)
+                       for entry in self._windows(on_screen_only=False) if mac_game_window(entry)]
         if not matches:
             raise RuntimeError("No World of Warcraft window found. Start the game, or set WITCHCRAFT_WINDOW_ID.")
         _, best = max(matches, key=lambda item: item[0])
@@ -196,19 +210,24 @@ class MacScreen:
 
     def size(self, window=None):
         target = window or self.window
-        for entry in self._windows():
+        for entry in self._windows(on_screen_only=True):
             if entry.get("kCGWindowNumber") == target:
                 bounds = entry.get("kCGWindowBounds") or {}
-                width, height = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
+                width, height = float(bounds.get("Width", 0)), float(bounds.get("Height", 0))
                 if width > 0 and height > 0:
                     if target == self.window:
                         self._bounds = bounds
                         self.pid = entry.get("kCGWindowOwnerPID")
-                    return width, height
-        raise RuntimeError("The game window is gone. Start the game and try again.")
+                        self._refresh_backing()
+                    backing = self._backing if target == self.window else 1.0
+                    return max(1, int(round(width * backing))), max(1, int(round(height * backing)))
+        raise GrabFailed("The game window is not on screen. Keep World of Warcraft visible and not minimized.")
 
     def focused(self):
-        for entry in self._windows():
+        windows = self._windows(on_screen_only=True)
+        if not any(entry.get("kCGWindowNumber") == self.window for entry in windows):
+            return False
+        for entry in windows:
             if entry.get("kCGWindowLayer", -1) != 0:
                 continue
             bounds = entry.get("kCGWindowBounds") or {}
@@ -222,10 +241,15 @@ class MacScreen:
         return False
 
     def grab(self, x, y, width, height):
-        ox = float(self._bounds.get("X", 0.0)) + x
-        oy = float(self._bounds.get("Y", 0.0)) + y
-        rect = CGRect(CGPoint(ox, oy), CGSize(float(width), float(height)))
-        image = self.cg.CGWindowListCreateImage(rect, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_NOMINAL_FRAMELESS)
+        scale = max(1.0, float(self._backing))
+        pt_x0 = int(x // scale)
+        pt_y0 = int(y // scale)
+        pt_w = max(1, int(-(-(x + width) // scale)) - pt_x0)
+        pt_h = max(1, int(-(-(y + height) // scale)) - pt_y0)
+        ox = float(self._bounds.get("X", 0.0)) + pt_x0
+        oy = float(self._bounds.get("Y", 0.0)) + pt_y0
+        rect = CGRect(CGPoint(ox, oy), CGSize(float(pt_w), float(pt_h)))
+        image = self.cg.CGWindowListCreateImage(rect, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_FRAMELESS)
         if not image:
             raise GrabFailed("The game window could not be read. Grant Screen Recording permission in System Settings > Privacy & Security, and keep the game visible.")
         try:
@@ -233,6 +257,11 @@ class MacScreen:
             img_h = self.cg.CGImageGetHeight(image)
             if img_w <= 0 or img_h <= 0:
                 raise GrabFailed("The game window could not be read. Keep it visible and not minimized.")
+            actual_scale = img_w / pt_w
+            if actual_scale >= 1.0 and abs(actual_scale - self._backing) > 0.01:
+                self._backing = actual_scale
+            sub_x = max(0, min(max(0, img_w - width), int(round(x - pt_x0 * actual_scale))))
+            sub_y = max(0, min(max(0, img_h - height), int(round(y - pt_y0 * actual_scale))))
             buf = (ctypes.c_ubyte * (width * height * 4))()
             space = self.cg.CGColorSpaceCreateDeviceRGB()
             if not space:
@@ -242,7 +271,7 @@ class MacScreen:
                 if not ctx:
                     raise RuntimeError("Could not create CGBitmapContext")
                 try:
-                    draw_rect = CGRect(CGPoint(0.0, 0.0), CGSize(float(width), float(height)))
+                    draw_rect = CGRect(CGPoint(-float(sub_x), float(height - img_h + sub_y)), CGSize(float(img_w), float(img_h)))
                     self.cg.CGContextDrawImage(ctx, draw_rect, image)
                 finally:
                     self.cg.CGContextRelease(ctx)
@@ -437,25 +466,31 @@ def real_pixel(v, scale):
     """The window pixel that stands for game pixel v.
 
     An upscaled client blends the window pixels at each strip cell's edge with the neighbouring cell
-    (about 17% at 1.5x, just past the decoder's tolerance). The strip is anchored at the window
-    origin on a 6-pixel grid, so each game pixel is read from inside its own cell, 1.5 window pixels
-    clear of both edges.
+    (about 17% at 1.5x, just past the decoder's tolerance). The strip is anchored on a 6-pixel grid,
+    so for scale > 1 each game pixel is read from inside its own cell, 1.5 window pixels clear of
+    both edges. For 0.5 <= scale < 1 (e.g. 3 nominal points per 6-pixel cell on a 2x display), each
+    game pixel maps proportionally across the sub-6-pixel cell so sample() reconstructs 6-pixel cells.
     """
     if scale == 1:
         return v
+    if scale < 1:
+        return int((v + 0.5) * scale)
     cell, k = divmod(v, CELL)
     start, width = cell * CELL * scale, CELL * scale
     return int(start + 1.5 + (k + 0.5) * (width - 3) / CELL)
 
 
 def calibration_size(window_width, window_height, scale):
-    """The largest game-pixel capture whose last row and column still map inside the window."""
+    """The largest game-pixel capture whose last row and column still map inside the window, within MAX_PIXELS."""
     size = []
     for window in (window_width, window_height):
-        count = int(window / scale)
+        count = max(1, int(window / scale))
         while count > 1 and real_pixel(count - 1, scale) >= window:  # real_pixel never decreases in v
             count -= 1
         size.append(count)
+    if size[0] * size[1] > MAX_PIXELS:
+        ratio = (MAX_PIXELS / (size[0] * size[1])) ** 0.5
+        size = [max(1, int(size[0] * ratio)), max(1, int(size[1] * ratio))]
     return size[0], size[1]
 
 
@@ -477,26 +512,18 @@ def level(word):
     return value
 
 
-def measure_scale(screen, window_width):
-    """Window pixels per game pixel, measured from the /witch calibrate strip at the window origin.
-
-    An unscaled window returns exactly 1.0. Otherwise the ratio is rarely a round number (a 2560x1440
-    client in a 3840x2160 window measured 1.515), and 1% of error walks a whole pixel across the 22
-    cells, so every ratio that reads all four corners of every cell correctly is collected and the
-    middle of the longest run of them is used.
-    """
-    width = min(window_width, CELLS * CELL * 4 + 8)
-    row = screen.grab(0, 4, width, 1)
+def _match_row_scale(row, width, min_step, max_step, exact_candidates=()):
     expected = [level((r << 16) | (g << 8) | b) for r, g, b in calibration_cells()]
 
     def passes(scale):
         return real_pixel(CELLS * CELL - 1, scale) < width and all(
             level(row[real_pixel(i * CELL + k, scale)]) == expected[i] for i in range(CELLS) for k in (0, CELL - 1))
 
-    if passes(1.0):
-        return 1.0
+    for exact in exact_candidates:
+        if passes(exact):
+            return exact
     runs, run = [], []
-    for step in range(1000, 4001):
+    for step in range(min_step, max_step + 1):
         scale = step / 1000
         if passes(scale):
             run.append(scale)
@@ -509,6 +536,35 @@ def measure_scale(screen, window_width):
         return None
     best = max(runs, key=len)
     return best[len(best) // 2]
+
+
+def measure_scale(screen, window_width, window_height=None):
+    """Window pixels per game pixel (0.5..4.0), measured from the /witch calibrate strip.
+
+    An unscaled window returns 1.0; a 3-point-per-cell nominal Retina capture returns 0.5; an
+    upscaled Retina capture returns 2.0 (or the measured fractional ratio). Also scans below any
+    window title bar when window_height is supplied and row y=4 / y=1 did not match.
+    """
+    width = min(window_width, CELLS * CELL * 4 + 8)
+    if width < CELLS * 3:
+        return None
+    row4 = screen.grab(0, 4, width, 1)
+    found = _match_row_scale(row4, width, 1000, 4000, exact_candidates=(1.0, 2.0))
+    if found is not None:
+        return found
+    row1 = row4 if window_height is not None and window_height <= 4 else screen.grab(0, 1, width, 1)
+    found = _match_row_scale(row1, width, 495, 999, exact_candidates=(0.5,))
+    if found is not None:
+        return found
+    if window_height is not None and window_height > 16:
+        for y in range(2, min(window_height, 128)):
+            if y in (1, 4):
+                continue
+            band = screen.grab(0, y, width, 1)
+            found = _match_row_scale(band, width, 495, 4000, exact_candidates=(1.0, 2.0, 0.5))
+            if found is not None:
+                return found
+    return None
 
 
 def sample(screen, x, y, width, height, scale):
@@ -552,6 +608,28 @@ def frame_record(screen, mode, x, y, width, height, scale):
             "captureMs": elapsed, "foreground": bool(foreground), "scale": scale, "rgba": encoded}
 
 
+def cycle_record(screen, mode, x, y, width, height, scale, calibration=False):
+    """One cycle of main(): resolves window geometry and returns a frame or Stream idle record."""
+    if mode == "Stream" and not screen.focused():
+        return {"protocol": 1, "type": "idle", "foreground": False}
+    try:
+        window_width, window_height = screen.size()
+    except GrabFailed:
+        if mode == "Stream":
+            return {"protocol": 1, "type": "idle", "foreground": False}
+        raise
+    if calibration:
+        x, y = 0, 0
+        width, height = calibration_size(window_width, window_height, scale)
+    if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
+        raise RuntimeError("Capture exceeds the bounded dimensions (sixteen million pixels).")
+    if x < 0 or y < 0 or real_pixel(x + width - 1, scale) >= window_width or real_pixel(y + height - 1, scale) >= window_height:
+        if mode == "Stream":
+            return {"protocol": 1, "type": "idle", "foreground": False}
+        raise RuntimeError("The calibrated strip is outside the game window. Calibrate again.")
+    return frame_record(screen, mode, x, y, width, height, scale)
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-Mode", choices=["Stream", "Once"], default="Stream")
@@ -565,27 +643,22 @@ def main():
     try:
         if args.Calibration and args.Mode != "Once":
             raise RuntimeError("Calibration is a single capture, never a stream.")
-        if args.Scale != 0 and not 1 <= args.Scale <= 4:
-            raise RuntimeError("Scale must be between 1 and 4.")
+        if args.Scale != 0 and not 0.5 <= args.Scale <= 4:
+            raise RuntimeError("Scale must be between 0.5 and 4.")
         screen = MacScreen() if sys.platform == "darwin" else Screen()
         if args.Scale == 0:
-            measured = measure_scale(screen, screen.size()[0]) if args.Calibration else 1.0
+            if args.Calibration:
+                win_w, win_h = screen.size()
+                measured = measure_scale(screen, win_w, win_h)
+            else:
+                measured = 1.0
             if measured is None:
                 raise RuntimeError("No Witchcraft calibration strip at the top-left of the game window. "
                                    "Show /witch calibrate and keep that corner uncovered.")
             args.Scale = measured
         while True:
             cycle = time.monotonic()
-            window_width, window_height = screen.size()
-            x, y, width, height = args.X, args.Y, args.Width, args.Height
-            if args.Calibration:
-                x, y = 0, 0
-                width, height = calibration_size(window_width, window_height, args.Scale)
-            if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
-                raise RuntimeError("Capture exceeds the bounded dimensions (sixteen million pixels).")
-            if x < 0 or y < 0 or real_pixel(x + width - 1, args.Scale) >= window_width or real_pixel(y + height - 1, args.Scale) >= window_height:
-                raise RuntimeError("The calibrated strip is outside the game window. Calibrate again.")
-            write(frame_record(screen, args.Mode, x, y, width, height, args.Scale))
+            write(cycle_record(screen, args.Mode, args.X, args.Y, args.Width, args.Height, args.Scale, args.Calibration))
             if args.Mode == "Once":
                 break
             time.sleep(max(0.001, 0.2 - (time.monotonic() - cycle)))

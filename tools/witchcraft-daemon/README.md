@@ -8,9 +8,20 @@ The WoW MCP bridge adds six read-only game-context tools (context, character, qu
 
 From this repository's `tools/witchcraft-daemon` folder:
 
+On Windows (PowerShell):
+
 ```powershell
 npm.cmd ci --ignore-scripts --no-fund
 npm.cmd rebuild node-pty --ignore-scripts=false --foreground-scripts
+node bin/witchcraft.js init --ring 3000
+node bin/witchcraft.js doctor
+```
+
+On macOS and Linux:
+
+```sh
+npm ci --ignore-scripts --no-fund
+npm rebuild node-pty --ignore-scripts=false --foreground-scripts
 node bin/witchcraft.js init --ring 3000
 node bin/witchcraft.js doctor
 ```

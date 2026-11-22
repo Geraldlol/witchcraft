@@ -76,10 +76,30 @@ end
 
 local function key(entry) return entry.kind .. "\0" .. entry.message .. "\0" .. (entry.stack[1] or "") end
 
+-- Keep the selected identity apart from the capped history so evicting an old
+-- row (or saturating its lifetime count) does not lose new occurrences.
+local function validWatch(watch)
+    if type(watch) ~= "table" or getmetatable(watch) ~= nil or watch.version ~= 1
+        or not KINDS[watch.kind] or type(watch.message) ~= "string" or #watch.message > MAX_MESSAGE
+        or type(watch.frame) ~= "string" or #watch.frame > MAX_STACK
+        or not integer(watch.startSession, 1, MAX_STAMP) or not integer(watch.total, 0, MAX_COUNT)
+        or not integer(watch.sinceCheck, 0, watch.total) then return false end
+    local check = watch.check
+    return check == nil or (type(check) == "table" and getmetatable(check) == nil
+        and integer(check.session, 1, MAX_STAMP) and integer(check.total, 0, watch.total)
+        and integer(check.inLoad, 0, check.total) and integer(check.interval, 0, check.total))
+end
+
 function methods:List() return self.global and self.global.errors or self.buffer end
 
 -- The list is kept in the order entries were last seen, oldest first.
 function methods:Merge(entry)
+    local watch = self.watch
+    if watch and entry.kind == watch.kind and entry.message == watch.message and (entry.stack[1] or "") == watch.frame then
+        watch.total = math.min(MAX_COUNT, watch.total + entry.count)
+        watch.sinceCheck = math.min(MAX_COUNT, watch.sinceCheck + entry.count)
+        self.watchInLoad = math.min(MAX_COUNT, self.watchInLoad + entry.count)
+    end
     local list = self:List()
     for index, existing in ipairs(list) do
         if key(existing) == key(entry) then
@@ -148,6 +168,8 @@ function methods:Attach(global)
     local session = integer(global.errorSession, 0, MAX_STAMP - 1) and global.errorSession or 0
     global.errors, global.errorSession = saved, session + 1
     self.global, self.session = global, session + 1
+    self.watch = validWatch(global.errorWatch) and global.errorWatch or nil
+    self.watchInLoad, self.listed = 0, nil
     local buffered = self.buffer
     self.buffer = {}
     for _, entry in ipairs(buffered) do entry.session = self.session; self:Merge(entry) end
@@ -167,6 +189,84 @@ end
 
 function methods:Clear()
     if self.global then self.global.errors = {} else self.buffer = {} end
+    self:Unwatch()
+end
+
+function methods:Unwatch()
+    if self.global then self.global.errorWatch = nil end
+    self.watch, self.listed, self.watchInLoad = nil, nil, 0
+end
+
+local function display(value) return (value:gsub("|", "||")) end
+local function countText(value) return tostring(value) .. (value == MAX_COUNT and "+" or "") end
+
+function methods:WatchStatus(emit)
+    local watch = self.watch
+    if not watch then emit("No active error watch. Use /witch errors list to select one."); return end
+    emit(string.format("Watching [%s] %s", watch.kind, display(watch.message)))
+    if watch.frame ~= "" then emit(display(watch.frame)) end
+    emit(string.format("%s matches since selection (UI load %d). %s this load (UI load %d).",
+        countText(watch.total), watch.startSession, countText(self.watchInLoad), self.session))
+    local check = watch.check
+    if check then
+        emit(string.format("Last player-marked attempt on UI load %d: %s matches in that load by then (%s since selection).",
+            check.session, countText(check.inLoad), countText(check.total)))
+        emit(string.format("%s new matches in the marked interval. %s since that checkpoint.",
+            countText(check.interval), countText(watch.sinceCheck)))
+    else
+        emit("No reproduction attempt marked. After repeating the steps, use /witch errors checked.")
+    end
+end
+
+local usage = "/witch errors list | watch <number> | status | checked | unwatch | clear"
+
+function methods:Command(arg, emit)
+    local action, number = arg:lower():match("^(%S*)%s*(.-)$")
+    if action == "watch" then
+        if not self.global then emit("Error history has not loaded yet."); return end
+        if self.global.errorWatch ~= nil and not self.watch then
+            emit("Saved watch is unreadable. Use /witch errors unwatch to discard it."); return
+        end
+        local entry
+        if number == "" then entry = self:Newest()[1]
+        elseif number:match("^%d%d?$") and self.listed then entry = self.listed[tonumber(number)] end
+        if not entry then emit("Use /witch errors list, then /witch errors watch <number>."); return end
+        self.watch = { version = 1, kind = entry.kind, message = entry.message, frame = entry.stack[1] or "",
+            startSession = self.session, total = 0, sinceCheck = 0 }
+        self.global.errorWatch, self.watchInLoad = self.watch, 0
+        self:WatchStatus(emit)
+        return
+    end
+    if number ~= "" then emit(usage); return end
+    if action == "clear" then self:Clear(); emit("Errors cleared"); return end
+    if action == "unwatch" then self:Unwatch(); emit("Error watch removed."); return end
+    if action == "checked" or action == "status" then
+        if action == "checked" and self.watch then
+            self.watch.check = { session = self.session, total = self.watch.total, inLoad = self.watchInLoad, interval = self.watch.sinceCheck }
+            self.watch.sinceCheck = 0
+        end
+        self:WatchStatus(emit)
+        return
+    end
+    if action ~= "list" and action ~= "" then emit(usage); return end
+    local list = self:Newest()
+    if action == "list" then self.listed = list end -- Numbering stays stable while new errors arrive.
+    if #list == 0 then emit("No Lua errors stored"); return end
+    if action == "list" then
+        for i, entry in ipairs(list) do
+            local frame = entry.stack[1]
+            emit(string.format("%d. [%s x%s] %s%s", i, entry.kind, countText(entry.count), display(entry.message),
+                frame and ("  " .. display(frame)) or ""))
+        end
+        emit("Select a row with /witch errors watch <number>.")
+    else
+        local newest = list[1]
+        emit(string.format("Lua errors: %d stored. Newest [%s x%s, UI load %d]", #list, newest.kind, countText(newest.count), newest.session))
+        emit(display(newest.message))
+        if newest.stack[1] then emit(display(newest.stack[1])) end
+        if self.watch then self:WatchStatus(emit) end
+        emit(usage)
+    end
 end
 
 function methods:Stack()

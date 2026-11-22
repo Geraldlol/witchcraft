@@ -23,4 +23,6 @@ Leave anything you cannot determine as unknown.
 
 ## Diagnostics (optional)
 
+From `tools/witchcraft-daemon`, run `node bin/witchcraft.js doctor --json` and paste the redacted report. Add `--only` with your assistant if you use a single tab.
+
 Include the relevant daemon error, `/witch status` output, or a screenshot if it helps. Share only the short section needed to explain the problem; remove account names, private paths, prompts, tokens, and other personal information.

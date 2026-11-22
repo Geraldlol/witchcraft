@@ -202,6 +202,14 @@ function methods:OnChunk(payload)
     end
     if incomingEpoch == self.epoch and payload.bindingProtocol == 1 and payload.bindingNonce == self.bindingNonce
         and payload.bindingAck < self.bindingAck then return self:Reject("binding acknowledgement regression") end
+    local promptResults = {}
+    if payload.promptProtocol == 1 then
+        if not array(payload.promptResults, 64) then return self:Reject("prompt receipts") end
+        for _, receipt in ipairs(payload.promptResults) do
+            if not integer(receipt, -payload.ack, payload.ack) or receipt == 0 then return self:Reject("prompt receipt identity") end
+            promptResults[math.abs(receipt)] = receipt > 0
+        end
+    end
     local copied, reason = sessions(payload.sessions, payload.rows)
     if not copied then return self:Reject(reason) end
     local newEpoch = self.epoch ~= incomingEpoch
@@ -226,6 +234,7 @@ function methods:OnChunk(payload)
     return {
         accepted = true, changed = payload.changed, delay = self.delay, newEpoch = newEpoch,
         epoch = incomingEpoch, ack = payload.ack, cols = payload.cols, rows = payload.rows, sessions = copied,
+        promptProtocol = payload.promptProtocol, promptResults = promptResults,
         contextProtocol = payload.contextProtocol, contextAck = payload.contextAck, contextWant = payload.contextWant,
         contextWantMask = payload.contextWantMask,
         bindingProtocol = payload.bindingProtocol, bindingNonce = payload.bindingNonce, bindingAck = payload.bindingAck,

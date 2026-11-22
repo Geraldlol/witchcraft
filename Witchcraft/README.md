@@ -1,6 +1,6 @@
 # Witchcraft
 
-Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.3.1`, interface `16001`.
+Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.4.0`, interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 
@@ -37,7 +37,9 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch` | Show or hide the window |
 | `/witch status` | Build, connection, ring cursor, pending input and session identifiers |
 | `/witch settings` | Open Esc > Options > AddOns > Witchcraft |
-| `/witch errors` / `/witch errors clear` | Show the stored error count and newest entry / empty the list |
+| `/witch errors` / `/witch errors list` | Show the newest entry or list the 20 most recent distinct errors, warnings and blocked actions |
+| `/witch errors watch <number>` / `/witch errors status` | Watch a numbered row across UI reloads or read its current counts |
+| `/witch errors checked` / `/witch errors unwatch` / `/witch errors clear` | Mark a reproduction attempt, stop watching, or clear both history and watch |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Save, list or remove reusable prompts for the **/** menu |
 | `/witch bindprobe` | Qualify the default binding link once per daemon/UI session outside combat |
 | `/witch guide` | Quest-help and loot-goal panel |
@@ -52,8 +54,19 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch hz 0.125-2` | Active chunk load rate; idle loads back off |
 | `/witch calibrate` / `/witch calibrate off` | Show calibration colors / return to the live strip |
 | `/witch burstprobe [200-2000\|corrupt\|off]` | Set page dwell in milliseconds, emit the negative checksum control, or hide the dense probe |
-| `/witch resend` | Explicitly retry retained input after a daemon restart |
+| `/witch pending` | List retained input by ID and destination |
+| `/witch inspect <id>` | Open the retained text for review and copying |
+| `/witch resend <id>` | Submit the entire reviewed prompt to the current host |
+| `/witch discard <id>` | Remove the reviewed input from the saved queue |
 | `/witch reset` | Reload the UI; waits until combat ends |
+
+## Watch an error across reloads
+
+1. Click **WoW context → Error Log**, or run `/witch errors list`, to print numbered rows in chat. Choose the message and first stack frame you want to follow. Run `/witch errors watch 2` for row 2, or `/witch errors watch` to watch the latest entry. Starting a watch replaces the previous watch and starts counting at zero.
+2. Apply your change and reload the UI. Use `/witch errors status` to see how many matches occurred since selection and during the current UI load. Startup errors captured before the database attaches are included when retained in the early error buffer.
+3. Repeat the steps that caused the error, then run `/witch errors checked`. This saves the current load and counts as your latest attempt. Each checkpoint reports new matches since the preceding checkpoint, or since selection for the first one. Zero means the recorder observed no matching occurrence during that interval. A changed message or first frame gets a separate row.
+
+The watch follows one exact kind, message and first frame across the account's characters. It remains active if that row drops out of the 20-entry history. Its counts and the player-marked attempt stay in local SavedVariables. `/witch errors unwatch` removes the selection and its checkpoint.
 
 ## Current limits
 
@@ -65,6 +78,12 @@ The window shows the current terminal screen and the bounded history supplied by
 
 The main input accepts one line up to 600 UTF-8 bytes. **/ > Write a long prompt** accepts multiple lines totaling about 4,600 bytes. Pixel transmission is slower than the fast link: a full 600-byte line takes about 11.2 seconds at five frames per second, plus scheduling and acknowledgement time. No per-message reload is used. Exhausting the single-use chunk ring triggers a guarded reload outside combat.
 
-Pending input and window preferences use `WitchcraftDB`; current terminal screens stay in memory. WoW writes SavedVariables on reload/logout, so the queue is not guaranteed to survive a client crash before that flush. A new daemon session never automatically submits input retained from an older session.
+Pending input and window preferences use `WitchcraftDB`; current terminal screens stay in memory. WoW writes SavedVariables on reload/logout, so the queue is not guaranteed to survive a client crash before that flush. After a daemon restart, click **STALE · REVIEW** or run `/witch pending` and `/witch inspect <id>`. Check the terminal before retrying. An interrupted submission may already have reached it. Use `/witch resend <id>` to retry the complete prompt or `/witch discard <id>` to clear it. Pending text saved by an older version can be an incomplete fragment. Copy it, reconstruct the intended text in the composer, and discard the old entry.
 
 `Media/DejaVuSansMono.ttf` and its license are bundled unchanged. Restart the client after installing the font. Generated `Witchcraft_Chunk_NNNN` addons belong in the game AddOns directory and are not part of the source ZIP.
+
+## Building the addon ZIP
+
+From the repository root, run `python tools/verify-release.py --output-dir dist` for the current commit. On a release tag, add `--tag vX.Y.Z` using that tag's version. The script reads the Git blobs, checks the addon and daemon versions and load paths, and prints the ZIP's SHA-256. Uncommitted edits enter the package after they are committed.
+
+For a release, download the **Verify addon ZIP** job's tagged artifact, extract the inner `Witchcraft-X.Y.Z.zip`, and attach that ZIP to the GitHub release. The published-release job downloads the asset and checks its contents and SHA-256 against a fresh build of the same tag.

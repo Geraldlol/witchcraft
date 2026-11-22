@@ -2,11 +2,18 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chunkName, assertOwnedChunk, atomicWrite } from './ring.js';
 import { serializeChunk } from './lua.js';
+import { acquireRingLock } from './bridge-lock.js';
 
 export async function initializeRing({ addonsDir, ringSize = 3000, clean = false }) {
   if (!Number.isInteger(ringSize) || ringSize < 3 || ringSize > 9999) throw new Error('Ring size must be 3..9999');
   const root = path.resolve(addonsDir);
   if ((await fs.lstat(root)).isSymbolicLink() || await fs.realpath(root) !== root) throw new Error('Refusing linked AddOns directory');
+  const release = await acquireRingLock(root, clean ? 'clean' : 'init');
+  try { return await initializeSlots(root, ringSize, clean); }
+  finally { await release(); }
+}
+
+async function initializeSlots(root, ringSize, clean) {
   const existing = (await fs.readdir(root)).filter(name => /^Witchcraft_Chunk_\d{4}$/u.test(name));
   const owned = [];
   // Validate every existing reserved path before making any change.

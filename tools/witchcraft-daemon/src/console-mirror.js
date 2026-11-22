@@ -53,17 +53,18 @@ function wrapRuns(runs, cols) {
  */
 export class ConsoleMirror {
   constructor({ pid, historyRows = 200, intervalMs = 250, cols = CONSOLE_DEFAULT_COLS,
-    rows = CONSOLE_DEFAULT_ROWS, helper = HELPER, spawn = childProcess.spawn,
+    rows = CONSOLE_DEFAULT_ROWS, helper = HELPER, spawn = (name, args, options) => childProcess.spawn(resolveProgram(name), args, options),
     onError = () => {}, onFrame = () => {}, onExit = () => {} } = {}) {
     if (!Number.isInteger(pid) || pid <= 0) throw new TypeError('A console mirror needs the process id of a console');
     Object.assign(this, { pid, historyRows, intervalMs, cols, rows, helper, spawn, onError, onFrame, onExit });
+    this.promptNumber = 0; this.pendingPrompt = null;
     this.frame = null; this.rendered = null; this.child = null; this.stopped = false; this.ready = false; this.failed = false;
     this.presentation = null;
   }
 
   start() {
     if (this.child || this.stopped) return this;
-    this.child = this.spawn(resolveProgram('pwsh'), ['-NoProfile', '-NonInteractive', '-File', this.helper,
+    this.child = this.spawn('pwsh', ['-NoProfile', '-NonInteractive', '-File', this.helper,
       '-TargetPid', String(this.pid), '-HistoryRows', String(this.historyRows),
       '-IntervalMs', String(this.intervalMs)], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     readline.createInterface({ input: this.child.stdout }).on('line', text => this.#accept(text));
@@ -73,6 +74,7 @@ export class ConsoleMirror {
     this.child.stdin?.on?.('error', error => this.#fail(`console mirror input failed: ${error.message}`));
     this.child.on?.('error', error => this.#fail(`console mirror helper could not start: ${error.message}`));
     this.child.on?.('exit', code => {
+      this.pendingPrompt?.finish(false);
       this.child = null;
       if (this.stopped) return;
       this.#fail(`console mirror for process ${this.pid} exited (${code})`);
@@ -87,6 +89,10 @@ export class ConsoleMirror {
     if (!text.trim()) return;
     let value;
     try { value = JSON.parse(text); } catch { return this.#fail(`console mirror sent an unreadable line: ${text.slice(0, 120)}`); }
+    if (value.type === 'prompt-result') {
+      if (this.pendingPrompt?.id === value.id) this.pendingPrompt.finish(value.ok === true);
+      return;
+    }
     if (value.type === 'ready') { this.ready = true; return; }
     if (value.type === 'error') {
       this.#fail(String(value.message ?? 'console mirror failed'));
@@ -179,11 +185,25 @@ export class ConsoleMirror {
     catch (error) { this.#fail(`console mirror input failed: ${error.message}`); return false; }
   }
 
+  submitPrompt(text) {
+    if (typeof text !== 'string' || !text || this.pendingPrompt || !this.ready) return false;
+    const id = ++this.promptNumber;
+    return new Promise(resolve => {
+      const finish = ok => {
+        if (this.pendingPrompt?.id !== id) return;
+        clearTimeout(timer); this.pendingPrompt = null; resolve(ok);
+      };
+      const timer = setTimeout(() => finish(false), 5000);
+      this.pendingPrompt = { id, finish };
+      if (!this.#send({ type: 'prompt', id, text })) finish(false);
+    });
+  }
   write(text) { return typeof text === 'string' && text.length > 0 && this.#send({ type: 'text', text }); }
   key(name) { return KEYS.has(name) && this.#send({ type: 'key', name }); }
   refresh() { return this.#send({ type: 'frame' }); }
 
   stop() {
+    this.pendingPrompt?.finish(false);
     if (this.stopped) return;
     // Ask it to leave before closing the door: #send refuses once stopped is set.
     this.#send({ type: 'stop' });

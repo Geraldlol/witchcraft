@@ -6,10 +6,12 @@
 #
 #   stdin   {"type":"text","text":"..."}      characters, as if typed
 #           {"type":"key","name":"enter"}     a named key
+#           {"type":"prompt","id":1,"text":"..."} one text+Enter write with a receipt
 #           {"type":"frame"}                  resend the screen even if unchanged
 #           {"type":"stop"}                   exit
 #   stdout  {"type":"ready",...}              once, after attaching
 #           {"type":"frame",...}              a screen, when it changes
+#           {"type":"prompt-result","id":1,"ok":true} native input-buffer write result
 #           {"type":"error","message":"..."}  attach or read failure; the process then exits
 #
 # Colour note: the console API publishes only the legacy 16-colour attribute word, so truecolour
@@ -181,6 +183,14 @@ public static class Mirror {
     return Write(records);
   }
 
+  // One native write covers both the paste and its final Enter. A short write is unconfirmed.
+  public static bool SubmitPrompt(string text) {
+    var records = new List<INPUT_RECORD>();
+    foreach (char ch in text) Key(records, ch, (ushort)(VkKeyScanW(ch) & 0xFF), 0);
+    Key(records, '\r', 0x0D, 0);
+    return Write(records);
+  }
+
   public static bool SendKey(string name) {
     var records = new List<INPUT_RECORD>();
     switch (name) {
@@ -246,6 +256,10 @@ while ($running) {
         switch ($command.type) {
             'text'  { [void][Mirror]::SendText([string]$command.text) }
             'key'   { [void][Mirror]::SendKey([string]$command.name) }
+            'prompt' {
+                $delivered = [Mirror]::SubmitPrompt([string]$command.text)
+                $writer.WriteLine((@{ type = 'prompt-result'; id = $command.id; ok = $delivered } | ConvertTo-Json -Compress))
+            }
             'frame' { $previous = '' }
             'stop'  { $running = $false }
         }

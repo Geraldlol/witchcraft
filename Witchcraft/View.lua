@@ -27,7 +27,9 @@ local C = {
     body = { 12, 12, 12 }, rowBacking = { 0, 0, 0 }, frameBrass = { 128, 104, 24 }, brassBright = { 255, 209, 0 },
     parchHi = { 28, 28, 28 }, parchLo = { 12, 12, 12 }, ink = { 255, 209, 0 }, inkSoft = { 255, 209, 0 },
     text = { 255, 255, 255 }, muted = { 160, 160, 160 },
-    claude = { 232, 158, 115 }, claudeDeep = { 196, 110, 66 }, copilot = { 183, 157, 242 }, copilotDeep = { 126, 91, 192 }, codex = { 102, 212, 189 }, codexDeep = { 35, 150, 125 },
+    claude = { 232, 158, 115 }, claudeDeep = { 196, 110, 66 },
+    copilot = { 183, 157, 242 }, copilotDeep = { 126, 91, 192 },
+    codex = { 102, 212, 189 }, codexDeep = { 35, 150, 125 },
     warning = { 255, 128, 64 }, inkWarn = { 255, 128, 64 }, inkErr = { 255, 26, 26 }, pauseInk = { 255, 128, 64 },
     stale = { 255, 26, 26 }, staleDim = { 153, 20, 20 }, staleText = { 255, 64, 64 }, staleRing = { 178, 26, 26 },
     onAccent = { 26, 15, 8 }, onWarning = { 40, 20, 8 }, tabText = { 255, 255, 255 },
@@ -402,13 +404,16 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
         place(self.contextProgress, context, PAD, 94, inner, 14)
         place(self.contextErrors, context, PAD, 114, inner, 14)
         place(self.contextHint, context, PAD, 134, inner, 34)
-        local half = math.floor((inner - 6) / 2)
-        place(self.contextToggle, context, PAD, 176, half, 24)
-        place(self.contextRefresh, context, PAD + half + 6, 176, inner - half - 6, 24)
+        local third = math.floor((inner - 8) / 3)
+        place(self.contextToggle, context, PAD, 176, third, 24)
+        place(self.contextRefresh, context, PAD + third + 4, 176, third, 24)
+        place(self.errorLogButton, context, PAD + 2 * (third + 4), 176, inner - 2 * (third + 4), 24)
         contextHeight = 212
     else
         place(self.contextHint, context, PAD, 54, inner, 17)
-        place(self.contextToggle, context, PAD, 79, inner, 24)
+        local half = math.floor((inner - 6) / 2)
+        place(self.contextToggle, context, PAD, 79, half, 24)
+        place(self.errorLogButton, context, PAD + half + 6, 79, inner - half - 6, 24)
         contextHeight = 115
     end
     place(context, content, PAD, HEADER + ACCENT + 6, contextWidth, math.min(contextHeight, height - HEADER - ACCENT - 6))
@@ -592,6 +597,7 @@ end
 -- The copy box takes the rows the terminal shows right now, as plain text, and
 -- hands them to the keyboard highlighted; it does not follow later renders.
 function View:FillCopy(mode)
+    if self.copyHint then self.copyHint:SetText("Ctrl+C copies the highlighted text") end
     local reply = session(self.snapshot or {}, self.activeTab or "claude").reply
     self.copyMode = mode == "reply" and type(reply) == "table" and "reply" or "screen"
     local lines = {}
@@ -916,7 +922,15 @@ function View:Action(action)
     self.openPanel = nil; self:Layout(); self.input:ClearFocus(); self:RenderStatus()
 end
 
+function View:InspectPrompt(body, id, tab)
+    if self.openPanel ~= "copy" then self:TogglePanel("copy") end
+    self.copyHint:SetText("Retained #" .. id .. " for " .. tab .. " (Ctrl+C to copy)")
+    self.copyText = body
+    self.copyBox:SetText(self.copyText); self.copyBox:HighlightText(); self.copyBox:SetFocus()
+end
+
 function View:Resend()
+    if self.controller.InspectPending then self.controller:InspectPending(); return end
     if self.controller.Resend then
         local ok, reason = self.controller:Resend()
         self.message = ok and "Retrying retained prompts" or plain(reason or "Unable to resend right now.")
@@ -1086,7 +1100,7 @@ function View:RenderState(snapshot, active)
     end
     show(self.combatBanner, state == "combat" and not self.minimized)
     show(self.staleButton, state == "stale" and not self.minimized and self.controller.Resend ~= nil)
-    self.staleButton.label:SetText(staleCount .. " STALE · RESEND")
+    self.staleButton.label:SetText(staleCount .. " STALE · REVIEW")
     local queued = math.floor(clamp(snapshot.queued, 0, 9999, 0))
     if queued > 0 then
         self.send:SetText("Queued")
@@ -1357,7 +1371,7 @@ function View.Create(controller)
     self.combatBanner.barRight = fill(self.combatBanner, C.warning, 1, "ARTWORK")
     self.combatBanner.label = text(self.combatBanner, 12, C.warning, { justify = "CENTER" })
     self.combatBanner.label:SetText("PAUSED FOR COMBAT · ROWS FROZEN"); self.combatBanner:Hide()
-    self.staleButton = makeButton(self.terminal, "STALE · RESEND", function() self:Resend() end, "secondary",
+    self.staleButton = makeButton(self.terminal, "STALE · REVIEW", function() self:Resend() end, "secondary",
         { size = 11, accent = C.stale, textColor = C.staleText })
     self.staleButton:SetFrameLevel(level + 6); self.staleButton:Hide()
     self.scrollMarker = text(self.terminal, 10, C.brassBright, { justify = "RIGHT" }); self.scrollMarker:Hide()
@@ -1516,6 +1530,9 @@ function View.Create(controller)
     end, "secondary", { size = 11 })
     self.contextRefresh = makeButton(self.contextPanel, "REFRESH", function() controller:RefreshContext() end, "primary",
         { size = 11, accent = C.claude })
+    self.errorLogButton = makeButton(self.contextPanel, "ERROR LOG", function()
+        controller:ListErrors("list")
+    end, "secondary", { size = 11 })
     self.guidePanel, self.guideTitle, self.guideClose, self.guideRule =
         popover("GUIDES", function() self:TogglePanel("guide") end)
     self.guidePage, self.guideReferences, self.guidePages = "quests", {}, {}

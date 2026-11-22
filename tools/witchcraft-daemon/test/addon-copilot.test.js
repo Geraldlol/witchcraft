@@ -22,7 +22,7 @@ test('Lua controller keeps Copilot as a tab setting, cycles tabs and accepts old
   }
   try {
     run('ns = {}');
-    for (const file of ['Ring.lua', 'Pixel.lua', 'Binding.lua', 'Core.lua']) {
+    for (const file of ['Ring.lua', 'Pixel.lua', 'Prompts.lua', 'Binding.lua', 'Core.lua']) {
       run(`(function(...)\n${fs.readFileSync(new URL(file, addon), 'utf8')}\nend)("Witchcraft", ns)`);
     }
     run(`

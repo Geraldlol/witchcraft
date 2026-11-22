@@ -5,8 +5,8 @@ local Core, Persistence = {}, {}
 ns.Core, ns.Persistence = Core, Persistence
 local methods = {}
 methods.__index = methods
-local BUILD = "release-0.3.1"
-local Ring = ns.Ring
+local BUILD = "release-0.4.0"
+local Ring, Prompts = ns.Ring, ns.Prompts
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
 local integer, plain, epoch = Ring.Integer, Ring.Plain, Ring.Epoch
@@ -145,7 +145,9 @@ function Persistence.Validate(raw)
         end
     end
     if global.hz ~= nil and not finite(global.hz, 0.125, 2) then return false, "Invalid stream rate" end
-    if global.activeTab ~= nil and global.activeTab ~= "claude" and global.activeTab ~= "codex" and global.activeTab ~= "copilot" then return false, "Invalid tab" end
+    if global.activeTab ~= nil and global.activeTab ~= "claude" and global.activeTab ~= "codex" and global.activeTab ~= "copilot" then
+        return false, "Invalid tab"
+    end
     if global.view ~= nil and not validView(global.view) then return false, "Invalid saved layout" end
     if global.reloadAwaitHost ~= nil and type(global.reloadAwaitHost) ~= "boolean" then return false, "Invalid reload state" end
     if global.outbox ~= nil then
@@ -154,6 +156,11 @@ function Persistence.Validate(raw)
         for _, message in ipairs(global.outbox) do
             if not validMessage(message) or message.id <= maximum then return false, "Invalid saved message order" end
             maximum = message.id
+        end
+        for _, message in ipairs(global.outbox) do
+            if message.prompt ~= nil and (message.prompt ~= true or not Prompts.Group(global.outbox, message)) then
+                return false, "Invalid saved prompt group"
+            end
         end
         if global.nextId ~= nil and global.nextId <= maximum then return false, "Message ID would be reused" end
     end
@@ -166,6 +173,11 @@ function Persistence.Initialize(global)
     global.ack, global.nextSeq = global.ack or 0, global.nextSeq or 1
     local maximum = global.ack
     for _, message in ipairs(global.outbox) do maximum = math.max(maximum, message.id) end
+    -- A saved pre-protocol text row might be only the tail of an already acknowledged
+    -- multipart prompt. Keep the bytes for inspection until the player reconstructs it.
+    for _, message in ipairs(global.outbox) do
+        if message.action == "text" and not message.known and not message.prompt then message.review = "legacy" end
+    end
     global.nextId = math.max(global.nextId or 1, maximum + 1)
     global.activeTab, global.fontSize, global.hz = global.activeTab or "claude", global.fontSize or 10, global.hz or 1
     if global.opacity == nil then global.opacity = 80 end
@@ -188,7 +200,7 @@ end
 
 local function queued(outbox, messageEpoch, messageId)
     for _, message in ipairs(outbox) do
-        if message.epoch == messageEpoch and message.id == messageId then return true end
+        if message.epoch == messageEpoch and message.id == messageId and not message.review then return true end
     end
     return false
 end
@@ -630,7 +642,7 @@ end
 
 function methods:PendingInput()
     for _, message in ipairs(self.global.outbox) do
-        if message.epoch == self.global.epoch then return message end
+        if message.epoch == self.global.epoch and message.id > self.global.ack and not message.review then return message end
     end
 end
 
@@ -739,11 +751,16 @@ end
 
 function methods:Snapshot()
     local stale = 0
-    for _, message in ipairs(self.global.outbox) do if message.epoch ~= self.global.epoch then stale = stale + 1 end end
+    for _, message in ipairs(self.global.outbox) do
+        if message.review or message.epoch ~= self.global.epoch then
+            local first = message.prompt and Prompts.Read(message)
+            if not first or first == message.id then stale = stale + 1 end
+        end
+    end
     local ring = self.ring:Snapshot()
     local status = self:InboundPaused() and "Paused: combat (outbound remains active)" or ring.status
     if self.stalled then status = "Waiting for the desktop; updates pause while WoW is in the background" end
-    if stale > 0 then status = status .. " / " .. stale .. " stale: /witch resend to retry" end
+    if stale > 0 then status = status .. " / " .. stale .. " retained: /witch pending to review" end
     -- A pending reload is derived from state, so neither input (which clears the notice) nor a later
     -- notice such as a resend can hide it.
     if self.reloadPending then status = RELOAD_NOTICE elseif self.notice then status = self.notice end
@@ -1015,29 +1032,34 @@ function methods:SetOpacity(value)
     return true
 end
 
-function methods:Queue(tab, action, text)
+-- Stage every row before mutating the durable queue or arming any carrier.
+function methods:QueueBatch(tab, batch, replace)
     if not self.active or not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
-    -- Refused here, where the player sees why, rather than acknowledged by the daemon and dropped.
     for _, session in ipairs(self.sessions) do
         local stopped = session.id == tab and stoppedStatus(session.status)
         if stopped then return false, "That terminal has " .. stopped end
     end
     if not sessionListed(self.sessions, tab) then return false, "That terminal is not available" end
-    if #self.global.outbox >= 64 then return false, "Outbox full (64); wait for acknowledgements" end
-    if self.global.nextId > 262143 then return false, "Message ID limit reached; pending messages are preserved" end
-    local message = { epoch = self.global.epoch, id = self.global.nextId, tab = tab, action = action, text = text or "" }
-    if not validMessage(message) then return false, "Choose a tab and enter 1 to 600 bytes without control characters" end
-    local frames, reason = ns.Pixel.Encode(message)
-    if not frames then return false, reason end
-    self.global.outbox[#self.global.outbox + 1] = message
-    -- Resume this same snapshot part under a fresh transport ID after input;
-    -- its capture age must include any time the user occupies the pixel lane.
-    self.contextPending = nil
-    self.global.nextId = self.global.nextId + 1
-    self.notice = nil
-    self.ring.delay = self.ring.baseDelay
-    -- Input targets the live prompt, so the reply lands where the reader is looking.
-    self.scroll[message.tab] = 0
+    local outbox = {}
+    for _, message in ipairs(self.global.outbox) do
+        if not replace or not replace[message] then outbox[#outbox + 1] = message end
+    end
+    if #outbox + #batch > 64 then return false, "Outbox full (64); wait for acknowledgements" end
+    local first = self.global.nextId
+    if first + #batch - 1 > 262143 then return false, "Message ID limit reached; pending messages are preserved" end
+    for index, item in ipairs(batch) do
+        local id = first + index - 1
+        local text = item.prompt and Prompts.Frame(first, index, #batch, item.text) or item.text
+        local message = { epoch = self.global.epoch, id = id, tab = tab, action = item.action, text = text,
+            known = true, prompt = item.prompt }
+        if not validMessage(message) then return false, "Choose a tab and enter 1 to 600 bytes without control characters" end
+        local frames, reason = ns.Pixel.Encode(message)
+        if not frames then return false, reason end
+        outbox[#outbox + 1] = message
+    end
+    self.global.outbox, self.global.nextId = outbox, first + #batch
+    self.contextPending, self.notice = nil, nil
+    self.scroll[tab], self.ring.delay = 0, self.ring.baseDelay
     self:Render()
     self:Schedule("pixel", 0.2, self.PixelTick)
     if self.binding then self:Schedule("binding", 0, self.BindingTick) end
@@ -1045,35 +1067,22 @@ function methods:Queue(tab, action, text)
     return true
 end
 
+function methods:Queue(tab, action, text)
+    if action == "text" and type(text) == "string" and Prompts.Reserved(text) then return self:SendLong(tab, text) end
+    return self:QueueBatch(tab, { { action = action, text = text or "" } })
+end
+
 function methods:Send(tab, text) return self:Queue(tab, "text", text) end
 
--- A long or multi-line prompt crosses the carriers as ordinary text parts: newlines become LINE
--- SEPARATOR and every part but the last starts with INVISIBLE SEPARATOR, which the daemon's outbox
--- joins into one paste. Parts end on UTF-8 boundaries, and the whole prompt queues or none of it.
-local LINE, MORE, PART_BYTES, MAX_PARTS = "\226\128\168", "\226\129\163", 580, 8
-function methods:SendLong(tab, text)
-    if type(text) ~= "string" then return false, "Nothing to send" end
-    text = text:gsub("\r\n?", "\n"):gsub("[%z\1-\9\11-\31\127]", ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("\n", LINE)
-    if text == "" then return false, "Nothing to send" end
-    if not text:find(LINE, 1, true) and #text <= 600 then return self:Send(tab, text) end
-    local parts, position = {}, 1
-    while position <= #text do
-        local stop = math.min(#text, position + PART_BYTES - 1)
-        while stop < #text and stop > position do
-            local following = text:byte(stop + 1)
-            if following < 128 or following >= 192 then break end
-            stop = stop - 1
-        end
-        parts[#parts + 1] = text:sub(position, stop); position = stop + 1
-    end
-    if #parts > MAX_PARTS then return false, "Too long: a prompt is at most about 4,600 bytes" end
-    if not self.active or not self.connected then return false, "Wait for the terminal host" end
-    if #self.global.outbox + #parts > 64 then return false, "Outbox full (64); wait for acknowledgements" end
-    for i, part in ipairs(parts) do
-        local ok, reason = self:Queue(tab, "text", (i < #parts and MORE or "") .. part)
-        if not ok then return false, reason end
-    end
-    return true
+function methods:SendLong(tab, text, replace)
+    if type(text) ~= "string" or not text:find("%S") then return false, "Nothing to send" end
+    if not replace and #text <= 600 and not text:find("[\r\n]") and not Prompts.Reserved(text) then return self:Send(tab, text) end
+    if self.promptProtocol ~= 1 then return false, "Update the desktop daemon to send this prompt; the draft is retained" end
+    local parts, reason = Prompts.Parts(text)
+    if not parts then return false, reason end
+    local batch = {}
+    for _, body in ipairs(parts) do batch[#batch + 1] = { action = "text", text = body, prompt = true } end
+    return self:QueueBatch(tab, batch, replace)
 end
 function methods:Action(tab, action) return self:Queue(tab, action, "") end
 
@@ -1097,12 +1106,10 @@ function methods:Choose(tab, index)
     local busy = self:AnswerPending(tab)
     if busy then return false, busy end
     local moves = index - choices.selected
-    if #self.global.outbox + math.abs(moves) + 1 > 64 then return false, "Outbox full (64); wait for acknowledgements" end
-    for _ = 1, math.abs(moves) do
-        local ok, reason = self:Queue(tab, moves > 0 and "down" or "up", "")
-        if not ok then return false, reason end
-    end
-    local ok, reason = self:Queue(tab, "enter", "")
+    local batch = {}
+    for _ = 1, math.abs(moves) do batch[#batch + 1] = { action = moves > 0 and "down" or "up", text = "" } end
+    batch[#batch + 1] = { action = "enter", text = "" }
+    local ok, reason = self:QueueBatch(tab, batch)
     if ok then
         self.answered[tab] = { id = self.global.outbox[#self.global.outbox].id, choices = choiceKey(choices) }
         self:Render()
@@ -1117,7 +1124,7 @@ end
 -- parallel tool calls, or the CLI ignoring the keys), since a CLI takes milliseconds to redraw.
 function methods:AnswerPending(tab)
     for _, message in ipairs(self.global.outbox) do
-        if message.tab == tab and message.epoch == self.global.epoch then return "Input for this tab is still on its way" end
+        if message.tab == tab and message.epoch == self.global.epoch and not message.review then return "Input for this tab is still on its way" end
     end
     local mark = self.answered[tab]
     if not mark then return nil end
@@ -1125,22 +1132,89 @@ function methods:AnswerPending(tab)
     return "Already answered; waiting for the terminal"
 end
 
-function methods:Resend()
+local function held(global, message)
+    return message.review or message.epoch ~= global.epoch
+end
+
+function methods:Retained(id)
+    for _, message in ipairs(self.global.outbox) do
+        if (not id or id == message.id) and held(self.global, message) then return message end
+    end
+end
+
+function methods:InspectPending(id)
+    local message = self:Retained(id)
+    if not message then self:Print("No matching retained input"); return false end
+    local first = message.prompt and Prompts.Read(message) or message.id
+    local text = message.prompt and Prompts.Group(self.global.outbox, message) or nil
+    if not text then text = message.action == "text" and Prompts.LegacyText(message.text) or message.action end
+    local note = message.review == "legacy" and "Legacy fragment; copy and reconstruct your draft before sending."
+        or "Delivery unconfirmed; check the terminal before resending."
+    self:Print(string.format("Retained #%d for %s. %s", first, message.tab, note))
+    if self.view and self.view.InspectPrompt then
+        self:SetVisible(true); self.view:InspectPrompt(text, first, message.tab)
+    else self:Print(text:gsub("|", "||")) end
+    self:Print((message.review ~= "legacy" and ("/witch resend " .. first .. " retries this input. ") or "")
+        .. "/witch discard " .. first .. " removes it. /witch pending lists retained IDs.")
+    return true
+end
+
+function methods:ListPending()
+    local count = 0
+    for _, message in ipairs(self.global.outbox) do
+        if held(self.global, message) and (not message.prompt or Prompts.Read(message) == message.id) then
+            self:Print(string.format("#%d %s / %s", message.id, message.tab, message.review or "previous host"))
+            count = count + 1
+        end
+    end
+    self:Print(count == 0 and "No retained input" or "/witch inspect <id> opens the retained contents")
+end
+
+function methods:DiscardPending(id)
+    local message = id and self:Retained(id)
+    if not message then return false, "Use /witch pending, then /witch discard <id>" end
+    local _, rows
+    if message.prompt then _, rows = Prompts.Group(self.global.outbox, message) end
+    rows = rows or { [message] = true }
+    local kept = {}
+    for _, item in ipairs(self.global.outbox) do if not rows[item] then kept[#kept + 1] = item end end
+    self.global.outbox = kept
+    self:Render()
+    return true
+end
+
+function methods:Resend(id)
     if not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
-    -- A message for a tab this host does not list would never be acknowledged: it is dropped, not requeued.
-    -- The saved queue changes only once the requeue is known to fit the ID space.
+    if id then
+        local message = self:Retained(id)
+        if not message then return false, "No retained input with that ID" end
+        if message.review == "legacy" then return false, "Legacy text may be incomplete; inspect and compose it again" end
+        if message.prompt then
+            local text, rows = Prompts.Group(self.global.outbox, message)
+            if not text then return false, "Incomplete retained prompt" end
+            return self:SendLong(message.tab, text, rows)
+        end
+        return self:QueueBatch(message.tab, { { action = message.action, text = message.text } }, { [message] = true })
+    end
+    for _, message in ipairs(self.global.outbox) do
+        if held(self.global, message) and (message.prompt or message.review or message.action ~= "text") then
+            self:InspectPending(message.id)
+            return false, "Review retained input before resending it by ID"
+        end
+    end
+    -- Compatible one-line prompts that were explicitly queued as complete can still be retried together.
     local kept, dropped, count = {}, 0, 0
     for _, message in ipairs(self.global.outbox) do
         if not sessionListed(self.sessions, message.tab) then dropped = dropped + 1
         else
             kept[#kept + 1] = message
-            if message.epoch ~= self.global.epoch then count = count + 1 end
+            if held(self.global, message) then count = count + 1 end
         end
     end
     if self.global.nextId + count - 1 > 262143 then return false, "Message ID limit reached" end
     self.global.outbox = kept
     for _, message in ipairs(self.global.outbox) do
-        if message.epoch ~= self.global.epoch then
+        if held(self.global, message) then
             message.epoch, message.id = self.global.epoch, self.global.nextId
             self.global.nextId = self.global.nextId + 1
         end
@@ -1178,7 +1252,7 @@ function methods:ReceiveChunk(payload)
     end
     local global = self.global
     global.epoch, global.ack, global.reloadAwaitHost = result.epoch, result.ack, false
-    self.cursorLane = result.cursorLane
+    self.cursorLane, self.promptProtocol = result.cursorLane, result.promptProtocol
     global.nextId = math.max(global.nextId, result.ack + 1)
     if self.binding then
         local accepted, kind = self.binding:AcceptHost(result)
@@ -1190,7 +1264,17 @@ function methods:ReceiveChunk(payload)
     -- every message behind it; it is dropped here, whichever host queued it.
     local dropped = 0
     for _, message in ipairs(global.outbox) do
-        if message.epoch ~= result.epoch or message.id > result.ack then
+        if message.prompt then
+            local first, _, count = Prompts.Read(message)
+            local last = first + count - 1
+            local submitted = message.epoch == result.epoch and result.promptResults[last] == true
+            if not submitted then
+                if message.epoch == result.epoch and (not sessionListed(result.sessions, message.tab)
+                    or result.promptProtocol ~= 1 or result.ack >= last) then message.review = "unconfirmed" end
+                retained[#retained + 1] = message
+            end
+        elseif message.review and (message.epoch ~= result.epoch or message.id > result.ack) then retained[#retained + 1] = message
+        elseif message.epoch ~= result.epoch or message.id > result.ack then
             if sessionListed(result.sessions, message.tab) then retained[#retained + 1] = message
             else
                 dropped = dropped + 1
@@ -1462,18 +1546,9 @@ function methods:Reset()
     return true
 end
 
--- /witch errors prints the stored count and the newest entry; /witch errors clear empties the store.
 function methods:ListErrors(arg)
     if not self.errors then self:Print("Lua error capture is unavailable"); return end
-    if arg == "clear" then self.errors:Clear(); self:Print("Errors cleared"); return end
-    local list = self.errors:Newest()
-    if #list == 0 then self:Print("No Lua errors stored"); return end
-    local newest = list[1]
-    local reloads = (self.errors.session or 0) - (newest.session or 0)
-    self:Print(string.format("Lua errors: %d stored; newest (%s x%d, %s):", #list, newest.kind, newest.count,
-        reloads == 0 and "this session" or (reloads .. " reload" .. (reloads == 1 and "" or "s") .. " ago")))
-    self:Print(newest.message)
-    if newest.stack[1] then self:Print(newest.stack[1]) end
+    self.errors:Command(arg, function(message) self:Print(message) end)
 end
 
 function methods:HandleSlash(input)
@@ -1564,8 +1639,14 @@ function methods:HandleSlash(input)
             else self:Print(reason) end
         end
     elseif command == "reset" or command == "reload" then self:Reset()
+    elseif command == "pending" then self:ListPending()
+    elseif command == "inspect" then
+        if arg == "" or tonumber(arg) then self:InspectPending(tonumber(arg)) else self:Print("Use /witch inspect <id>") end
+    elseif command == "discard" then
+        local ok, reason = self:DiscardPending(tonumber(arg)); self:Print(ok and "Retained input discarded" or reason)
     elseif command == "resend" then
-        local ok, reason = self:Resend(); if not ok then self:Print(reason) end
+        if arg ~= "" and not tonumber(arg) then self:Print("Use /witch resend <id>"); return end
+        local ok, reason = self:Resend(tonumber(arg)); if not ok then self:Print(reason) end
     elseif command == "status" then
         local snapshot = self:Snapshot()
         self:Print(string.format("Witchcraft %s / %s / ring %d/%d / queued %d / host %s / UI %s%s", BUILD,
@@ -1577,7 +1658,7 @@ function methods:HandleSlash(input)
             cooldown, self.cursorLane or "none"))
     else
         self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
-            .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"
+            .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport | errors"
             .. " | size 8-20 | opacity 0-100 | context on|off|refresh | hz 0.125-2"
             .. " | calibrate [off] | burstprobe [200-2000|corrupt|off] | bindprobe | status | resend | reset")
     end

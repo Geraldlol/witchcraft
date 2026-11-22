@@ -4,23 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+
+permissions:
+  contents: read
 
 jobs:
   addon:
-    name: Addon (luacheck)
+    name: Addon (Lua 5.1)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: leafo/gh-actions-lua@v10
-        with:
-          luaVersion: "5.1"
-      - uses: leafo/gh-actions-luarocks@v4
-      - run: luarocks install luacheck
-      # luacheck exits 1 on warnings and 2 on errors. Warnings are printed; only errors fail the job.
-      - run: luacheck Witchcraft || test $? -le 1
+      - run: sudo apt-get update && sudo apt-get install -y lua5.1 lua-check
+      - run: luacheck Witchcraft
+      - run: lua5.1 tests/witchcraft/run.lua
 
   daemon:
-    name: Daemon (node --test)
+    name: Daemon (Node 24 on Windows)
     runs-on: windows-latest
     defaults:
       run:
@@ -35,4 +35,5 @@ jobs:
           cache: npm
           cache-dependency-path: tools/witchcraft-daemon/package-lock.json
       - run: npm ci
+      - run: python3 --version
       - run: npm test

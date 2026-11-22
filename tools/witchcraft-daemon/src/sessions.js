@@ -101,6 +101,13 @@ export class SessionSet {
     return send(mirror.key(action));
   }
 
+  writePrompt(tab, data, action) {
+    const mirror = this.attached.get(tab);
+    if (!mirror) return this.write(tab, data, action);
+    if (this.sessions.get(tab)?.status !== 'running' || !data.endsWith('\r')) return false;
+    return mirror.submitPrompt(data.slice(0, -1));
+  }
+
   snapshot() {
     const spawned = new Map(this.pair.snapshot().map(session => [session.id, session]));
     return TABS.map(tab => {

@@ -73,18 +73,18 @@ The default binding carrier is not build-pinned; qualify it once per daemon/UI s
    cd tools\witchcraft-daemon
    npm.cmd ci --ignore-scripts --no-fund
    npm.cmd rebuild node-pty --ignore-scripts=false --foreground-scripts
-   node node_modules/electron/install.js
-   node -e "require('node-pty'); console.log(require('electron'))"
    node bin/witchcraft.js init --ring 3000
    ```
 
-   Stop if a command fails. The `node -e` check verifies the terminal dependency loads and Electron is installed. `init` creates 3,000 small `Witchcraft_Chunk_*` helper addons for returning terminal output to the game. They are generated locally and must stay installed alongside `Witchcraft`.
+   `init` creates 3,000 small `Witchcraft_Chunk_*` helper addons for returning terminal output to the game. Keep them alongside `Witchcraft`. To use the optional desktop overlay, also run `node node_modules/electron/install.js` from the daemon folder.
 
    If several account folders exist, use `node bin/witchcraft.js init --ring 3000 --account 'ACCOUNT_FOLDER'`. Use the exact folder name under that client's `WTF\Account`; the selection is saved for later commands.
 
 5. **Restart WoW completely** so it discovers the helper addons and bundled font. Enable WITCHCRAFT and its helper addons in the character-select AddOns list.
 
 ## First run
+
+From `tools/witchcraft-daemon`, run `node bin/witchcraft.js doctor` for a read-only setup and connection check. It works before installing daemon dependencies. If you use a single assistant, add the same `--only` option you plan to give `run`. Follow the first **Next step** and repeat the command. For a support report, add `--json`. The report includes versions, counts and link status, and omits names, paths and terminal content.
 
 ### 1. Calibrate the screen strip
 
@@ -162,6 +162,7 @@ See [the full tool list and MCP setup](docs/MCP.md), including how to connect an
 | `/witch settings` | Window, font, opacity, notifications, combat updates, prompt history and sharing options. |
 | `/witch status` | Check build, connection, ring cursor and pending input. |
 | `/witch errors` / `/witch errors clear` | Show the recorded-error count and newest entry, or clear the history. |
+| `/witch errors list` / `/witch errors watch <n>` | Select a Lua error to follow across reloads. After retrying the original action, run `/witch errors checked` and read the result with `/witch errors status`. |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Manage reusable prompts in the **/** menu. |
 | `/witch guide` / `/witch quest [nudge\|details\|solution] <quest>` | Open Guides or prepare a quest-help prompt. |
 | `/witch loot [item]` | Prepare a loot-goal prompt; omit the item to ask for your plan. |
@@ -210,9 +211,13 @@ Have an idea? [Describe what you want to do in game](https://github.com/Geraldlo
 
 ## Updating and uninstalling
 
-**Update:** stop the daemon first. Preserve `wow.config.json`, `tools/witchcraft-daemon/.local/` and your WoW SavedVariables while updating the source and replacing the `Witchcraft` addon folder. If `package-lock.json` changed, repeat the four dependency-install/check commands from [Install](#install). Restart the daemon and `/reload`; fully restart WoW if new addon folders or fonts were added. Resume your existing assistant conversations as needed.
+**Update:** stop the daemon first, including older releases running from other folders. Update the addon and daemon together and preserve `wow.config.json`, `tools/witchcraft-daemon/.local/` and your WoW SavedVariables. If `package-lock.json` changed, repeat the dependency setup from [Install](#install). Restart the daemon and `/reload`. Fully restart WoW if new addon folders or fonts were added.
 
 **Uninstall:** stop the daemon and close WoW, then remove `Witchcraft` and the `Witchcraft_Chunk_*` folders created for it from that client's `Interface\AddOns`. Keep SavedVariables and `.local/` if you want your preferences, goals and passport for a later reinstall; remove them only if you also want to erase that state. Remove any copied management skill and local MCP registration you added.
+
+## Contributor checks
+
+From the repository root, run `lua5.1 tests/witchcraft/run.lua` for the addon regression suite and `luacheck Witchcraft` for lint. The Lua tests supply their own WoW API fixtures. The Windows daemon suite needs Node 24, Python 3 available as `python3`, and PowerShell 7 available as `pwsh`. From `tools/witchcraft-daemon`, install the locked dependencies and run `npm test`. The suite exercises the native terminal with synthetic child processes and temporary directories. Run `python3 -B tests/test_release_package.py` from the root for the package verifier.
 
 ## License
 

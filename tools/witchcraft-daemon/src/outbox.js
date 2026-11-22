@@ -12,6 +12,7 @@ export const MORE = '\u2063', LINE = '\u2028', PASTE_LIMIT = 8192;
 // A text message that starts with INVISIBLE TIMES is a request from the addon, never typed:
 // `cols=N` asks for terminals as wide as the in-game pane (40-240 columns).
 export const CONTROL = '\u2062';
+const PROMPT_PART = /^\u2062P([0-9a-f]{5})([0-9]{2})([0-9]{2}):(.+)$/su;
 const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 export function validMessage(message) {
   return message && typeof message === 'object' && /^[0-9a-f]{8}$/u.test(message.epoch) && message.epoch !== '00000000'
@@ -77,22 +78,71 @@ export function parseSavedVariables(source) {
     if (!validMessage(message) || message.id <= previous) throw new Error('Invalid outbox message or ordering');
     previous = message.id;
   }
-  return { messages, epoch: global.epoch, ack: global.ack ?? 0 };
+  return { messages: messages.filter(message => !message.review), epoch: global.epoch, ack: global.ack ?? 0 };
 }
 
 export class Outbox {
-  constructor({ epoch, write, onControl = () => {} }) {
+  constructor({ epoch, write, writePrompt = write, onControl = () => {} }) {
     this.epoch = epoch; this.write = write; this.onControl = onControl; this.ack = 0; this.busy = false; this.parts = {};
+    this.prompt = null; this.writePrompt = writePrompt; this.submitting = null;
+    // At most 64 rows can remain outstanding in the addon's outbox.
+    this.promptResults = [];
+  }
+  acceptPrompt(message) {
+    const match = PROMPT_PART.exec(message.text);
+    if (!match) return { accepted: false, reason: 'invalid prompt frame' };
+    const first = Number.parseInt(match[1], 16), part = Number(match[2]), count = Number(match[3]);
+    if (part < 1 || count > 17 || part > count || first < 1 || first + part - 1 !== message.id || first + count - 1 > 262143
+      || Buffer.byteLength(match[4]) > 580) return { accepted: false, reason: 'invalid prompt identity' };
+    if (part === 1) this.prompt = { first, tab: message.tab, count, bodies: [] };
+    const group = this.prompt;
+    if (!group || group.tab !== message.tab || group.first !== first || group.count !== count || group.bodies.length !== part - 1) {
+      return { accepted: false, reason: 'missing prompt prefix' };
+    }
+    group.bodies.push(match[4]);
+    if (part < count) {
+      this.ack = message.id;
+      return { accepted: true, buffered: true, ack: this.ack };
+    }
+    this.prompt = null;
+    const encoded = group.bodies.join('');
+    this.submitting = message.id;
+    const finish = written => {
+      this.promptResults.push(written ? message.id : -message.id);
+      if (this.promptResults.length > 64) this.promptResults.shift();
+      this.ack = message.id;
+      this.submitting = null;
+      return written ? { accepted: true, ack: this.ack }
+        : { accepted: true, dropped: true, reason: 'terminal delivery unconfirmed', ack: this.ack };
+    };
+    try {
+      if (!/^(?:[^~]|~[~n])*$/u.test(encoded)) return finish(false);
+      const text = encoded.replace(/~([~n])/gu, (_, c) => c === 'n' ? '\n' : '~');
+      if (Buffer.byteLength(text) > 4640) return finish(false);
+      const paste = text.includes('\n');
+      const data = paste ? PASTE_START + text.replaceAll('\n', '\r') + PASTE_END + '\r' : text + '\r';
+      const result = this.writePrompt(message.tab, data, paste ? 'paste' : 'text');
+      if (result && typeof result.then === 'function') {
+        // The mirrored console acknowledges the native write asynchronously. Hold the final cursor
+        // and suppress retransmission while it is outstanding, including after a helper failure.
+        Promise.resolve(result).then(value => finish(value === true), () => finish(false));
+        return { accepted: true, buffered: true, ack: this.ack };
+      }
+      return finish(result !== false);
+    } catch { return finish(false); }
   }
   accept(message) {
     if (!validMessage(message) || message.epoch !== this.epoch) return { accepted: false, reason: 'invalid or stale session' };
     if (message.id <= this.ack) return { accepted: true, duplicate: true, ack: this.ack };
+    if (this.submitting !== null) return message.id === this.submitting
+      ? { accepted: true, buffered: true, ack: this.ack } : { accepted: false, reason: 'delivery in progress' };
     if (this.busy) return { accepted: false, reason: 'delivery in progress' };
     this.busy = true;
     try {
       // write is synchronous node-pty input, explicitly addressed to one terminal.
       // The action travels beside the bytes: a PTY wants the bytes, while a mirrored console
       // wants the name, and recovering one from the other means parsing escapes back into keys.
+      if (message.action === 'text' && message.text.startsWith(CONTROL + 'P')) return this.acceptPrompt(message);
       if (message.action === 'text' && message.text.startsWith(CONTROL)) {
         const cols = /^cols=(\d{2,3})$/u.exec(message.text.slice(CONTROL.length));
         const width = cols ? Number(cols[1]) : 0;

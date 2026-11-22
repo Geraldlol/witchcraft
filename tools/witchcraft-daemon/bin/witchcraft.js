@@ -7,22 +7,17 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig, saveConfig, boundedInteger, LOCAL_DIR, REPO_ROOT } from '../src/config.js';
 import { initializeRing } from '../src/init.js';
 import { RingWriter, isTransientWriteError, atomicWrite } from '../src/ring.js';
-import { TerminalPair, attachTerminal } from '../src/pty.js';
-import { SessionSet } from '../src/sessions.js';
-import { listConsoles } from '../src/console-list.js';
+import { runDoctor, formatDoctor } from '../src/doctor.js';
 import { candidateRow, pickConsole } from '../src/console-pick.js';
 import { matchConsole, parseAttachTarget } from '../src/console-match.js';
-import { Outbox, watchSavedVariables } from '../src/outbox.js';
 import { PixelDecoder, ContextDecoder, decodeHeartbeat, sampleFrame, calibrate } from '../src/pixel.js';
 import { Capture, captureOnce } from '../src/capture.js';
 import { BURST_MESSAGE_ID, burstProbeText, decodeBurstPage, maxChannelError, sampleBurstPage } from '../src/burst.js';
-import { ContextCache, contextWriteKey, shouldPersistContext } from '../src/context-cache.js';
-import { foldContextWants, readContextWants } from '../src/context-want.js';
 import { setupClaudeMcp, withWoWMcp } from '../src/mcp-launch.js';
 import { claudeSessionAlive, findClaudeSession, findCodexThread } from '../src/current-sessions.js';
 import { createSessionInfo } from '../src/session-info.js';
 import { createEventLog } from '../src/event-log.js';
-import { acquireLock, releaseOwnedLock } from '../src/bridge-lock.js';
+import { acquireLock, acquireRingLock, releaseOwnedLock } from '../src/bridge-lock.js';
 import { hasWoWTools, presenceDir } from '../src/mcp-presence.js';
 import { BindingCarrier, BindingReceiver } from '../src/binding-carrier.js';
 import { CooldownCarrierReader, CooldownCarrierReceiver } from '../src/cooldown-carrier.js';
@@ -49,6 +44,7 @@ export function parseArgs(argv) {
     if (token === '--pixels') { options.pixels = true; continue; }
     if (token === '--no-pixels') { options.noPixels = true; continue; }
     if (token === '--all') { options.all = true; continue; }
+    if (token === '--json' && command === 'doctor') { options.json = true; continue; }
     if (token === '--apply') { options.apply = true; continue; }
     if (token === '--attach') {
       // Split at the first '=' only: a ~TEXT pattern may itself contain one.
@@ -72,6 +68,12 @@ export function parseArgs(argv) {
 }
 
 export async function runBridge(config, options = {}, child = [], adapters = {}) {
+  // Doctor and setup must start even before the native terminal dependencies load.
+  const [{ TerminalPair, attachTerminal }, { SessionSet }, { listConsoles }, { Outbox, watchSavedVariables },
+    { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants }] = await Promise.all([
+    import('../src/pty.js'), import('../src/sessions.js'), import('../src/console-list.js'), import('../src/outbox.js'),
+    import('../src/context-cache.js'), import('../src/context-want.js'),
+  ]);
   const Pair = adapters.TerminalPair ?? TerminalPair, Display = adapters.attachTerminal ?? attachTerminal;
   const CaptureStream = adapters.Capture ?? Capture, watch = adapters.watchSavedVariables ?? watchSavedVariables;
   const localDir = adapters.localDir ?? LOCAL_DIR;
@@ -142,6 +144,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     attach[tab] = picked.pid;
   }
   await fs.mkdir(localDir, { recursive: true });
+  // Neither log holds message text. Set up these adapters before acquiring either lock.
+  const events = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'events.log'));
+  const trace = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'trace.log'));
   const lockPath = path.join(localDir, 'bridge.lock');
   let epoch, bindingNonce, cooldownNonce;
   do { epoch = randomBytes(4).toString('hex'); } while (epoch === '00000000');
@@ -152,12 +157,13 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     record: { pid: process.pid, epoch, bindingNonce, cooldownNonce, startedAt: new Date().toISOString() } });
   for (const stale of reclaimed) process.stderr.write(`Witchcraft: set aside a stale lock (${stale.reason}): ${stale.path}\n`);
   const releaseLock = () => releaseOwnedLock({ lockPath, identity: lockIdentity, tag: epoch });
-  let writer, decoder, contextDecoder, context;
+  let writer, decoder, contextDecoder, context, releaseRing;
   try {
-    writer = new RingWriter({ addonsDir: config.addonsDir, ringSize: config.ringSize, epoch });
+    writer = new RingWriter({ addonsDir: config.addonsDir, ringSize: config.ringSize, epoch, write: adapters.writeChunk });
     decoder = new PixelDecoder();
     contextDecoder = new ContextDecoder();
     context = new ContextCache({ epoch });
+    releaseRing = await acquireRingLock(config.addonsDir, 'run');
   } catch (error) {
     // Everything before the guarded block below: release the lock rather than strand it.
     await lock.close().catch(() => {});
@@ -236,12 +242,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   }
   // The addon reports how many columns its pane fits; all terminals are resized to match.
   const outbox = new Outbox({ epoch, write: (tab, data, action) => pair.write(tab, data, action),
+    writePrompt: (tab, data, action) => pair.writePrompt(tab, data, action),
     onControl: ({ cols: fitted }) => { pair?.resize(fitted, pair.rows, 'game'); if (!stopped) void publish(); } });
-  // Every game-originated input decision is recorded (never its text) so a forged or dropped
-  // message is visible after the fact; stderr is repainted by the terminal display.
-  const events = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'events.log'));
-  // Diagnostics beside the audit log: how the lanes, the cursor and publishing behave over time.
-  const trace = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'trace.log'));
   let tracedSlot = 0, tracedFrame = '', stopLagProbe = () => {};
   const deliver = (lane, message) => {
     try { const result = outbox.accept(message); events.input(lane, message, result); return result; }
@@ -337,6 +339,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
           ...(session.id === 'claude' && claudeTools === false ? { tools: false } : {}) }));
         const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, cooldown });
         const published = await writer.publish({ changed: signature !== oldScreen, ack: outbox.ack,
+          promptProtocol: 1, promptResults: [...outbox.promptResults],
           contextProtocol: 4, contextAck, contextWant, contextWantMask, bindingProtocol: 1, bindingNonce, bindingAck, ...cooldown,
           cols: pair.cols, rows: pair.rows, sessions });
         if (published) oldScreen = signature;
@@ -352,8 +355,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       } while (dirty && !stopped);
     } catch (error) {
       trace.note({ what: 'publish-error', code: error?.code, reason: error?.message, slot: writer.cursor });
-      // A slot the game still has open is skipped; the next heartbeat asks for a fresh one.
-      if (isTransientWriteError(error)) process.stderr.write(`\r\nWitchcraft: skipped a chunk write (${error.code}); retrying on the next tick\r\n`);
+      // A binding heartbeat can retry the requested slot before the regular display tick.
+      if (isTransientWriteError(error)) process.stderr.write(`\r\nWitchcraft: skipped a chunk write (${error.code}); will retry\r\n`);
       else if (error.code === 'LUA_OUTPUT_BUDGET') process.stderr.write('\r\nWitchcraft: display snapshot exceeds the chunk budget; keeping terminal sessions active.\r\n');
       else if (error.code === 'DISPLAY_CONTENT') {
         // Agent text the Lua serializer refuses skips this frame and the next change publishes again.
@@ -379,7 +382,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       const attempt = async operation => { try { await operation(); } catch (failure) { rememberFailure(failure); } };
       clearInterval(timer);
       stopLagProbe();
-      sessionInfo?.stop();
+      await attempt(() => sessionInfo?.stop());
       clearInterval(toolsTimer);
       // Cancel an acquisition before waiting for it: start() may need stop() to unblock.
       // Stop it again after it settles, in case it acquired a handle after cancellation.
@@ -397,6 +400,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       await attempt(() => persistContext());
       for (const cleanup of cleanupTasks) await attempt(() => cleanup);
       await attempt(() => pair?.dispose());
+      await attempt(() => releaseRing());
       await attempt(() => lock.close());
       await attempt(() => releaseLock());
       const failure = shutdownErrors.length ? new AggregateError(shutdownErrors, shutdownErrors.map(item => item.message).join('; ')) : undefined;
@@ -450,13 +454,12 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       const Receiver = adapters.BindingReceiver ?? BindingReceiver;
       const Carrier = adapters.BindingCarrier ?? BindingCarrier;
       bindingReceiver = new Receiver({ epoch, nonce: bindingNonce,
-        // A heartbeat (sequence 0) carries only the slot, so a moved cursor is published at once;
-        // data frames publish on their acknowledgement as before.
+        // File polling presents the same heartbeat until the UI consumes the slot. A failed
+        // write still needs service, even though the requested cursor has already moved.
         onCursor: frame => {
-          const previous = writer.cursor, nonce = writer.uiNonce;
-          const moved = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
-          if (moved && frame.seq === 0 && (writer.cursor !== previous || writer.uiNonce !== nonce)) void publish();
-          return moved;
+          const accepted = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
+          if (accepted && frame.seq === 0 && !writer.hasPublishedCursor) void publish();
+          return accepted;
         },
         onMessage: message => {
           if (message.kind === 'context') {
@@ -466,7 +469,10 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
           }
           return deliver('binding', message);
         },
-        onAck: () => { void publish(); },
+        onAck: (_seq, frame, result) => {
+          if (result?.probe) trace.note({ what: 'binding-probe-ack', epoch, ui: frame.uiNonce });
+          void publish();
+        },
       });
       bindingCarrier = new Carrier({ accountDir: config.accountDir, receiver: bindingReceiver,
         onError: error => { events.error('binding', error); process.stderr.write(`\nBinding carrier retained for inspection: ${error.message}\n`); } });
@@ -696,6 +702,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'help' || command === '--help') {
     console.log(`Witchcraft - separate Claude, Codex and Copilot terminals inside WoW\n\n` +
       `witchcraft init [--ring 3000] [--clean] [--account NAME] [--character NAME]\n` +
+      `witchcraft doctor [--only claude|codex|copilot] [--account NAME] [--json]\n` +
       `witchcraft calibrate [--account NAME]    (show /witch calibrate first)\n` +
       `witchcraft burst-probe [--timeout 30]     (show /witch burstprobe first)\n` +
       `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--overlay|--no-overlay] [--no-pixels]\n` +
@@ -718,6 +725,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === 'consoles') {
+    const { listConsoles } = await import('../src/console-list.js');
     const found = await listConsoles({ all: options.all === true });
     if (!found.length) {
       console.log('No consoles found. Start a terminal, or pass --all to include background consoles.');
@@ -726,6 +734,12 @@ export async function main(argv = process.argv.slice(2)) {
     console.log('    PID  RUNNING                                                            WHERE');
     for (const candidate of found) console.log(candidateRow(candidate));
     console.log(`\nAttach one with: witchcraft run --attach claude=<PID>`);
+    return;
+  }
+  if (command === 'doctor') {
+    const report = await runDoctor({ options });
+    console.log(options.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
+    if (report.checks.some(check => check.status === 'fail')) process.exitCode = 1;
     return;
   }
   if (command === 'mcp-setup') {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Long and multiline prompts retain their complete draft across host restarts. Review retained input before deciding to resend.
+- Each updated bridge takes a lock for its target client. The same lock serializes ring setup, cleanup and bridge shutdown across installations.
+- `witchcraft doctor` diagnoses setup and connection progress, with a redacted JSON report.
+- `/witch errors watch` follows a selected error across reloads. Players can mark reproduction attempts and compare recurrence counts.
+- The public CI runs the addon and daemon regression suites. Tagged builds produce a verified addon ZIP for manual publication.
+
 ## 0.3.1 - 2026-11-22
 
 - Move the optional production cooldown carrier's exact-build gate from Forever `1.60.1.70205` to `1.60.1.71037` after a build-matched UI-source comparison and user-confirmed in-game operation on 71037.

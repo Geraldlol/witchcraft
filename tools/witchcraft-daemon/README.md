@@ -11,16 +11,15 @@ From this repository's `tools/witchcraft-daemon` folder:
 ```powershell
 npm.cmd ci --ignore-scripts --no-fund
 npm.cmd rebuild node-pty --ignore-scripts=false --foreground-scripts
-node node_modules/electron/install.js
-node -e "require('node-pty'); console.log(require('electron'))"
 node bin/witchcraft.js init --ring 3000
+node bin/witchcraft.js doctor
 ```
 
-Install scripts stay off for the whole tree. The two reviewed packages that need setup are handled
-explicitly: node-pty's install script runs through `rebuild` (the explicit `--ignore-scripts=false`
-matters: a user-level `ignore-scripts=true` otherwise makes `rebuild` succeed without running it),
-and Electron's binary is fetched by its installer against the `checksums.json` pinned in the locked
-package, rather than on first launch. The `node -e` check fails unless both artifacts are in place.
+Install scripts stay off for the whole tree. The explicit rebuild prepares node-pty. For the optional
+overlay, run `node node_modules/electron/install.js` to fetch the binary against the locked checksum.
+`doctor` also runs before setup. Add `--only codex` (or another assistant) to match the intended launch.
+Use `--json` for a redacted support report. A failed setup check exits with status 1. A stopped daemon
+or pending in-game step displays the next action.
 The release lockfile passes `npm audit` with no known vulnerabilities.
 
 The repository root's `wow.config.json` (copy `wow.config.example.json`; it is git-ignored) must identify the intended `Interface/AddOns` directory. Account selection is automatic only when one account directory exists; otherwise add `--account NAME`. Local calibration and preferences go in ignored `.local/config.json`.
@@ -84,7 +83,7 @@ Attached-console frames refresh the overlay using plain text, without the game's
 
 Each published session also carries what the screen says the agent is doing (`state`: working while "esc to interrupt" shows, waiting while a marked numbered menu is on screen, with its `choices`, otherwise idle) and, from the agent's own session files, `info` (model, effort, context used and window) and its last `reply` as lines. Claude's come from its transcript, found through `~/.claude/sessions/<pid>.json`; Codex's from the resumed rollout or the newest thread in `--cwd`.
 
-A multi-line prompt reaches the outbox as ordinary text parts: newlines travel as U+2028 and every part but the last starts with U+2063. The outbox joins a tab's parts (at most 8 KB) and writes them as one bracketed paste followed by Enter; a mirrored console types the same characters.
+When the daemon advertises prompt protocol 1, the addon sends long and multiline drafts in a group of numbered frames bounded to 4,640 original UTF-8 bytes. Each frame identifies the first message ID, part number and total. The addon retains the complete group while the host buffers parts. The daemon reports the final outcome after the PTY adapter returns or the Windows console helper acknowledges writing the text and Enter to its native input buffer. Missing, partial or failed console writes leave the draft available for review. The receipt covers terminal input submission. Assistant processing can be checked in the terminal itself. Older addon versions can still use the legacy input format.
 
 Attached-console lines wider than `--cols` (120 by default) continue on additional rows. Colors are retained in game, and rows above the visible screen remain in the bounded scrollback. This does not resize the source console. Restart the daemon after updating its code; `/reload` only reloads the addon.
 
@@ -131,7 +130,7 @@ The standalone burst probe uses the same calibrated origin with a strict 132 by 
 
 Each CLI has its own PTY and headless xterm screen. Foreground colors, bold/dim and literal text become bounded WoW strings; unsupported non-BMP glyphs use placeholders. The daemon atomically replaces the next chunk requested by the game heartbeat on the strip or on the binding carrier. It does not advance through unused files on its own. Each payload contains all three tabs, an input acknowledgement and the current UI nonce.
 
-Input is routed only to the named PTY. Retransmissions are deduplicated within a daemon session. Restarting the daemon creates a new session identifier; retained older input requires `/witch resend`. SavedVariables are parsed as literal data and never evaluated. Terminal screen output is not written into SavedVariables.
+Input is routed only to the named PTY. Retransmissions are deduplicated within a daemon session. After a daemon restart, use `/witch pending`, `/witch inspect <id>`, and then `/witch resend <id>` or `/witch discard <id>` after checking the terminal. These commands operate on the complete retained group. SavedVariables are parsed as literal data and never evaluated. Terminal screen output is not written into SavedVariables.
 
 The current node-pty 1.1.0 Windows adapter can retain a worker after the child has exited. Witchcraft verifies owned child PIDs have exited, releases its resources and lock, drains stdout/stderr, then ends the CLI host process. Cleanup failures produce a nonzero exit.
 

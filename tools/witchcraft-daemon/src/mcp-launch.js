@@ -1,4 +1,3 @@
-import { AGENT_TABS } from './agents.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const MCP_SCRIPT = fileURLToPath(new URL('../bin/witchcraft-mcp.js', import.meta.url));
+const LAUNCH_MCP_TABS = new Set(['claude', 'codex', 'copilot']);
 
 /** The WoW MCP server's command line: node, the script, the daemon's cache, and the local writes it grants. */
 export function serverCommand({ cachePath, nodePath = process.execPath, scriptPath = MCP_SCRIPT } = {}) {
@@ -17,10 +17,11 @@ export function serverCommand({ cachePath, nodePath = process.execPath, scriptPa
 
 // Pass arguments directly to the existing PTY launcher. No shell, user-wide
 // configuration changes, prompt injection, or automatic tool approvals.
+// Note: agy defines -c as --continue and uses mcp_config.json / `agy mcp add` rather than session CLI flags.
 export function withWoWMcp(tab, entry, options = {}) {
   if (!entry) return entry;
   const basename = path.basename(entry.file).toLowerCase().replace(/\.exe$/u, '');
-  if (!AGENT_TABS.includes(tab) || basename !== tab) return entry;
+  if (!LAUNCH_MCP_TABS.has(tab) || basename !== tab) return entry;
   const [nodePath, ...serverArgs] = serverCommand(options);
   const args = [...(entry.args ?? [])];
   if (tab === 'claude' || tab === 'copilot') {

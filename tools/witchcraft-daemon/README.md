@@ -33,7 +33,7 @@ Start both agents in a terminal:
 node bin/witchcraft.js run --cwd 'C:\path\to\your\project'
 ```
 
-Run `/witch bindprobe` once out of combat for each new daemon/UI session. The default binding carrier is not build-pinned; its qualification is complete only when Witchcraft prints that host decode, acknowledgement and exact cleanup all succeeded. The probe refuses occupied keys, combat, binding-set changes and any readback mismatch. The optional cooldown and addon-state carriers remain pinned in [`Witchcraft/Evidence.lua`](../../Witchcraft/Evidence.lua) (currently 1.60.1.70205) and stay off on another build. Keep the screen strip calibrated as a separate fallback.
+Run `/witch bindprobe` once out of combat for each new daemon/UI session. The default binding carrier is not build-pinned; its qualification is complete only when Witchcraft prints that host decode, acknowledgement and exact cleanup all succeeded. The probe refuses occupied keys, combat, binding-set changes and any readback mismatch. The optional production cooldown carrier is exact-build-gated in [`Witchcraft/Evidence.lua`](../../Witchcraft/Evidence.lua), currently at user-confirmed Forever build `1.60.1.71037`, and stays off on every other build. The AddOns-state experiment is a dormant source-only prototype: the addon does not load it and the daemon does not use it. Keep the screen strip calibrated as a separate fallback.
 
 Calibrate the screen strip before your first run. Once calibration is saved, ordinary `run` also reads the strip, providing a fallback when a file carrier cannot operate. In WoW, run `/witch calibrate`, keep the top-left strip visible and uncovered, then run:
 

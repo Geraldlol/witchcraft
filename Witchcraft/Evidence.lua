@@ -1,12 +1,14 @@
--- The one client build the optional cooldown and addon-state carriers were checked against. They
--- write the player's real game settings, so an unchecked build keeps them off. Moving to a new
--- build is this one line after the build-matched UI source shows no Cooldown Viewer, encoding or
--- AddOns API change.
--- 69977 moved the pin from 69913: the source differs only in three login-screen files
--- (Gethe/wow-ui-source forever 70ef1b2fd7...c6e8998318). The daemon reads this file to warn at start.
--- 70205 moved the pin from 69977 on 2026-10-04: the user confirmed both carriers working in game.
+-- Exact-build qualification gate for the optional production cooldown carrier. It writes the
+-- player's Cooldown Viewer settings, so an unchecked build keeps it off. The dormant AddOns-state
+-- prototype reads this gate only if a harness loads it; it is absent from the production TOC, is
+-- not imported or started by the production daemon, and is not runtime-qualified.
+-- 71037 moved the cooldown pin from 70205 on 2026-11-22. Build-matched Forever UI source changed
+-- from e3ecc27b64d30fdc735a3f6579b866858f9f9df1 to 734f065329cff4992835b01a84f210a297db91b6;
+-- the production Cooldown Viewer, encoding, key-binding and chunk-loading calls are unchanged.
+-- The inspected AddOns enable-state APIs are also unchanged. The user confirmed the production
+-- cooldown carrier working in game on this exact build. The daemon reads this file.
 local _, ns = ...
-local Evidence = { version = "1.60.1", build = "70205", interface = 16001 }
+local Evidence = { version = "1.60.1", build = "71037", interface = 16001 }
 ns.Evidence = Evidence
 
 function Evidence.Label() return Evidence.version .. "." .. Evidence.build end

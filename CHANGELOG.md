@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-22
+
+- Move the optional production cooldown carrier's exact-build gate from Forever `1.60.1.70205` to `1.60.1.71037` after a build-matched UI-source comparison and user-confirmed in-game operation on 71037.
+- Keep the default binding carrier and calibrated screen strip unchanged; the cooldown carrier still fails closed on every other build.
+- Correct earlier wording: AddOns-state is a dormant source-only prototype, not a loaded, daemon-connected or runtime-qualified production transport.
+
 ## 0.3.0 - 2026-11-18
 
 - Experimental Linux support for the strip reader, contributed by @josephrclick: on Linux the daemon reads the game's X11 or XWayland window (Wine or Proton) through a small Python helper (`python3`, `libX11`, `libXRes`). `calibrate` measures the window's upscale ratio and stores it as `region.scale`, so a client rendering below its window size still decodes. The window must belong to a `wow*` process (Wine names it after the exe); `WITCHCRAFT_WINDOW_ID` selects it explicitly. Joining a running console still needs Windows (`--no-current`). **Linux testers wanted:** this has run on one machine, and the fixes made after review are covered by unit tests only. Windows behaviour is unchanged.

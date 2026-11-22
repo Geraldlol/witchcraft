@@ -1,6 +1,6 @@
 # Witchcraft
 
-Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.3.0`, interface `16001`.
+Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.3.1`, interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 
@@ -56,6 +56,8 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch reset` | Reload the UI; waits until combat ends |
 
 ## Current limits
+
+The optional production cooldown carrier is user-confirmed in game on exact Forever build `1.60.1.71037` (2026-11-22) and fails closed on every other build. The default binding carrier is not build-pinned and must still pass `/witch bindprobe` once per daemon/UI session; the calibrated screen strip remains a separate fallback. The AddOns-state experiment remains a dormant source-only prototype: it is not loaded by the addon, connected to the daemon or runtime-qualified. This confirmation does not establish a clean extracted-ZIP install, later client builds or the complete multi-agent flow.
 
 The dense carrier is diagnostic only. It does not update the MCP cache or send input to either assistant, and it must not replace normal traffic until the 200/300/400/500 ms native matrix passes.
 

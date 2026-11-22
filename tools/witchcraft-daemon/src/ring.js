@@ -7,7 +7,7 @@ export function chunkName(index) {
   if (!Number.isInteger(index) || index < 1 || index > 9999) throw new Error('Invalid chunk index');
   return `Witchcraft_Chunk_${String(index).padStart(4, '0')}`;
 }
-export async function assertOwnedChunk(addonsDir, index) {
+export async function assertOwnedChunk(addonsDir, index, { requirePayload = false } = {}) {
   const name = chunkName(index), directory = path.join(path.resolve(addonsDir), name);
   const info = await fs.lstat(directory);
   if (!info.isDirectory() || info.isSymbolicLink() || await fs.realpath(directory) !== directory) throw new Error(`Refusing linked chunk: ${name}`);
@@ -17,6 +17,9 @@ export async function assertOwnedChunk(addonsDir, index) {
   const toc = await fs.readFile(tocPath, 'utf8');
   if (!/^## X-Witchcraft-Chunk: 1\s*$/mu.test(toc) || !/^## Dependencies: Witchcraft\s*$/mu.test(toc)
     || !/^## LoadOnDemand: 1\s*$/mu.test(toc)) throw new Error(`Unowned chunk: ${name}`);
+  if (requirePayload && (!/^Chunk\.lua[ \t]*\r?$/mu.test(toc) || !(await fs.lstat(path.join(directory, 'Chunk.lua'))).isFile())) {
+    throw new Error(`Incomplete chunk: ${name}`);
+  }
   return directory;
 }
 // Windows refuses to replace a file that another process has open (the game's
@@ -133,6 +136,9 @@ export class RingWriter {
     return true;
   }
   reset() { this.generation++; this.cursor = 1; this.changed = false; this.cursorLane = null; this.stripSeenAt = null; }
+  get hasPublishedCursor() {
+    return this.lastWrite?.generation === this.generation && this.lastWrite.seq === this.cursor;
+  }
   publish(snapshot) {
     // Protocol 4: game context is pulled on demand, never streamed. contextWant is the request
     // id and contextWantMask names the domains (1 player, 2 quests, 4 progress, 8 errors) it asks for.

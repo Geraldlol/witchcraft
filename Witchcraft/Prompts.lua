@@ -6,7 +6,8 @@ ns.Prompts = Prompts
 -- Older hosts consume unknown control requests without typing their contents.
 local CONTROL, MORE, LINE = "\226\129\162", "\226\129\163", "\226\128\168"
 local PREFIX = CONTROL .. "P"
-local PART_BYTES, MAX_PARTS = 580, 8
+-- Escaping can double a draft consisting entirely of newlines or tildes.
+local PART_BYTES, MAX_PARTS = 580, 17
 
 function Prompts.Reserved(text)
     return text:sub(1, 3) == CONTROL or text:sub(1, 3) == MORE or text:find(LINE, 1, true) ~= nil
@@ -29,21 +30,22 @@ function Prompts.Parts(text)
         local body = encoded:sub(pos, stop)
         if not ns.Pixel.ValidText(body) then return nil, "Prompt contains invalid UTF-8 or a control character" end
         parts[#parts + 1], pos = body, stop + 1
-        if #parts > MAX_PARTS then return nil, "Too long: a prompt must fit eight encoded parts" end
+        if #parts > MAX_PARTS then return nil, "Too long: encoded prompt exceeds its frame budget" end
     end
     return parts
 end
 
 function Prompts.Frame(first, index, count, body)
-    return PREFIX .. string.format("%05x%d%d:", first, index, count) .. body
+    return PREFIX .. string.format("%05x%02d%02d:", first, index, count) .. body
 end
 
 function Prompts.Read(message)
     if message.action ~= "text" or message.text:sub(1, #PREFIX) ~= PREFIX then return nil end
-    local first, index, count, body = message.text:match("^" .. PREFIX .. "(%x%x%x%x%x)([1-8])([1-8]):(.+)$")
+    local first, index, count, body = message.text:match("^" .. PREFIX .. "(%x%x%x%x%x)(%d%d)(%d%d):(.+)$")
     if not first then return nil end
     first, index, count = tonumber(first, 16), tonumber(index), tonumber(count)
-    if not first or first < 1 or first + count - 1 > 262143 or index > count or first + index - 1 ~= message.id then return nil end
+    if first < 1 or first + count - 1 > 262143 or index < 1 or count > MAX_PARTS
+        or index > count or first + index - 1 ~= message.id then return nil end
     return first, index, count, body
 end
 

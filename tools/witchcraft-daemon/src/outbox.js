@@ -12,7 +12,7 @@ export const MORE = '\u2063', LINE = '\u2028', PASTE_LIMIT = 8192;
 // A text message that starts with INVISIBLE TIMES is a request from the addon, never typed:
 // `cols=N` asks for terminals as wide as the in-game pane (40-240 columns).
 export const CONTROL = '\u2062';
-const PROMPT_PART = /^\u2062P([0-9a-f]{5})([1-8])([1-8]):(.+)$/su;
+const PROMPT_PART = /^\u2062P([0-9a-f]{5})([0-9]{2})([0-9]{2}):(.+)$/su;
 const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 export function validMessage(message) {
   return message && typeof message === 'object' && /^[0-9a-f]{8}$/u.test(message.epoch) && message.epoch !== '00000000'
@@ -92,7 +92,7 @@ export class Outbox {
     const match = PROMPT_PART.exec(message.text);
     if (!match) return { accepted: false, reason: 'invalid prompt frame' };
     const first = Number.parseInt(match[1], 16), part = Number(match[2]), count = Number(match[3]);
-    if (part > count || first < 1 || first + part - 1 !== message.id || first + count - 1 > 262143
+    if (part < 1 || count > 17 || part > count || first < 1 || first + part - 1 !== message.id || first + count - 1 > 262143
       || Buffer.byteLength(match[4]) > 580) return { accepted: false, reason: 'invalid prompt identity' };
     if (part === 1) this.prompt = { first, tab: message.tab, count, bodies: [] };
     const group = this.prompt;
@@ -118,6 +118,7 @@ export class Outbox {
     try {
       if (!/^(?:[^~]|~[~n])*$/u.test(encoded)) return finish(false);
       const text = encoded.replace(/~([~n])/gu, (_, c) => c === 'n' ? '\n' : '~');
+      if (Buffer.byteLength(text) > 4640) return finish(false);
       const paste = text.includes('\n');
       const data = paste ? PASTE_START + text.replaceAll('\n', '\r') + PASTE_END + '\r' : text + '\r';
       const result = this.writePrompt(message.tab, data, paste ? 'paste' : 'text');

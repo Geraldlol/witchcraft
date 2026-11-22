@@ -91,10 +91,12 @@ test('missing or damaged slots in the middle of the ring count as failures', asy
   const middle = path.join(f.addonsDir, 'Witchcraft_Chunk_0003');
   await fs.unlink(path.join(middle, 'Chunk.lua'));
   const predecessor = 'Witchcraft_Chunk_0002';
-  await fs.writeFile(path.join(f.addonsDir, predecessor, predecessor + '.toc'), '## Unrelated\n');
+  const toc = path.join(f.addonsDir, predecessor, predecessor + '.toc');
+  await fs.writeFile(toc, (await fs.readFile(toc, 'utf8')).replace('Chunk.lua', 'Missing.lua'));
   const report = await f.diagnose();
   assert.equal(check(report, 'ring').status, 'fail');
   assert.match(check(report, 'ring').detail, /3\/5/u);
+  assert.match(check(report, 'ring').next, /Witchcraft_Chunk_0002/u);
 });
 
 test('heartbeat and probe acknowledgements must belong to the live daemon and current UI', async t => {

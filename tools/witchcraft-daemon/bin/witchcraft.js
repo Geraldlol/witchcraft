@@ -159,7 +159,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   const releaseLock = () => releaseOwnedLock({ lockPath, identity: lockIdentity, tag: epoch });
   let writer, decoder, contextDecoder, context, releaseRing;
   try {
-    writer = new RingWriter({ addonsDir: config.addonsDir, ringSize: config.ringSize, epoch });
+    writer = new RingWriter({ addonsDir: config.addonsDir, ringSize: config.ringSize, epoch, write: adapters.writeChunk });
     decoder = new PixelDecoder();
     contextDecoder = new ContextDecoder();
     context = new ContextCache({ epoch });
@@ -454,13 +454,12 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       const Receiver = adapters.BindingReceiver ?? BindingReceiver;
       const Carrier = adapters.BindingCarrier ?? BindingCarrier;
       bindingReceiver = new Receiver({ epoch, nonce: bindingNonce,
-        // A heartbeat (sequence 0) carries only the slot, so a moved cursor is published at once;
-        // data frames publish on their acknowledgement as before.
+        // File polling presents the same heartbeat until the UI consumes the slot. A failed
+        // write still needs service, even though the requested cursor has already moved.
         onCursor: frame => {
-          const previous = writer.cursor, nonce = writer.uiNonce;
-          const moved = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
-          if (moved && frame.seq === 0 && (writer.cursor !== previous || writer.uiNonce !== nonce)) void publish();
-          return moved;
+          const accepted = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
+          if (accepted && frame.seq === 0 && !writer.hasPublishedCursor) void publish();
+          return accepted;
         },
         onMessage: message => {
           if (message.kind === 'context') {

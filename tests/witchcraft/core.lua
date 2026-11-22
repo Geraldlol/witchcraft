@@ -948,7 +948,7 @@ test("a long or multi-line prompt queues as marked parts on UTF-8 boundaries, wh
         assert(#part <= 600 and ns.Pixel.ValidText(part), "each part is a valid carrier text")
     end
     local queued = #c.global.outbox
-    equal(c:SendLong("claude", string.rep("x", 4700)), false, "more than eight parts is refused")
+    equal(c:SendLong("claude", string.rep("x", 4700)), false, "text beyond the byte budget is refused")
     equal(c:SendLong("claude", "   "), false)
     equal(#c.global.outbox, queued, "a refused prompt queues nothing")
 end)

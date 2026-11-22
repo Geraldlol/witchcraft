@@ -8,7 +8,8 @@ import { runBridge } from '../bin/witchcraft.js';
 import { initializeRing } from '../src/init.js';
 import { encodeMessage, encodeContext, encodeHeartbeat } from '../src/pixel.js';
 import { readContextFile } from '../src/context-cache.js';
-import { BINDING_KEYS, BINDING_PROBE_BODY, BindingReceiver, encodeBindingAction } from '../src/binding-carrier.js';
+import { BINDING_KEYS, BINDING_PROBE_BODY, encodeBindingAction } from '../src/binding-carrier.js';
+import { atomicWrite } from '../src/ring.js';
 import { encodeCooldownContext, encodeCooldownFrame } from '../src/cooldown-carrier.js';
 import { cooldownLayout } from './helpers/cooldown-layout.js';
 import { contextWantPath, requestContext } from '../src/context-want.js';
@@ -758,16 +759,17 @@ test('bridge: a cooldown heartbeat bootstraps the ring in the background without
   assert.equal(f.state.captureStopped, 1);
 });
 
-test('bridge: a binding heartbeat advances the ring beside a silent strip', async t => {
-  const outcomes = [];
-  class ObservedReceiver extends BindingReceiver {
-    async accept(frame) {
-      const result = await super.accept(frame);
-      outcomes.push({ seq: frame.seq, slot: frame.slot, result });
-      return result;
+test('bridge: a binding heartbeat retries an unpublished slot beside a silent strip', async t => {
+  let holdNext = false, refused = 0;
+  const writeChunk = async (filename, source) => {
+    if (holdNext && path.basename(path.dirname(filename)) === 'Witchcraft_Chunk_0002') {
+      holdNext = false;
+      refused++;
+      throw Object.assign(new Error('fixture: slot is still open after atomic rename retries'), { code: 'EPERM' });
     }
-  }
-  const f = await fixture(t, { binding: true, pixels: true, adapters: { BindingReceiver: ObservedReceiver } }); await f.ready();
+    return atomicWrite(filename, source);
+  };
+  const f = await fixture(t, { binding: true, pixels: true, adapters: { writeChunk } }); await f.ready();
   assert.equal(f.state.capture?.started, true, 'the strip is on and never sees the game');
   const uiNonce = 'abcdef01', bindingFile = path.join(f.config.accountDir, 'bindings-cache.wtf');
   const writeAction = value => fs.writeFile(bindingFile, `bind ${BINDING_KEYS[0]} ${value}\n`);
@@ -776,12 +778,12 @@ test('bridge: a binding heartbeat advances the ring beside a silent strip', asyn
   const connected = await f.payload(1, value => value.uiNonce === uiNonce && value.bindingAck === 1);
   assert.equal(connected.cursorLane, 'file');
   // The heartbeat replaces the probe on the key; it names slot 2 and is never acknowledged.
+  holdNext = true;
   await writeAction(encodeBindingAction({ epoch: connected.epoch, nonce: connected.bindingNonce, uiNonce,
     slot: 2, seq: 0, part: 1, count: 1, payload: Buffer.from([0x48, 0]) }));
-  const advanced = await f.payload(2, value => value.uiNonce === uiNonce && value.ready).catch(async err => {
-    const trace = await fs.readFile(path.join(path.dirname(f.lockPath), 'trace.log'), 'utf8').catch(() => '');
-    throw Error(err.message + ' | ' + JSON.stringify(outcomes.slice(-18)) + ' | ' + trace);
-  });
+  // With no more file changes, the same persisted heartbeat must recover before the 8 s display tick.
+  const advanced = await f.payload(2, value => value.uiNonce === uiNonce && value.ready);
+  assert.equal(refused, 1);
   assert.equal(advanced.cursorLane, 'file'); assert.equal(advanced.bindingAck, 1);
   f.state.pair.finish(); assert.equal(await within(f.running), undefined);
   assert.equal(f.state.captureStopped, 1);

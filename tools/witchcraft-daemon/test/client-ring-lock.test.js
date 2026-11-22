@@ -122,3 +122,20 @@ test('a delayed stale recovery never moves the new client owner or gives a third
     await releaseOwnedLock({ lockPath, identity: current.identity, tag: 'winner' });
   }
 });
+
+test('recovery interrupted while holding its claim preserves both records and names the manual action', async t => {
+  const root = await sandbox(t), lockPath = path.join(root, RING_LOCK_NAME), recordType = 'witchcraft-ring-v1';
+  const dead = JSON.stringify({ type: recordType, pid: process.pid + 1, startedAt: new Date().toISOString() });
+  await fs.writeFile(lockPath, dead);
+  const stat = await fs.stat(lockPath, { bigint: true });
+  const claim = `${lockPath}.recover-${stat.dev}-${stat.ino}`;
+  await fs.writeFile(claim, dead);
+  await assert.rejects(acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid },
+    tag: 'next', isAlive: pid => pid === process.pid }), error => {
+    assert.equal(error.code, 'LOCK_HELD');
+    assert.ok(error.message.includes(claim) && error.message.includes('recorded process has exited'));
+    return true;
+  });
+  assert.equal(await fs.readFile(lockPath, 'utf8'), dead);
+  assert.equal(await fs.readFile(claim, 'utf8'), dead);
+});

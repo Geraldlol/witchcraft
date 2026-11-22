@@ -103,7 +103,7 @@ for (const answer of ['written', 'partial', 'exit']) {
     reply({ type: 'ready' });
     const host = new Outbox({ epoch: '1234abcd', writePrompt: (...args) => pair.writePrompt(...args) });
     game.update(host);
-    game.run('assert(c:SendLong("claude", "hello\\\\nworld"))');
+    game.run('assert(c:SendLong("claude", "hello\\nworld"))');
     const frame = game.next();
     assert.equal(host.accept(frame).buffered, true);
     assert.equal(host.accept(frame).buffered, true);
@@ -157,6 +157,17 @@ test('a final frame alone never types, and a refusal leaves the entire queue unt
   game.update(host, 'nil');
   assert.equal(game.next(), null);
   game.run('assert(not c:SendLong("codex", string.rep("z", 601)))');
+});
+
+test('the full original byte budget survives escaping, UTF-8 division, and literal marker text', t => {
+  const game = controller(t), writes = [];
+  const host = new Outbox({ epoch: '1234abcd', write: (_tab, text) => writes.push(text) });
+  game.update(host);
+  const source = '~'.repeat(4626) + '𝄞' + '\u2063' + '\u2028' + '\nend';
+  assert.equal(Buffer.byteLength(source), 4640);
+  game.run('assert(c:SendLong("claude", string.rep("~",4626) .. "𝄞' + '\u2063\u2028' + '\\nend"))');
+  while (game.next()) { host.accept(game.next()); game.update(host); }
+  assert.deepEqual(writes, ['\x1b[200~' + source.replace('\n', '\r') + '\x1b[201~\r']);
 });
 
 test('saved text from an older addon can be inspected and discarded without guessing its missing prefix', t => {

@@ -35,20 +35,23 @@ async function probeRecord(file, epoch, uiNonce, startedAt, now) {
 }
 
 async function installedRing(addonsDir, size) {
-  let valid = 0;
+  let valid = 0, firstDamaged;
   const present = new Set(await fs.readdir(addonsDir));
   // A normal install has 3,000 slots. Bound simultaneous filesystem operations.
   for (let start = 1; start <= size; start += 16) {
     const batch = Array.from({ length: Math.min(16, size - start + 1) }, async (_, offset) => {
-      if (!present.has(chunkName(start + offset))) return false;
+      if (!present.has(chunkName(start + offset))) return 'missing';
       try {
-        const directory = await assertOwnedChunk(addonsDir, start + offset);
-        return (await fs.lstat(path.join(directory, 'Chunk.lua'))).isFile();
-      } catch { return false; }
+        await assertOwnedChunk(addonsDir, start + offset, { requirePayload: true });
+        return 'ok';
+      } catch { return 'damaged'; }
     });
-    valid += (await Promise.all(batch)).filter(Boolean).length;
+    const statuses = await Promise.all(batch);
+    valid += statuses.filter(status => status === 'ok').length;
+    const damaged = statuses.indexOf('damaged');
+    if (damaged >= 0) firstDamaged ??= chunkName(start + damaged);
   }
-  return valid;
+  return { valid, firstDamaged };
 }
 
 async function dependencies() {
@@ -102,11 +105,13 @@ export async function runDoctor({ options = {}, repoRoot = REPO_ROOT, localDir =
     installed === version ? null : 'Copy the matching Witchcraft addon folder into the selected client.');
   const build = await checkClientBuild(config.addonsDir);
   add('build', 'info', `Client build ${build.client ?? 'unknown'}. Optional cooldown carrier qualification: ${build.status}.`);
-  let valid = 0;
-  try { valid = await installedRing(config.addonsDir, config.ringSize); }
+  let valid = 0, firstDamaged;
+  try { ({ valid, firstDamaged } = await installedRing(config.addonsDir, config.ringSize)); }
   catch { /* No helper ring at this destination. */ }
   add('ring', valid === config.ringSize ? 'ok' : 'fail', `${valid}/${config.ringSize} expected helper slots verified.`,
-    valid === config.ringSize ? null : 'Check the client path, run witchcraft init and fully restart WoW after creating helpers.');
+    valid === config.ringSize ? null : firstDamaged
+      ? `Stop the bridge and inspect ${firstDamaged}. Preserve damaged or unrelated folders outside AddOns, then run witchcraft init and fully restart WoW.`
+      : 'Check the client path, run witchcraft init and fully restart WoW after creating helpers.');
   if (modules) {
     let commands;
     try { ({ commands } = selectAgentCommands(config, options)); }

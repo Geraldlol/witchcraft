@@ -106,7 +106,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     const findClaude = adapters.findClaudeSession ?? findClaudeSession, findCodex = adapters.findCodexThread ?? findCodexThread;
     const spawned = tab => chosen[tab] && requested[tab] === undefined && !(child.length && initialTab === tab)
       && path.basename(chosen[tab].file).toLowerCase().replace(/\.exe$/u, '') === tab;
-    if (spawned('claude')) {
+    // Automatic console mirroring uses the Windows Console API (console-mirror.ps1); on macOS and
+    // Linux, Claude launches in the daemon's own PTY unless a test supplies findClaudeSession.
+    if (spawned('claude') && (process.platform === 'win32' || adapters.findClaudeSession)) {
       const session = await findClaude({ cwd });
       if (session) {
         requested.claude = { pid: joinedClaude = session.pid };

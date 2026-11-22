@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Read-only capture of the Witchcraft strip for Linux (X11 or XWayland).
+"""Read-only capture of the Witchcraft strip for Linux (X11 or XWayland) and macOS (Quartz).
 
 Speaks the same JSON-lines protocol as capture-strip.ps1. Coordinates are relative to the
 game window, in game pixels: -Scale is window pixels per game pixel, so a client rendering
 2560x1440 into a 3840x2160 window uses 1.5 and each sampled pixel is the centre of its
-upscaled block. Stream frames are refused unless the game window holds X input focus. The single
+upscaled block. Stream frames are refused unless the game window holds input focus. The single
 calibration capture is taken regardless, as on Windows: calibrate runs from a terminal that holds
 the focus, and its image only locates the strip.
 
-Requires libX11 and libXRes (the X-Resource extension client library). The window is found by
+On Linux, requires libX11 and libXRes (the X-Resource extension client library). The window is found by
 title ("World of Warcraft") and accepted only when the X server reports that it belongs to a
 process whose name starts with "wow" (read from /proc/<pid>/comm); a window whose
-process cannot be verified is never chosen. WITCHCRAFT_WINDOW_ID selects the window explicitly
-and is used without the process check.
+process cannot be verified is never chosen.
+On macOS, uses CoreGraphics (CGWindowListCopyWindowInfo / CGWindowListCreateImage) to locate and read
+the "World of Warcraft" window (Screen Recording permission is required for pixel reads).
+WITCHCRAFT_WINDOW_ID selects the window explicitly on either platform.
 """
 import argparse
 import base64
@@ -20,6 +22,7 @@ import ctypes
 import ctypes.util
 import json
 import os
+import plistlib
 import sys
 import time
 from array import array
@@ -71,6 +74,187 @@ def game_process(comm):
     """Whether a /proc/<pid>/comm name is the game: Wine names a process after its exe (WowB.exe)."""
     name = comm.strip().lower()
     return name.startswith("wow")
+
+
+def mac_game_window(entry):
+    """Whether a macOS Quartz CGWindowListCopyWindowInfo dictionary belongs to World of Warcraft."""
+    if not isinstance(entry, dict) or entry.get("kCGWindowLayer", -1) != 0:
+        return False
+    bounds = entry.get("kCGWindowBounds")
+    if not isinstance(bounds, dict) or bounds.get("Width", 0) < 132 or bounds.get("Height", 0) < 12:
+        return False
+    owner = str(entry.get("kCGWindowOwnerName") or "").strip()
+    title = str(entry.get("kCGWindowName") or "").strip()
+    owner_ok = owner.lower() == "world of warcraft" or game_process(owner)
+    title_ok = not title or title == "World of Warcraft"
+    return owner_ok and title_ok
+
+
+class CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class CGSize(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class CGRect(ctypes.Structure):
+    _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+
+class MacScreen:
+    """macOS Quartz / CoreGraphics window reader speaking the same interface as Screen."""
+
+    K_ON_SCREEN_NO_DESKTOP = 1 | 16
+    K_INCLUDING_WINDOW = 8
+    K_IMAGE_NOMINAL_FRAMELESS = 1 | 16
+    K_PLIST_XML = 100
+    K_BITMAP_BGRX_32LE = 6 | (2 << 12)
+
+    def __init__(self):
+        cg_path = ctypes.util.find_library("CoreGraphics") or "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        cf_path = ctypes.util.find_library("CoreFoundation") or "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        cg = self.cg = ctypes.CDLL(cg_path)
+        cf = self.cf = ctypes.CDLL(cf_path)
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGWindowListCreateImage.restype = ctypes.c_void_p
+        cg.CGWindowListCreateImage.argtypes = [CGRect, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGImageGetWidth.restype = ctypes.c_size_t
+        cg.CGImageGetWidth.argtypes = [ctypes.c_void_p]
+        cg.CGImageGetHeight.restype = ctypes.c_size_t
+        cg.CGImageGetHeight.argtypes = [ctypes.c_void_p]
+        cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
+        cg.CGColorSpaceCreateDeviceRGB.argtypes = []
+        cg.CGColorSpaceRelease.restype = None
+        cg.CGColorSpaceRelease.argtypes = [ctypes.c_void_p]
+        cg.CGBitmapContextCreate.restype = ctypes.c_void_p
+        cg.CGBitmapContextCreate.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t,
+                                             ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint32]
+        cg.CGContextDrawImage.restype = None
+        cg.CGContextDrawImage.argtypes = [ctypes.c_void_p, CGRect, ctypes.c_void_p]
+        cg.CGContextRelease.restype = None
+        cg.CGContextRelease.argtypes = [ctypes.c_void_p]
+        cg.CGImageRelease.restype = None
+        cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        cf.CFPropertyListCreateData.restype = ctypes.c_void_p
+        cf.CFPropertyListCreateData.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long,
+                                                ctypes.c_ulong, ctypes.c_void_p]
+        cf.CFDataGetBytePtr.restype = ctypes.c_void_p
+        cf.CFDataGetBytePtr.argtypes = [ctypes.c_void_p]
+        cf.CFDataGetLength.restype = ctypes.c_long
+        cf.CFDataGetLength.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        self._bounds = {"X": 0.0, "Y": 0.0, "Width": 0.0, "Height": 0.0}
+        self.pid = None
+        self.window = self._find()
+
+    def _windows(self):
+        info = self.cg.CGWindowListCopyWindowInfo(self.K_ON_SCREEN_NO_DESKTOP, 0)
+        if not info:
+            return []
+        try:
+            data = self.cf.CFPropertyListCreateData(None, info, self.K_PLIST_XML, 0, None)
+            if not data:
+                return []
+            try:
+                ptr = self.cf.CFDataGetBytePtr(data)
+                length = self.cf.CFDataGetLength(data)
+                if not ptr or length <= 0:
+                    return []
+                parsed = plistlib.loads(ctypes.string_at(ptr, length))
+                return parsed if isinstance(parsed, list) else []
+            finally:
+                self.cf.CFRelease(data)
+        finally:
+            self.cf.CFRelease(info)
+
+    def _find(self):
+        override = os.environ.get("WITCHCRAFT_WINDOW_ID")
+        windows = self._windows()
+        if override:
+            target = int(override, 0)
+            for entry in windows:
+                if entry.get("kCGWindowNumber") == target:
+                    self._bounds = entry.get("kCGWindowBounds") or self._bounds
+                    self.pid = entry.get("kCGWindowOwnerPID")
+                    break
+            return target
+        matches = []
+        for entry in windows:
+            if mac_game_window(entry):
+                bounds = entry["kCGWindowBounds"]
+                area = int(bounds.get("Width", 0)) * int(bounds.get("Height", 0))
+                matches.append((area, entry))
+        if not matches:
+            raise RuntimeError("No World of Warcraft window found. Start the game, or set WITCHCRAFT_WINDOW_ID.")
+        _, best = max(matches, key=lambda item: item[0])
+        self._bounds = best["kCGWindowBounds"]
+        self.pid = best.get("kCGWindowOwnerPID")
+        return int(best["kCGWindowNumber"])
+
+    def size(self, window=None):
+        target = window or self.window
+        for entry in self._windows():
+            if entry.get("kCGWindowNumber") == target:
+                bounds = entry.get("kCGWindowBounds") or {}
+                width, height = int(bounds.get("Width", 0)), int(bounds.get("Height", 0))
+                if width > 0 and height > 0:
+                    if target == self.window:
+                        self._bounds = bounds
+                        self.pid = entry.get("kCGWindowOwnerPID")
+                    return width, height
+        raise RuntimeError("The game window is gone. Start the game and try again.")
+
+    def focused(self):
+        for entry in self._windows():
+            if entry.get("kCGWindowLayer", -1) != 0:
+                continue
+            bounds = entry.get("kCGWindowBounds") or {}
+            if bounds.get("Width", 0) < 64 or bounds.get("Height", 0) < 64:
+                continue
+            if entry.get("kCGWindowNumber") == self.window:
+                return True
+            if self.pid and entry.get("kCGWindowOwnerPID") == self.pid:
+                return True
+            return False
+        return False
+
+    def grab(self, x, y, width, height):
+        ox = float(self._bounds.get("X", 0.0)) + x
+        oy = float(self._bounds.get("Y", 0.0)) + y
+        rect = CGRect(CGPoint(ox, oy), CGSize(float(width), float(height)))
+        image = self.cg.CGWindowListCreateImage(rect, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_NOMINAL_FRAMELESS)
+        if not image:
+            raise GrabFailed("The game window could not be read. Grant Screen Recording permission in System Settings > Privacy & Security, and keep the game visible.")
+        try:
+            img_w = self.cg.CGImageGetWidth(image)
+            img_h = self.cg.CGImageGetHeight(image)
+            if img_w <= 0 or img_h <= 0:
+                raise GrabFailed("The game window could not be read. Keep it visible and not minimized.")
+            buf = (ctypes.c_ubyte * (width * height * 4))()
+            space = self.cg.CGColorSpaceCreateDeviceRGB()
+            if not space:
+                raise RuntimeError("Could not create CGColorSpace")
+            try:
+                ctx = self.cg.CGBitmapContextCreate(buf, width, height, 8, width * 4, space, self.K_BITMAP_BGRX_32LE)
+                if not ctx:
+                    raise RuntimeError("Could not create CGBitmapContext")
+                try:
+                    draw_rect = CGRect(CGPoint(0.0, 0.0), CGSize(float(width), float(height)))
+                    self.cg.CGContextDrawImage(ctx, draw_rect, image)
+                finally:
+                    self.cg.CGContextRelease(ctx)
+            finally:
+                self.cg.CGColorSpaceRelease(space)
+            words = array("I")
+            words.frombytes(bytes(buf))
+            if sys.byteorder != "little":
+                words.byteswap()
+            return words
+        finally:
+            self.cg.CGImageRelease(image)
 
 
 class Screen:
@@ -383,7 +567,7 @@ def main():
             raise RuntimeError("Calibration is a single capture, never a stream.")
         if args.Scale != 0 and not 1 <= args.Scale <= 4:
             raise RuntimeError("Scale must be between 1 and 4.")
-        screen = Screen()
+        screen = MacScreen() if sys.platform == "darwin" else Screen()
         if args.Scale == 0:
             measured = measure_scale(screen, screen.size()[0]) if args.Calibration else 1.0
             if measured is None:

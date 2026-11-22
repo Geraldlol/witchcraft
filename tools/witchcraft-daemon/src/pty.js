@@ -19,10 +19,17 @@ export function resolveProgram(command) {
       candidates.push(path.join(folder, command));
       if (process.platform === 'win32' && !path.extname(command)) candidates.push(path.join(folder, `${command}.exe`));
     }
-    if (command === 'claude') candidates.push(path.join(os.homedir(), '.local', 'bin', 'claude.exe'));
+    if (command === 'claude') {
+      candidates.push(path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude'));
+    }
     if (command === 'agy') {
-      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-      if (path.isAbsolute(localAppData)) candidates.push(path.join(localAppData, 'agy', 'bin', 'agy.exe'));
+      if (process.platform === 'win32') {
+        const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+        if (path.isAbsolute(localAppData)) candidates.push(path.join(localAppData, 'agy', 'bin', 'agy.exe'));
+      } else if (process.platform === 'darwin') {
+        candidates.push(path.join(os.homedir(), '.antigravity', 'bin', 'agy'));
+        candidates.push('/Applications/Antigravity.app/Contents/Resources/app/bin/agy');
+      }
       candidates.push(path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'agy.exe' : 'agy'));
     }
   }

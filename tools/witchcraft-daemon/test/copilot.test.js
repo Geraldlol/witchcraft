@@ -46,6 +46,9 @@ test('session-only Copilot MCP preserves arguments, paths and ordinary permissio
   assert.equal(withWoWMcp('copilot', shell, options), shell);
   assert.ok(withWoWMcp('claude', { file: 'claude' }, options).args.includes('--mcp-config'));
   assert.ok(withWoWMcp('codex', { file: 'codex' }, options).args.includes('-c'));
+  const agyEntry = { file: 'agy.exe', args: [] };
+  assert.equal(withWoWMcp('agy', agyEntry, options), agyEntry, 'agy uses -c for --continue, so no -c flags are injected');
+  assert.deepEqual(agyEntry.args, []);
 });
 
 test('npm Copilot resolves to Node without invoking a shell or allowing bin traversal', t => {

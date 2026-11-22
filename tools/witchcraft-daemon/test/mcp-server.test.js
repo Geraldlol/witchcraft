@@ -206,10 +206,10 @@ test('wow_get_session_log reads only the journal, filters it, and is listed with
   const current = await call({});
   assert.equal(current.status, 'ready');
   assert.equal(current.scope, 'current');
-  assert.deepEqual(current.segments.map(segment => [segment.epoch, segment.uiNonce, segment.eventCount, segment.endedAt !== null]), [
-    ['deadbeef', '00001111', 1, true],
-    ['0123abcd', 'abcd0123', 3, false],
+  assert.deepEqual(current.segments.map(segment => [segment.epoch, segment.uiNonce, segment.character?.name, segment.eventCount, segment.endedAt !== null]), [
+    ['0123abcd', 'abcd0123', 'Thrall', 3, false],
   ]);
+  assert.ok(!JSON.stringify(current).includes('Jaina'), 'current-session query never names another character in segments or events');
   assert.deepEqual(current.events.map(event => event.kind), ['level-up', 'money-change', 'quest-tracked']);
   assert.equal(current.events[0].at, new Date(now - 3000).toISOString());
   assert.equal(current.events[0].epoch, '0123abcd');
@@ -219,13 +219,19 @@ test('wow_get_session_log reads only the journal, filters it, and is listed with
   assert.equal(JSON.stringify(current).includes(path.basename(journal)), false, 'the journal path is never revealed');
   const all = await call({ includeHistory: true });
   assert.equal(all.scope, 'all');
+  assert.deepEqual(all.segments.map(segment => [segment.epoch, segment.uiNonce, segment.character?.name, segment.eventCount, segment.endedAt !== null]), [
+    ['deadbeef', '00001111', 'Jaina', 1, true],
+    ['0123abcd', 'abcd0123', 'Thrall', 3, false],
+  ]);
   assert.deepEqual(all.events.map(event => [event.character?.name, event.kind]), [
     ['Jaina', 'money-change'],
     ['Thrall', 'level-up'],
     ['Thrall', 'money-change'],
     ['Thrall', 'quest-tracked'],
   ]);
-  assert.deepEqual((await call({ includeHistory: true, character: 'Jaina' })).events.map(event => event.money), [999]);
+  const jainaOnly = await call({ includeHistory: true, character: 'Jaina' });
+  assert.deepEqual(jainaOnly.segments.map(segment => segment.character?.name), ['Jaina']);
+  assert.deepEqual(jainaOnly.events.map(event => event.money), [999]);
   assert.deepEqual((await call({ since: now - 2000 })).events.map(event => event.kind), ['money-change', 'quest-tracked']);
   assert.deepEqual((await call({ kinds: ['money-change'] })).events.map(event => event.money), [150]);
   assert.deepEqual((await call({ limit: 1 })).events.map(event => event.kind), ['quest-tracked']);

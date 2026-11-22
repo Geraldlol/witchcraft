@@ -376,6 +376,7 @@ textarea:focus-visible,
 .claude-glyph { color: var(--gold); }
 .codex-glyph { color: var(--cyan); }
 .copilot-glyph { color: #b79df2; }
+.agy-glyph { color: #7ab8ff; }
 
 .agent-copy {
   display: flex;

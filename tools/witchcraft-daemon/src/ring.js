@@ -27,11 +27,12 @@ export async function assertOwnedChunk(addonsDir, index, { requirePayload = fals
 // Those are momentary, so the rename is retried briefly before giving up.
 export const TRANSIENT_WRITE_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 export function isTransientWriteError(error) { return TRANSIENT_WRITE_CODES.has(error?.code); }
-export async function atomicWrite(filename, contents, { rename = fs.rename, attempts = 12, delayMs = 25 } = {}) {
+export async function atomicWrite(filename, contents, { rename = fs.rename, attempts = 12, delayMs = 25, proceed } = {}) {
   const temporary = `${filename}.witchcraft-${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporary, contents, { flag: 'wx', mode: 0o600 });
     for (let attempt = 1; ; attempt++) {
+      if (proceed && !await proceed()) return false;
       try { await rename(temporary, filename); return attempt; }
       catch (error) {
         if (!isTransientWriteError(error) || attempt >= attempts) throw error;

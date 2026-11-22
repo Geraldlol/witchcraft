@@ -26,28 +26,31 @@ test("persistence accepts fresh and probe schema without erasing unknown fields"
     equal(probe.global.effectsEnabled, nil, "the retired effects preference is no longer defaulted")
 end)
 
-test("the opt-in Copilot tab is listed and cycled only while its setting is on", function()
+test("the opt-in Copilot and AGY tabs are listed and cycled only while their settings are on", function()
     local raw = { global = { schema = 1 } }
     equal(ns.Persistence.Validate(raw), true)
     ns.Persistence.Initialize(raw.global)
     local c = ns.Core.New(raw.global, { UINonce = function() return "abcdef03" end })
     equal(#c:Snapshot().tabs, 2)
     c:NextTab(); equal(raw.global.activeTab, "codex")
-    c:NextTab(); equal(raw.global.activeTab, "claude", "Copilot is skipped while its setting is off")
+    c:NextTab(); equal(raw.global.activeTab, "claude", "Copilot and AGY are skipped while their settings are off")
     assert(c:SetSetting("tabCopilot", true))
     equal(#c:Snapshot().tabs, 3)
     c:NextTab(); c:NextTab(); equal(raw.global.activeTab, "copilot")
-    assert(c:SelectTab("claude")); assert(c:SetSetting("tabCopilot", false))
+    assert(c:SetSetting("tabAgy", true))
+    equal(#c:Snapshot().tabs, 4)
+    c:NextTab(); equal(raw.global.activeTab, "agy")
+    assert(c:SelectTab("claude")); assert(c:SetSetting("tabCopilot", false)); assert(c:SetSetting("tabAgy", false))
     assert(c:SetSetting("tabCodex", false))
-    c:NextTab(); equal(raw.global.activeTab, "claude", "a hidden Codex and a hidden Copilot leave Claude selected")
+    c:NextTab(); equal(raw.global.activeTab, "claude", "hidden Codex, Copilot and AGY leave Claude selected")
 end)
 
 test("saved settings that hide every tab are rejected and left unmodified", function()
-    local raw = { global = { schema = 1, settings = { tabClaude = false, tabCodex = false, tabCopilot = false } } }
+    local raw = { global = { schema = 1, settings = { tabClaude = false, tabCodex = false, tabCopilot = false, tabAgy = false } } }
     local ok, reason = ns.Persistence.Validate(raw)
     equal(ok, false); equal(reason, "Invalid saved tab settings")
-    equal(raw.global.settings.tabCopilot, false); equal(raw.global.activeTab, nil)
-    -- Copilot is off by default, so hiding Claude and Codex hides every tab.
+    equal(raw.global.settings.tabCopilot, false); equal(raw.global.settings.tabAgy, false); equal(raw.global.activeTab, nil)
+    -- Copilot and AGY are off by default, so hiding Claude and Codex hides every tab.
     raw = { global = { schema = 1, settings = { tabClaude = false, tabCodex = false } } }
     ok, reason = ns.Persistence.Validate(raw)
     equal(ok, false); equal(reason, "Invalid saved tab settings"); equal(raw.global.settings.tabCopilot, nil)

@@ -28,10 +28,10 @@ export function matchConsole(text, candidates = []) {
 /** `attach` in .local/config.json: each tab to a PID, pick, or ~TEXT, as --attach takes them. */
 export function parseAttachConfig(attach) {
   if (!attach || typeof attach !== 'object' || Array.isArray(attach)) {
-    throw new Error('attach in config.json must map claude, codex or copilot to PID, pick, or ~TEXT');
+    throw new Error('attach in config.json must map claude, codex, copilot or agy to PID, pick, or ~TEXT');
   }
   return Object.fromEntries(Object.entries(attach).map(([tab, value]) => {
-    if (!AGENT_TABS.includes(tab)) throw new Error(`attach in config.json names ${tab}; the tabs are claude, codex, and copilot`);
+    if (!AGENT_TABS.includes(tab)) throw new Error(`attach in config.json names ${tab}; the tabs are claude, codex, copilot, and agy`);
     return [tab, parseAttachTarget(value, `attach.${tab} in config.json`)];
   }));
 }

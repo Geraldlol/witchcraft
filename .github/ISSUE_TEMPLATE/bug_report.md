@@ -15,9 +15,9 @@ List the steps that lead to the problem.
 
 - WITCHCRAFT release or commit:
 - WoW Forever client build:
-- Windows version:
+- OS and display environment (Windows 10/11, or Linux X11/XWayland + Wine/Proton version):
 - Node.js version (`node --version`):
-- Assistant and version (Claude Code, Codex CLI, or both):
+- Assistant and version (Claude Code, Codex CLI, GitHub Copilot CLI, Google Antigravity CLI, or combination):
 
 Leave anything you cannot determine as unknown.
 

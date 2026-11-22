@@ -126,7 +126,7 @@ test('model and effort names fit the addon\'s byte limits and never split a surr
 test('a reply line is cut by code point and never carries a lone surrogate', () => {
   // An emoji straddling the 400th unit used to leave half a surrogate pair, which stopped the bridge.
   assert.deepEqual(replyLines('a'.repeat(399) + '\u{1F600}b'), ['a'.repeat(399) + '\u{1F600}']);
-  assert.deepEqual(replyLines('broken \ud83c pair'), ['broken � pair']);
+  assert.deepEqual(replyLines('broken \ud83c pair'), ['broken \ufffd pair']);
 });
 
 test('the Claude transcript is found through the process record, and bad records find nothing', async t => {

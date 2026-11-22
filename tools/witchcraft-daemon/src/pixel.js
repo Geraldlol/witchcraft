@@ -7,7 +7,7 @@ export const MAX_TEXT_BYTES = 600;
 export const MAX_CONTEXT_BYTES = 580;
 const SYNC = 51;
 const CONTEXT_SYNC = 50;
-const ACTIONS = ['text', 'enter', 'interrupt', 'escape', 'up', 'down'];
+const ACTIONS = ['text', 'enter', 'interrupt', 'escape', 'up', 'down', 'control'];
 const TABS = AGENT_TABS;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -74,8 +74,10 @@ function messageBody(message) {
   const tab = message.tab ?? message.session;
   const action = ACTIONS.indexOf(message.action);
   const text = message.text ?? '';
+  const hasText = message.action === 'text' || message.action === 'control';
   if (!TABS.includes(tab) || action < 0 || typeof text !== 'string' || /[\u0000-\u001f\u007f-\u009f]/u.test(text)
-    || /[\ud800-\udfff]/u.test(text) || Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES || (action !== 0 && text !== ''))
+    || /[\ud800-\udfff]/u.test(text) || Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES
+    || (!hasText && text !== '') || (message.action === 'control' && text === ''))
     throw new TypeError('Invalid tab, action, or bounded control-free UTF-8 text');
   return Buffer.from(message.epoch.toLowerCase() + (TABS.indexOf(tab) + 1) + action + text, 'utf8');
 }

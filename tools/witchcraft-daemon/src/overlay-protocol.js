@@ -1,7 +1,7 @@
 import { AGENT_TABS } from './agents.js';
 import { randomBytes } from 'node:crypto';
 
-/** @typedef {'claude' | 'codex' | 'copilot'} OverlayTab */
+/** @typedef {'claude' | 'codex' | 'copilot' | 'agy'} OverlayTab */
 /** @typedef {'hello' | 'input' | 'clipboard' | 'resize' | 'select' | 'ping' | 'resync' | 'disconnect'} ChildMessageType */
 /** @typedef {'ready' | 'state' | 'output' | 'status' | 'error' | 'pong' | 'shutdown'} HostMessageType */
 
@@ -64,7 +64,7 @@ function string(value, maxBytes, label, { minBytes = 0, pattern } = {}) {
   return value;
 }
 function tab(value, label = 'tab') {
-  if (!TAB_SET.has(value)) fail('INVALID_TAB', `${label} must be claude, codex, or copilot`);
+  if (!TAB_SET.has(value)) fail('INVALID_TAB', `${label} must be claude, codex, copilot, or agy`);
   return value;
 }
 function payloadOf(envelope) {
@@ -149,11 +149,11 @@ function validateSession(value, index) {
 function validateStatePayload(payload) {
   exactKeys(payload, ['authoritative', 'generation', 'activeTab', 'cols', 'rows', 'sessions'], [], 'state payload');
   if (!Array.isArray(payload.sessions) || payload.sessions.length !== OVERLAY_TABS.length) {
-    fail('INVALID_VALUE', 'state payload.sessions must contain exactly three terminals');
+    fail('INVALID_VALUE', 'state payload.sessions must contain exactly four terminals');
   }
   const sessions = payload.sessions.map(validateSession);
   if (sessions.some((session, index) => session.id !== OVERLAY_TABS[index])) {
-    fail('INVALID_VALUE', 'state payload.sessions must be ordered claude, codex, copilot');
+    fail('INVALID_VALUE', 'state payload.sessions must be ordered claude, codex, copilot, agy');
   }
   return { authoritative: boolean(payload.authoritative, 'state payload.authoritative'),
     generation: integer(payload.generation, 1, Number.MAX_SAFE_INTEGER, 'state payload.generation'),
@@ -169,7 +169,7 @@ export function validateHostMessage(value) {
     case 'ready': {
       exactKeys(payload, ['sessionId', 'tabs', 'activeTab', 'lifecycle'], [], 'ready payload');
       if (!Array.isArray(payload.tabs) || payload.tabs.length !== OVERLAY_TABS.length || payload.tabs.some((value, index) => value !== OVERLAY_TABS[index])) {
-        fail('INVALID_VALUE', 'ready payload.tabs must be ordered claude, codex, copilot');
+        fail('INVALID_VALUE', 'ready payload.tabs must be ordered claude, codex, copilot, agy');
       }
       if (payload.lifecycle !== 'syncing') fail('INVALID_VALUE', 'ready payload.lifecycle must be syncing');
       return { v: OVERLAY_PROTOCOL_VERSION, type: 'ready', seq, payload: {

@@ -22,6 +22,9 @@ local PAGE = {
     { key = "tabCopilot", label = "Copilot tab",
       tooltip = "Show the Copilot tab. Off until the daemon starts Copilot, which switches it on;"
           .. " a hidden tab is skipped when cycling and at least one tab stays visible." },
+    { key = "tabAgy", label = "AGY tab",
+      tooltip = "Show the AGY (Antigravity CLI) tab. Off until the daemon starts AGY, which switches it on;"
+          .. " a hidden tab is skipped when cycling and at least one tab stays visible." },
     { section = "Alerts" },
     { key = "alertText", label = "Raid warning text", tooltip = "Say which agent needs you or finished, while you look elsewhere." },
     { key = "alertSound", label = "Alert sound", tooltip = "Play the raid warning sound with an alert." },
@@ -29,6 +32,8 @@ local PAGE = {
     { section = "Terminal" },
     { key = "combatUpdates", label = "Keep updating in combat",
       tooltip = "Keep loading terminal updates during combat. Loading can cause brief frame hitches in a fight. Prompts you send always go out." },
+    { key = "autoBindProbe", label = "Probe binding carrier on connect",
+      tooltip = "Automatically run /witch bindprobe outside combat once per host session." },
     { key = "showChoices", label = "Choice buttons", tooltip = "Numbered buttons that answer permission prompts and pickers." },
     { key = "showStatus", label = "Model and context in the footer", tooltip = "Show the model and how much context the conversation uses." },
     { key = "historySize", label = "Prompt history", kind = "choice", tooltip = "How many sent prompts Up and Down recall per tab.",

@@ -1,10 +1,10 @@
 # Witchcraft
 
-Claude Code, Codex CLI and GitHub Copilot CLI terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.4.0`, interface `16001`.
+Claude Code, Codex CLI, GitHub Copilot CLI and Google Antigravity CLI (`agy`) terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.4.0`, interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 
-The WoW MCP bridge shares read-only character, location, tracked quest and progression context with both assistants, and lets them request recorded Lua errors, warnings and blocked actions. Open **WoW context** in the footer to pause sharing, request an update, and inspect acknowledged summaries.
+The WoW MCP bridge shares read-only character, location, tracked quest and progression context with the assistants, and lets them request recorded Lua errors, warnings, blocked actions and the bounded session journal. Open **WoW context** in the footer to pause sharing, request an update, and inspect acknowledged summaries.
 
 The book icon opens Guides: choose quest nudge, details or solution; save an item goal; or ask which dungeon covers several wishlist items. Actions prepare an editable prompt and preserve existing drafts. The first catalog covers seven Defias quest stages and twelve items across three Classic dungeons, with sources and explicit unverified-Forever status. This slice is built and offline-tested; activation and native acceptance remain pending.
 
@@ -12,16 +12,16 @@ The new **Adventures** page adds dungeon rehearsal, zone detours and a personal 
 
 This build also includes an opt-in dense optical carrier probe. It renders 22 extra rows below the normal strip only while the probe is active; the normal two-row transport stays unchanged. The probe is built and offline-tested, with native acceptance still pending.
 
-By default the companion daemon joins sessions from the folder selected with `run --cwd`: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text and delivers them to the game through the `Witchcraft_Chunk_*` helper addons. Your prompts, terminal keys and game context travel back through the local fast link or calibrated pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'` from `tools/witchcraft-daemon`, using the same folder as `run --cwd`, restart that session and then restart Witchcraft. The footer says when it lacks the tools. Copilot is enabled with `run --only copilot` or `run --with-copilot`, starts fresh, and offers `/resume` for saved conversations. Its tab is off until the daemon starts Copilot, then stays on until you hide it under Options > Tabs. Initial sign-in happens in the normal CLI; supported permission choices can also be answered from the in-game buttons.
+By default the companion daemon joins sessions from the folder selected with `run --cwd`: the Claude tab mirrors your live Claude Code console and the Codex tab resumes your newest Codex thread (`--no-current` starts new ones instead). It resolves terminal redraws into colored text and delivers them to the game through the `Witchcraft_Chunk_*` helper addons. Your prompts, terminal keys and game context travel back through the local fast link or calibrated pixel strip. A joined Claude session gets the WoW tools once you run `node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'` from `tools/witchcraft-daemon`, using the same folder as `run --cwd`, restart that session and then restart Witchcraft. The footer says when it lacks the tools. Copilot (`run --only copilot` or `run --with-copilot`) and AGY (`run --only agy` or `run --with-agy`) start fresh on request. Their tabs are off until the daemon starts them, and you can show or hide any tab for the agents you use from **... (Appearance) > Agent tabs**, under **Options > Tabs**, or with `/witch tab <claude|codex|copilot|agy> [on|off]`. Initial sign-in happens in the normal CLI; supported permission choices can also be answered from the in-game buttons.
 
 ## Start
 
 Follow [the install steps](../README.md#install) and [the daemon setup](../tools/witchcraft-daemon/README.md). After initializing the chunk addons, restart WoW completely so it discovers the new addons and bundled static font. Then calibrate the strip, start the daemon, run `/reload`, and use `/witch` to open the window. Run `/witch bindprobe` outside combat once per daemon/UI session to qualify the default binding link.
 
 - Left-click the book button at the lower-left edge of the minimap to show or hide Witchcraft, just like `/witch`.
-- Click **Claude**, **Codex** or **Copilot** to choose the terminal you read and address. Each tab keeps its own unsent draft. Tabs you do not use can be hidden on the Options page (Esc > Options > AddOns > Witchcraft > Tabs); at least one stays visible.
+- Click **Claude**, **Codex**, **Copilot** or **AGY** to choose the terminal you read and address. Each tab keeps its own unsent draft. Tabs you do not use can be hidden from **... (Appearance) > Agent tabs**, on the Options page (Esc > Options > AddOns > Witchcraft > Tabs), or with `/witch tab`; at least one stays visible.
 - An amber marker marks unseen terminal output on a tab, including while minimized. It clears when that tab is selected with the window expanded. It signals new text, not a guarantee that the agent has finished responding; the first screen after connecting is the baseline. Updates continue with the window closed while context sharing is enabled; otherwise idle updates pause until reopened.
-- Click the book icon for **Guides**, or **...** for **Appearance**. Adjust background opacity from 0% (clear) to 100% (solid) or choose 25/65/100%. Text stays fully visible; the setting survives reload. Default opacity is 80%.
+- Click the book icon for **Guides**, or **...** for **Appearance**. Adjust background opacity from 0% (clear) to 100% (solid), choose 25/65/100%, or toggle which **Agent tabs** (`CLAUDE`, `CODEX`, `COPILOT`, `AGY`) are shown in the header. Text stays fully visible; the setting survives reload. Default opacity is 80%.
 - The **/** button beside Send opens the selected agent's slash commands (/model, /compact, /resume and more) in the client's dropdown. Plain ones are typed with Enter at once; ones that take text are placed in the input for you to finish. Pickers they open are driven from **Keys**. On the Claude tab, /clear clears the mirrored desktop session.
 - When an agent is waiting on a choice (a permission prompt or picker), numbered buttons above the composer answer it. If you are looking elsewhere, a raid-warning line and sound say which agent needs you or has finished, and its tab badge turns red or green.
 - Shift-click an item, quest or spell while typing to insert it. Up and Down recall your sent prompts for that tab. Save reusable prompts with `/witch snippet add <prompt>` (`list`, `remove <n>`); they appear in the **/** menu. Key Bindings > AddOns > Witchcraft offers open-and-type, switch tab and interrupt, unbound by default.
@@ -41,16 +41,18 @@ Follow [the install steps](../README.md#install) and [the daemon setup](../tools
 | `/witch errors watch <number>` / `/witch errors status` | Watch a numbered row across UI reloads or read its current counts |
 | `/witch errors checked` / `/witch errors unwatch` / `/witch errors clear` | Mark a reproduction attempt, stop watching, or clear both history and watch |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Save, list or remove reusable prompts for the **/** menu |
-| `/witch bindprobe` | Qualify the default binding link once per daemon/UI session outside combat |
+| `/witch bindprobe [auto\|off]` | Qualify the default binding link once per daemon/UI session outside combat, or toggle automatic probe on connect |
 | `/witch guide` | Quest-help and loot-goal panel |
 | `/witch quest [nudge\|details\|solution] <name/link/id>` | Prepare a quest-help prompt; defaults to nudge |
 | `/witch loot [name/link/id]` | Prepare an add-goal prompt, or show the saved plan with no argument |
 | `/witch rehearse [tank\|healer\|damage] [dungeon]` | Prepare a role-specific rehearsal, or list supported dungeons |
 | `/witch nearby [zone]` | Prepare zone detours; blank uses fresh character context |
 | `/witch passport` | Prepare a request for personal campaigns, milestones and notes |
+| `/witch tab <claude\|codex\|copilot\|agy> [on\|off]` | Show, hide, or toggle an agent tab (`/witch tabs` lists all four) |
 | `/witch size 8-20` | Font size |
+| `/witch cols 40-160\|fit` | Request daemon terminal width (40-160 columns, or fit to window width) |
 | `/witch opacity 0-100` | Background opacity percentage; 0 is clear, 100 is solid |
-| `/witch context on\|off\|refresh` | Share, pause, or refresh character and tracked quest context |
+| `/witch context on\|off\|refresh\|clear-journal` | Share, pause, refresh character and tracked quest context, or clear the session journal |
 | `/witch hz 0.125-2` | Active chunk load rate; idle loads back off |
 | `/witch calibrate` / `/witch calibrate off` | Show calibration colors / return to the live strip |
 | `/witch burstprobe [200-2000\|corrupt\|off]` | Set page dwell in milliseconds, emit the negative checksum control, or hide the dense probe |

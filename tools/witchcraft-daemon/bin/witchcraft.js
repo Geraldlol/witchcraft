@@ -36,7 +36,9 @@ export function parseArgs(argv) {
     const token = rest[index];
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
     if (token === '--clean') { options.clean = true; continue; }
+    if (token === '--clear') { options.clear = true; continue; }
     if (token === '--with-copilot') { options.withCopilot = true; continue; }
+    if (token === '--with-agy') { options.withAgy = true; continue; }
     if (token === '--no-mcp') { options.noMcp = true; continue; }
     if (token === '--overlay') { options.overlay = true; continue; }
     if (token === '--no-overlay') { options.noOverlay = true; continue; }
@@ -50,7 +52,9 @@ export function parseArgs(argv) {
       // Split at the first '=' only: a ~TEXT pattern may itself contain one.
       const value = String(rest[++index] ?? ''), at = value.indexOf('=');
       const tab = at < 0 ? value : value.slice(0, at), target = at < 0 ? '' : value.slice(at + 1);
-      if (!AGENT_TABS.includes(tab) || !target) throw new Error(`--attach takes claude=PID|pick|~TEXT, codex=PID|pick|~TEXT, or copilot=PID|pick|~TEXT`);
+      if (!AGENT_TABS.includes(tab) || !target) {
+        throw new Error('--attach takes claude=PID|pick|~TEXT, codex=PID|pick|~TEXT, copilot=PID|pick|~TEXT, or agy=PID|pick|~TEXT');
+      }
       options.attach ??= {};
       if (options.attach[tab] !== undefined) throw new Error(`--attach names the ${tab} tab more than once; a tab mirrors one console`);
       options.attach[tab] = parseAttachTarget(target, `--attach ${tab}=`);
@@ -59,7 +63,7 @@ export function parseArgs(argv) {
     if (!token.startsWith('--') || !values.has(token.slice(2)) || rest[index + 1] === undefined) throw new Error(`Unknown or incomplete option: ${token}`);
     options[token.slice(2)] = rest[++index];
   }
-  for (const key of ['tab', 'only']) if (options[key] && !AGENT_TABS.includes(options[key])) throw new Error(`--${key} must be claude, codex, or copilot`);
+  for (const key of ['tab', 'only']) if (options[key] && !AGENT_TABS.includes(options[key])) throw new Error(`--${key} must be claude, codex, copilot, or agy`);
   // --only silences the other tabs, so attaching the tab it silenced would give it two answers.
   if (options.only && options.attach && Object.keys(options.attach).some(tab => tab !== options.only)) {
     throw new Error(`--only ${options.only} silences the other tabs, so it cannot also be attached`);
@@ -70,9 +74,10 @@ export function parseArgs(argv) {
 export async function runBridge(config, options = {}, child = [], adapters = {}) {
   // Doctor and setup must start even before the native terminal dependencies load.
   const [{ TerminalPair, attachTerminal }, { SessionSet }, { listConsoles }, { Outbox, watchSavedVariables },
-    { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants }] = await Promise.all([
+    { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants },
+    { JournalStore, journalPath, observe }] = await Promise.all([
     import('../src/pty.js'), import('../src/sessions.js'), import('../src/console-list.js'), import('../src/outbox.js'),
-    import('../src/context-cache.js'), import('../src/context-want.js'),
+    import('../src/context-cache.js'), import('../src/context-want.js'), import('../src/journal.js'),
   ]);
   const Pair = adapters.TerminalPair ?? TerminalPair, Display = adapters.attachTerminal ?? attachTerminal;
   const CaptureStream = adapters.Capture ?? Capture, watch = adapters.watchSavedVariables ?? watchSavedVariables;
@@ -171,7 +176,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     throw error;
   }
   let contextAck = 0, contextWarningAt = 0, contentWarningAt = 0, contextGeneration = 0, contextWrites = Promise.resolve();
-  let contextWritten = null;
+  let contextWritten = null, journalPrevious = null;
   let contextWant = 0, contextWantMask = 0, wantServedAt = {};
   let pair, terminal, overlay, capture, bindingCarrier, bindingReceiver, timer, unwatch, sessionInfo;
   // A joined Claude session loaded its MCP servers when it started, so only its own WoW server can
@@ -240,10 +245,17 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     try { return await operation; }
     finally { pendingStarts.delete(resource); }
   }
-  // The addon reports how many columns its pane fits; all terminals are resized to match.
+  // The addon reports how many columns its pane fits, or asks to clear the session journal.
   const outbox = new Outbox({ epoch, write: (tab, data, action) => pair.write(tab, data, action),
     writePrompt: (tab, data, action) => pair.writePrompt(tab, data, action),
-    onControl: ({ cols: fitted }) => { pair?.resize(fitted, pair.rows, 'game'); if (!stopped) void publish(); } });
+    onControl: ({ cols: fitted, clearJournal }) => {
+      if (clearJournal) { void journal.clear().catch(error => events.error('journal', error)); return; }
+      pair?.resize(fitted, pair.rows, 'game');
+      if (!stopped) void publish();
+    } });
+  // What changed during the session, diffed from the documents the cache persisted.
+  const journal = new JournalStore({ file: journalPath(contextPath), now: Date.now, write: adapters.writeJournal,
+    onError: error => events.error('journal', error) });
   let tracedSlot = 0, tracedFrame = '', stopLagProbe = () => {};
   const deliver = (lane, message) => {
     try { const result = outbox.accept(message); events.input(lane, message, result); return result; }
@@ -263,9 +275,13 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         // after the await would record a newer key against an older document, and the next
         // write would be skipped as unchanged while its message was acknowledged anyway.
         const written = { key: contextWriteKey(context.raw), lastHeartbeatAt: context.raw.lastHeartbeatAt };
+        // The journal diffs what was persisted, so it copies the same state the snapshot came from.
+        const persisted = structuredClone(context.raw);
         await (adapters.writeContext ?? atomicWrite)(contextPath, JSON.stringify(snapshot) + '\n');
         contextWritten = written;
         if (generation === contextGeneration) contextAck = ack;
+        // Not awaited: a slow journal write holds neither the next cache write nor the ack.
+        void recordJournal(persisted);
         return true;
       } catch (error) {
         if (!contextWarningAt || Date.now() - contextWarningAt >= 10000) {
@@ -277,6 +293,24 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     });
     contextWrites = operation;
     return operation;
+  }
+  // Each persisted document is diffed against the one persisted before it. The diff and the new
+  // baseline are taken before the first await, so they follow the cache-write order; the batch then
+  // queues on the journal's own chain. A journal failure goes to the event log, never to the cache
+  // write it follows, and this never rejects.
+  async function recordJournal(persisted) {
+    try {
+      // A new UI session (a reload, or another character) is diffed against nothing, so no player
+      // or progress change crosses it; only its tracked quests are listed.
+      const was = journalPrevious?.session, is = persisted.session;
+      const sameSession = Boolean(was && is && was.epoch === is.epoch && was.uiNonce === is.uiNonce);
+      const changes = observe(sameSession ? journalPrevious : null, persisted, Date.now());
+      journalPrevious = persisted;
+      if (!changes.length) return;
+      const player = persisted.player?.available ? persisted.player.data : null;
+      await journal.append(changes, { epoch: is?.epoch ?? null, uiNonce: is?.uiNonce ?? null,
+        character: player ? { name: player.name, class: player.class } : null });
+    } catch (error) { events.error('journal', error); }
   }
   let cooldownCursorMoved = false;
   // A receiver follows one UI session. When the writer moves to another (seen through any lane)
@@ -398,6 +432,12 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       await attempt(() => writer.stop());
       context.disconnect();
       await attempt(() => persistContext());
+      // The last cache write handed its batch to the journal without waiting; let it land, but
+      // within a bound so a stuck write never holds the lock. close() also fences off any batch
+      // that has not started its write by then.
+      await attempt(async () => {
+        if (!await journal.close()) events.error('journal', new Error('journal write still pending at shutdown'));
+      });
       for (const cleanup of cleanupTasks) await attempt(() => cleanup);
       await attempt(() => pair?.dispose());
       await attempt(() => releaseRing());
@@ -697,20 +737,21 @@ export function runBurstProbe(config, options = {}, adapters = {}) {
   });
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR } = {}) {
   const { command, options, child } = parseArgs(argv);
   if (command === 'help' || command === '--help') {
-    console.log(`Witchcraft - separate Claude, Codex and Copilot terminals inside WoW\n\n` +
+    console.log(`Witchcraft - separate Claude, Codex, Copilot and AGY terminals inside WoW\n\n` +
       `witchcraft init [--ring 3000] [--clean] [--account NAME] [--character NAME]\n` +
-      `witchcraft doctor [--only claude|codex|copilot] [--account NAME] [--json]\n` +
+      `witchcraft doctor [--only claude|codex|copilot|agy] [--account NAME] [--json]\n` +
       `witchcraft calibrate [--account NAME]    (show /witch calibrate first)\n` +
       `witchcraft burst-probe [--timeout 30]     (show /witch burstprobe first)\n` +
       `witchcraft run [--cols 120 --rows 40 --hz 1 --history 200] [--cwd PATH] [--overlay|--no-overlay] [--no-pixels]\n` +
       `witchcraft run --only claude -- <executable> <args...>\n` +
-      `witchcraft run --attach claude=PID|pick|~TEXT [--attach codex=PID|pick|~TEXT] [--attach copilot=PID|pick|~TEXT]\n` +
+      `witchcraft run --attach claude=PID|pick|~TEXT [--attach codex=PID|pick|~TEXT] [--attach copilot=PID|pick|~TEXT] [--attach agy=PID|pick|~TEXT]\n` +
       `witchcraft consoles [--all]                (the consoles a tab can mirror)\n` +
+      `witchcraft journal [--clear]               (what changed this session; --clear deletes it)\n` +
       `witchcraft mcp-setup [--apply]             (give a joined Claude session the WoW tools)\n\n` +
-      `run starts Claude and Codex by default. --only claude|codex|copilot starts one. --with-copilot adds Copilot.\n` +
+      `run starts Claude and Codex by default. --only claude|codex|copilot|agy starts one. --with-copilot adds Copilot; --with-agy adds AGY.\n` +
       `--attach mirrors a console you started yourself instead of launching that tab;\n` +
       `type in that console's own window. Its colour is the sixteen ANSI colours.\n` +
       `~TEXT names the newest console whose program or command line contains TEXT. When a joined\n` +
@@ -745,8 +786,27 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'mcp-setup') {
     // Needs only this checkout's paths, not the game's: it works before wow.config.json exists.
     // Local scope applies only to sessions started in that folder, so it follows run's --cwd.
-    await setupClaudeMcp({ repoRoot: path.resolve(options.cwd ?? REPO_ROOT), cachePath: path.join(LOCAL_DIR, 'wow-context.json'),
+    await setupClaudeMcp({ repoRoot: path.resolve(options.cwd ?? REPO_ROOT), cachePath: path.join(localDir, 'wow-context.json'),
       apply: options.apply === true });
+    return;
+  }
+  if (command === 'journal') {
+    // Needs only the local cache folder, like mcp-setup: it works before wow.config.json exists.
+    const { JournalStore, journalPath } = await import('../src/journal.js');
+    let failed = false;
+    const journal = new JournalStore({ file: journalPath(path.join(localDir, 'wow-context.json')),
+      onError: error => { failed = true; console.error(error.message); } });
+    if (options.clear === true) {
+      const cleared = await journal.clear();
+      if (failed) { process.exitCode = 1; return; }
+      console.log(cleared ? 'Session journal cleared.' : 'There was no session journal to clear.');
+      return;
+    }
+    const document = await journal.read(), recorded = document?.segments.flatMap(segment => segment.events) ?? [];
+    console.log(`${document?.segments.length ?? 0} segment(s), ${recorded.length} event(s)${recorded.length > 10 ? '; the newest 10:' : ''}`);
+    for (const { at, domain, revision, kind, ...fields } of recorded.slice(-10)) {
+      console.log(`${new Date(at).toISOString()}  ${kind}${Object.keys(fields).length ? `  ${JSON.stringify(fields)}` : ''}`);
+    }
     return;
   }
   const config = await loadConfig({ account: options.account, character: options.character });

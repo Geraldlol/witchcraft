@@ -115,7 +115,7 @@ export async function runDoctor({ options = {}, repoRoot = REPO_ROOT, localDir =
   if (modules) {
     let commands;
     try { ({ commands } = selectAgentCommands(config, options)); }
-    catch { add('assistants', 'fail', 'Invalid assistant selection.', 'Check commands and choose --only claude, codex, or copilot.'); }
+    catch { add('assistants', 'fail', 'Invalid assistant selection.', 'Check commands and choose --only claude, codex, copilot, or agy.'); }
     let selected = 0;
     for (const tab of AGENT_TABS) {
       if (!commands || (options.only && tab !== options.only)) continue;

@@ -10,7 +10,8 @@ local Ring, Prompts = ns.Ring, ns.Prompts
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
 local integer, plain, epoch = Ring.Integer, Ring.Plain, Ring.Epoch
-local actions = { text = true, enter = true, interrupt = true, escape = true, up = true, down = true }
+local actions = { text = true, enter = true, interrupt = true, escape = true, up = true, down = true, control = true }
+local BINDING_ACK_TIMEOUT = 5
 -- A bootstrap heartbeat with no host answering is a settings write nobody reads, so its cadence
 -- backs off from the ring's own toward a two-minute floor until something proves a host is there.
 local HEARTBEAT_BASE, HEARTBEAT_CEILING = 8, 120
@@ -59,9 +60,9 @@ local SETTINGS = {
     locked = { default = false }, docked = { default = false }, escapeCloses = { default = false },
     openOnLoad = { default = true },
     alertText = { default = true }, alertSound = { default = true }, alertFinished = { default = true },
-    combatUpdates = { default = false }, showChoices = { default = true }, showStatus = { default = true },
+    combatUpdates = { default = false }, autoBindProbe = { default = false }, showChoices = { default = true }, showStatus = { default = true },
     minimap = { default = true }, historySize = { default = 50, values = { [20] = true, [50] = true, [100] = true } },
-    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = false },
+    tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = false }, tabAgy = { default = false },
 }
 local function validSetting(key, value)
     local spec = SETTINGS[key]
@@ -72,8 +73,9 @@ end
 ns.Settings = SETTINGS
 
 -- The setting that shows or hides each tab, and the order tabs are drawn and chosen in.
-local TAB_SETTING = { claude = "tabClaude", codex = "tabCodex", copilot = "tabCopilot" }
-local TAB_ORDER = { "claude", "codex", "copilot" }
+local TAB_SETTING = { claude = "tabClaude", codex = "tabCodex", copilot = "tabCopilot", agy = "tabAgy" }
+local TAB_ORDER = { "claude", "codex", "copilot", "agy" }
+local TAB_TITLE = { claude = "Claude", codex = "Codex", copilot = "Copilot", agy = "AGY" }
 local function presentTabs(controller)
     local tabs = {}
     for _, id in ipairs(TAB_ORDER) do if controller:TabPresent(id) then tabs[#tabs + 1] = id end end
@@ -90,10 +92,11 @@ end
 
 local function validMessage(message)
     if not plain(message) or not integer(message.id, 1, 262143) or not epoch(message.epoch) then return false end
-    if message.tab ~= "claude" and message.tab ~= "codex" and message.tab ~= "copilot" then return false end
+    if not TAB_SETTING[message.tab] then return false end
     if not actions[message.action] or type(message.text) ~= "string" or #message.text > 600 then return false end
-    if not ns.Pixel.ValidText(message.text) or (message.action ~= "text" and message.text ~= "") then return false end
-    if message.action == "text" and message.text == "" then return false end
+    if not ns.Pixel.ValidText(message.text) then return false end
+    local hasText = message.action == "text" or message.action == "control"
+    if (not hasText and message.text ~= "") or (hasText and message.text == "") then return false end
     return true
 end
 
@@ -131,7 +134,8 @@ function Persistence.Validate(raw)
             if SETTINGS[key] and not validSetting(key, value) then return false, "Invalid saved setting " .. tostring(key) end
         end
         -- One tab always stays visible.
-        if not tabShown(global.settings, "claude") and not tabShown(global.settings, "codex") and not tabShown(global.settings, "copilot") then
+        if not tabShown(global.settings, "claude") and not tabShown(global.settings, "codex")
+            and not tabShown(global.settings, "copilot") and not tabShown(global.settings, "agy") then
             return false, "Invalid saved tab settings"
         end
     end
@@ -145,7 +149,7 @@ function Persistence.Validate(raw)
         end
     end
     if global.hz ~= nil and not finite(global.hz, 0.125, 2) then return false, "Invalid stream rate" end
-    if global.activeTab ~= nil and global.activeTab ~= "claude" and global.activeTab ~= "codex" and global.activeTab ~= "copilot" then
+    if global.activeTab ~= nil and not TAB_SETTING[global.activeTab] then
         return false, "Invalid tab"
     end
     if global.view ~= nil and not validView(global.view) then return false, "Invalid saved layout" end
@@ -208,7 +212,8 @@ end
 local function emptySessions()
     return { { id = "claude", title = "Claude", lines = {}, status = "Waiting for host" },
         { id = "codex", title = "Codex", lines = {}, status = "Waiting for host" },
-        { id = "copilot", title = "Copilot", lines = {}, status = "Waiting for host" } }
+        { id = "copilot", title = "Copilot", lines = {}, status = "Waiting for host" },
+        { id = "agy", title = "AGY", lines = {}, status = "Waiting for host" } }
 end
 
 -- Seconds after an answer's delivery before an identical menu counts as a new question (see AnswerPending).
@@ -252,17 +257,17 @@ function Core.New(global, api)
     if not tabShown(global.settings, global.activeTab) then
         global.activeTab = self:FirstPresentTab()
     end
-    self.unread, self.screenText = { claude = false, codex = false, copilot = false }, {}
+    self.unread, self.screenText = { claude = false, codex = false, copilot = false, agy = false }, {}
     -- The state each agent's screen last reported, and why a tab wants the player: "waiting" on a
     -- choice menu or "done" after working. Both clear when the player looks at that tab.
-    self.agentStates, self.attention = {}, { claude = false, codex = false, copilot = false }
+    self.agentStates, self.attention = {}, { claude = false, codex = false, copilot = false, agy = false }
     -- Each tab's last answered menu, until the terminal moves on (see AnswerPending).
     self.answered = {}
     self.cols, self.rows = 120, 40
     -- Scrollback position per tab, in rows above the bottom. Memory only: a reload
     -- starts at the live rows, and SavedVariables never carries terminal state.
-    self.scroll = { claude = 0, codex = 0, copilot = 0 }
-    self.scrolledAt = { claude = 0, codex = 0, copilot = 0 }
+    self.scroll = { claude = 0, codex = 0, copilot = 0, agy = 0 }
+    self.scrolledAt = { claude = 0, codex = 0, copilot = 0, agy = 0 }
     self.heartbeatBackoff, self.heartbeatNextAt = HEARTBEAT_BASE, 0
     self.stallDelay, self.ringWarned, self.reloadPending = PAUSED_RETRY, false, false
     if api.Context ~= nil then self.context = api.Context
@@ -346,6 +351,33 @@ function methods:CooldownActive()
     local carrier = self.cooldown
     return self.global.cooldownHost == true and carrier ~= nil and not carrier.quarantined
         and (carrier.status == "ready" or carrier.status == "waiting")
+end
+
+-- When the binding carrier is qualified, has a claimable key, and has not timed out on an ACK, it owns context out of combat.
+function methods:BindingContextActive()
+    local carrier = self.binding
+    if not carrier or carrier.enabled ~= true or carrier.quarantined or carrier.contextBlocked or self:Combat() then
+        return false
+    end
+    if carrier.outstanding then
+        return (self:ContextNow() - (carrier.outstanding.sentAt or 0)) < BINDING_ACK_TIMEOUT
+    end
+    return not carrier.HasKey or carrier:HasKey()
+end
+
+-- Opt-in automatic binding carrier qualification once per host session outside combat.
+function methods:MaybeAutoBindProbe()
+    if not self.active or not self.connected or self.global.settings.autoBindProbe ~= true or self:Combat() then return false end
+    local carrier = self.binding
+    if not carrier or carrier.enabled or carrier.quarantined or carrier:Busy() then return false end
+    if self.autoProbedEpoch == self.global.epoch then return false end
+    self.autoProbedEpoch = self.global.epoch
+    local ok = carrier:Probe(self.uiNonce)
+    if ok then
+        self:Schedule("binding", 0, self.BindingTick)
+        self:Schedule("load", 0.2, self.LoadTick)
+    end
+    return ok == true
 end
 
 -- Writes are self-rate-limited and combat-gated, so this may run on a plain cadence.
@@ -752,7 +784,7 @@ end
 function methods:Snapshot()
     local stale = 0
     for _, message in ipairs(self.global.outbox) do
-        if message.review or message.epoch ~= self.global.epoch then
+        if (message.review or message.epoch ~= self.global.epoch) and message.action ~= "control" then
             local first = message.prompt and Prompts.Read(message)
             if not first or first == message.id then stale = stale + 1 end
         end
@@ -773,9 +805,12 @@ function methods:Snapshot()
     end
     return { sessions = self.sessions, activeTab = self.global.activeTab, cols = self.cols, rows = self.rows,
         tabs = presentTabs(self),
-        unread = { claude = self.unread.claude, codex = self.unread.codex, copilot = self.unread.copilot },
-        attention = { claude = self.attention.claude, codex = self.attention.codex, copilot = self.attention.copilot },
-        answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil, copilot = self:AnswerPending("copilot") ~= nil },
+        unread = { claude = self.unread.claude, codex = self.unread.codex,
+            copilot = self.unread.copilot, agy = self.unread.agy },
+        attention = { claude = self.attention.claude, codex = self.attention.codex,
+            copilot = self.attention.copilot, agy = self.attention.agy },
+        answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil,
+            copilot = self:AnswerPending("copilot") ~= nil, agy = self:AnswerPending("agy") ~= nil },
         snippets = { unpack(self.global.snippets) },
         settings = (function() local copy = {}; for key, value in pairs(self.global.settings) do copy[key] = value end; return copy end)(),
         view = self.global.view, fontSize = self.global.fontSize, opacity = self.global.opacity,
@@ -913,7 +948,7 @@ function methods:SetSetting(key, value)
     if not validSetting(key, value) then return false, "Invalid value for " .. tostring(key) end
     if self.global.settings[key] == value then return true end
     -- Hiding a tab is a display preference, and the last visible tab cannot be hidden.
-    local tabSetting = key == "tabClaude" or key == "tabCodex" or key == "tabCopilot"
+    local tabSetting = key == "tabClaude" or key == "tabCodex" or key == "tabCopilot" or key == "tabAgy"
     if tabSetting and value == false then
         local others = 0
         for _, id in ipairs(TAB_ORDER) do
@@ -927,6 +962,10 @@ function methods:SetSetting(key, value)
     end
     if key == "minimap" and self.api.SetMinimapShown then self.api.SetMinimapShown(value) end
     if key == "combatUpdates" and value and self.active and self:Combat() then self:Schedule("load", 0.2, self.LoadTick) end
+    if key == "autoBindProbe" then
+        if value then self:MaybeAutoBindProbe()
+        elseif self.binding and not self.binding:Stop() then self.bindingStopPending = true end
+    end
     self:Render()
     return true
 end
@@ -955,9 +994,9 @@ function methods:FirstPresentTab()
     return "claude"
 end
 function methods:NextTab()
-    local following = { claude = "codex", codex = "copilot", copilot = "claude" }
+    local following = { claude = "codex", codex = "copilot", copilot = "agy", agy = "claude" }
     local tab = self.global.activeTab
-    for _ = 1, 3 do
+    for _ = 1, #TAB_ORDER do
         tab = following[tab] or "claude"
         if self:TabPresent(tab) then return self:SelectTab(tab) end
     end
@@ -982,7 +1021,7 @@ function methods:RemoveSnippet(index)
 end
 
 function methods:SelectTab(tab)
-    if tab ~= "claude" and tab ~= "codex" and tab ~= "copilot" then return false end
+    if not TAB_SETTING[tab] then return false end
     if not tabShown(self.global.settings, tab) then return false, "That tab is hidden" end
     self.global.activeTab = tab
     self:Render()
@@ -1059,7 +1098,8 @@ function methods:QueueBatch(tab, batch, replace)
     end
     self.global.outbox, self.global.nextId = outbox, first + #batch
     self.contextPending, self.notice = nil, nil
-    self.scroll[tab], self.ring.delay = 0, self.ring.baseDelay
+    if batch[1] and batch[1].action ~= "control" then self.scroll[tab] = 0 end
+    self.ring.delay = self.ring.baseDelay
     self:Render()
     self:Schedule("pixel", 0.2, self.PixelTick)
     if self.binding then self:Schedule("binding", 0, self.BindingTick) end
@@ -1085,6 +1125,34 @@ function methods:SendLong(tab, text, replace)
     return self:QueueBatch(tab, batch, replace)
 end
 function methods:Action(tab, action) return self:Queue(tab, action, "") end
+
+-- Daemon control requests use their own action type (never typed into a PTY and expired on host change).
+function methods:ControlTab()
+    local active = self.global.activeTab
+    for _, session in ipairs(self.sessions) do
+        if session.id == active and not stoppedStatus(session.status) then return active end
+    end
+    for _, session in ipairs(self.sessions) do
+        if not stoppedStatus(session.status) then return session.id end
+    end
+    return self:FirstPresentTab()
+end
+
+function methods:QueueControl(text)
+    return self:Queue(self:ControlTab(), "control", text)
+end
+
+function methods:RequestCols(cols)
+    if cols == "fit" and self.view and self.view.FittedCols then cols = self.view:FittedCols() end
+    if not integer(cols, 40, 160) then return false, "Columns must be 40 to 160, or fit" end
+    local ok, reason = self:QueueControl("cols=" .. cols)
+    if not ok then return false, reason end
+    return true, cols
+end
+
+function methods:ClearJournal()
+    return self:QueueControl("clear-journal")
+end
 
 -- Answer the menu a tab is waiting on: move from its marked option to `index`, then Enter. Only
 -- keys every CLI takes are used, and the whole answer is refused unless it fits the outbox.
@@ -1124,7 +1192,9 @@ end
 -- parallel tool calls, or the CLI ignoring the keys), since a CLI takes milliseconds to redraw.
 function methods:AnswerPending(tab)
     for _, message in ipairs(self.global.outbox) do
-        if message.tab == tab and message.epoch == self.global.epoch and not message.review then return "Input for this tab is still on its way" end
+        if message.tab == tab and message.epoch == self.global.epoch and not message.review and message.action ~= "control" then
+            return "Input for this tab is still on its way"
+        end
     end
     local mark = self.answered[tab]
     if not mark then return nil end
@@ -1133,7 +1203,7 @@ function methods:AnswerPending(tab)
 end
 
 local function held(global, message)
-    return message.review or message.epoch ~= global.epoch
+    return message.action ~= "control" and (message.review or message.epoch ~= global.epoch)
 end
 
 function methods:Retained(id)
@@ -1185,6 +1255,13 @@ end
 
 function methods:Resend(id)
     if not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
+    for i = #self.global.outbox, 1, -1 do
+        local message = self.global.outbox[i]
+        if message.action == "control" and message.epoch ~= self.global.epoch then
+            if self.binding then self.binding:Cancel("input:" .. message.epoch .. ":" .. message.id) end
+            table.remove(self.global.outbox, i)
+        end
+    end
     if id then
         local message = self:Retained(id)
         if not message then return false, "No retained input with that ID" end
@@ -1264,7 +1341,9 @@ function methods:ReceiveChunk(payload)
     -- every message behind it; it is dropped here, whichever host queued it.
     local dropped = 0
     for _, message in ipairs(global.outbox) do
-        if message.prompt then
+        if message.action == "control" and message.epoch ~= result.epoch then
+            if self.binding then self.binding:Cancel("input:" .. message.epoch .. ":" .. message.id) end
+        elseif message.prompt then
             local first, _, count = Prompts.Read(message)
             local last = first + count - 1
             local submitted = message.epoch == result.epoch and result.promptResults[last] == true
@@ -1285,19 +1364,23 @@ function methods:ReceiveChunk(payload)
     end
     global.outbox = retained
     if dropped > 0 then self:Print("Witchcraft dropped " .. dropped .. " queued message(s) for a tab this host does not have") end
-    -- The daemon starts Copilot only on request, so its first started session of a host epoch switches the tab on.
+    -- The daemon starts Copilot and AGY only on request, so the first started session of a host epoch switches its tab on.
+    local optInRevealed = { copilot = "copilotRevealedEpoch", agy = "agyRevealedEpoch" }
     for _, session in ipairs(result.sessions) do
-        if session.id == "copilot" and session.status ~= "not started" and session.status ~= "Waiting for host"
-            and global.copilotRevealedEpoch ~= self.ring.epoch then
-            global.copilotRevealedEpoch = self.ring.epoch
-            if not tabShown(global.settings, "copilot") then
-                global.settings.tabCopilot = true
-                self:Print("Witchcraft shows the Copilot tab because the daemon started Copilot. Hide it under Options > Tabs.")
+        local revealedKey = optInRevealed[session.id]
+        if revealedKey and session.status ~= "not started" and session.status ~= "Waiting for host"
+            and global[revealedKey] ~= self.ring.epoch then
+            global[revealedKey] = self.ring.epoch
+            if not tabShown(global.settings, session.id) then
+                global.settings[TAB_SETTING[session.id]] = true
+                self:Print("Witchcraft shows the " .. TAB_TITLE[session.id] .. " tab because the daemon started "
+                    .. TAB_TITLE[session.id] .. ". Hide it under Options > Tabs.")
             end
         end
     end
-    -- An older host lists two sessions, so a saved Copilot selection falls back rather than queue input the host would never acknowledge.
-    if global.activeTab == "copilot" and not sessionListed(result.sessions, "copilot") then
+    -- An older host lists fewer sessions, so a saved opt-in selection falls back rather than queue input the host would never acknowledge.
+    if (global.activeTab == "copilot" or global.activeTab == "agy")
+        and not sessionListed(result.sessions, global.activeTab) then
         global.activeTab = self:FirstPresentTab()
     end
     for _, session in ipairs(result.sessions) do
@@ -1352,6 +1435,7 @@ function methods:ReceiveChunk(payload)
     for tab in pairs(self.scroll) do self.scroll[tab] = math.min(self.scroll[tab], self:ScrollMaximum(tab)) end
     self.connected, self.notice, self.everLinked, self.stalled, self.stallDelay = true, nil, true, false, PAUSED_RETRY
     self:ResetHeartbeatBackoff()
+    self:MaybeAutoBindProbe()
     self:AcceptContext(result)
     self:Render()
     return true
@@ -1450,7 +1534,8 @@ function methods:PixelTick()
             -- The strip stands aside while the cooldown carrier owns the context lane, as the
             -- binding lane already does; otherwise both send the same snapshot.
             if pending and not pending.retryAt and self:ContextNow() - pending.createdAt < 30
-                and self.connected and self.contextProtocol == 4 and not self:CooldownActive() then
+                and self.connected and self.contextProtocol == 4
+                and not self:CooldownActive() and not self:BindingContextActive() then
                 colors = pending.frames[pending.index]
                 pending.index, pending.sent = pending.index % #pending.frames + 1, pending.sent + 1
                 if pending.sent >= #pending.frames * 3 then pending.retryAt = self:ContextNow() + 10 end
@@ -1464,22 +1549,41 @@ end
 
 function methods:BindingTick()
     if not self.active or not self.binding or self.binding.quarantined then return end
+    if self.bindingStopPending and not self:Combat() then
+        if self.binding:Stop() then self.bindingStopPending = nil end
+    end
     -- An input whose message is no longer queued is cancelled here too, which retries a cancel deferred in combat.
     local active = self.binding.active
     if active and active.kind == "input" then
         local activeEpoch, activeId = active.identity:match("^input:(%x+):(%d+)$")
         if not queued(self.global.outbox, activeEpoch, tonumber(activeId)) then self.binding:Cancel(active.identity) end
+    elseif active and active.kind == "context" then
+        local outstanding = self.binding.outstanding
+        if outstanding and (self:ContextNow() - (outstanding.sentAt or 0)) >= BINDING_ACK_TIMEOUT then
+            self.binding.contextBlocked = true
+            if not self:Combat() then self.binding:Cancel(active.identity) end
+            self:PixelTick()
+        end
     end
     if not self:Combat() and self.binding.enabled and not self.binding.active and not self.binding.outstanding then
         local message = self:PendingInput()
         if message then self.binding:OfferInput(message)
-        elseif self.contextPending and not self:CooldownActive() then
+        elseif self.contextPending and not self:CooldownActive() and not self.binding.contextBlocked
+            and (not self.binding.HasKey or self.binding:HasKey()) then
             self.binding:OfferContext({ epoch = self.contextPending.epoch, uiNonce = self.contextPending.uiNonce,
                 id = self.contextPending.id, text = self.contextPending.text })
         end
     end
-    self.binding:Pump(self.ring.nextSeq)
-    if self.binding:Busy() or self.binding.enabled then self:Schedule("binding", 1, self.BindingTick) end
+    local hadContext = self.binding.active and self.binding.active.kind == "context" and not self.binding.outstanding
+    local now = self.binding.Now and self.binding:Now() or self:ContextNow()
+    local canTry = not self:Combat() and (now - (self.binding.lastWriteAt or 0) >= 1)
+    local pumped = self.binding:Pump(self.ring.nextSeq)
+    if hadContext and canTry and not pumped and not self.binding.outstanding then
+        self.binding.contextBlocked = true
+        self.binding:Cancel(self.binding.active.identity)
+        self:PixelTick()
+    end
+    if self.binding:Busy() or self.binding.enabled or self.bindingStopPending then self:Schedule("binding", 1, self.BindingTick) end
 end
 
 function methods:StopBurstProbe()
@@ -1530,6 +1634,7 @@ function methods:OnEvent(event)
         if self.cooldownDeferred then self:ReleaseCooldown() end
         self:OfferHeartbeat()
         self:OfferBindingHeartbeat()
+        self:MaybeAutoBindProbe()
         if self:WantStream() then self:Schedule("load", 1, self.LoadTick) end
         if self.binding and (self.binding:Busy() or self.binding.enabled) then self:Schedule("binding", 0, self.BindingTick) end
     end
@@ -1599,14 +1704,36 @@ function methods:HandleSlash(input)
         self:ListErrors(arg)
     elseif command == "settings" or command == "options" then
         self:OpenSettings()
+    elseif command == "tab" or command == "tabs" then
+        local id, state = arg:lower():match("^(%S*)%s*(%S*)$")
+        local settingKey = TAB_SETTING[id]
+        if not settingKey then
+            local parts = {}
+            for _, tabId in ipairs(TAB_ORDER) do
+                parts[#parts + 1] = TAB_TITLE[tabId] .. "=" .. (self:TabPresent(tabId) and "on" or "off")
+            end
+            self:Print("Tabs: " .. table.concat(parts, ", ") .. "; /witch tab <claude|codex|copilot|agy> [on|off]")
+        elseif state ~= "" and state ~= "on" and state ~= "off" then
+            self:Print("Usage: /witch tab <claude|codex|copilot|agy> [on|off]")
+        else
+            local want = state == "" and (not self:TabPresent(id)) or (state == "on")
+            local ok, reason = self:SetSetting(settingKey, want)
+            self:Print(ok and (TAB_TITLE[id] .. " tab " .. (want and "shown" or "hidden")) or reason)
+        end
     elseif command == "size" then
         local ok, reason = self:SetFontSize(tonumber(arg)); if not ok then self:Print(reason) end
     elseif command == "opacity" then
         local ok, reason = self:SetOpacity(tonumber(arg)); if not ok then self:Print(reason) end
+    elseif command == "cols" then
+        local ok, detail = self:RequestCols(arg == "fit" and "fit" or tonumber(arg))
+        self:Print(ok and ("Terminal width request queued (" .. tostring(detail) .. " columns)") or detail)
     elseif command == "context" then
         if arg == "on" or arg == "off" then self:SetContextEnabled(arg == "on")
         elseif arg == "refresh" then local ok, reason = self:RefreshContext(); if not ok then self:Print(reason) end
-        else self:Print("WoW context: " .. self:Snapshot().context.status .. "; /witch context on|off|refresh") end
+        elseif arg == "clear-journal" then
+            local ok, reason = self:ClearJournal()
+            self:Print(ok and "Session journal clear queued" or reason)
+        else self:Print("WoW context: " .. self:Snapshot().context.status .. "; /witch context on|off|refresh|clear-journal") end
     elseif command == "hz" then
         local ok, reason = self.ring:SetHz(tonumber(arg))
         if ok then self.global.hz = tonumber(arg) else self:Print(reason) end
@@ -1629,7 +1756,15 @@ function methods:HandleSlash(input)
             end
         end
     elseif command == "bindprobe" then
-        if not self.binding then self:Print("Binding carrier APIs are unavailable")
+        local mode = arg:lower()
+        if mode == "auto" or mode == "on" or mode == "off" then
+            local enabled = mode ~= "off"
+            self:SetSetting("autoBindProbe", enabled)
+            if not enabled and self.binding and not self.binding:Stop() then
+                self.bindingStopPending = true
+            end
+            self:Print("Binding carrier auto-probe " .. (enabled and "enabled" or "disabled"))
+        elseif not self.binding then self:Print("Binding carrier APIs are unavailable")
         else
             local ok, reason = self.binding:Probe(self.uiNonce)
             if ok then
@@ -1658,9 +1793,10 @@ function methods:HandleSlash(input)
             cooldown, self.cursorLane or "none"))
     else
         self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
-            .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport | errors"
-            .. " | size 8-20 | opacity 0-100 | context on|off|refresh | hz 0.125-2"
-            .. " | calibrate [off] | burstprobe [200-2000|corrupt|off] | bindprobe | status | resend | reset")
+            .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"
+            .. " | tab <claude|codex|copilot|agy> [on|off] | size 8-20 | cols 40-160|fit | opacity 0-100"
+            .. " | context on|off|refresh|clear-journal | hz 0.125-2"
+            .. " | calibrate [off] | burstprobe [200-2000|corrupt|off] | bindprobe [auto|off] | status | resend | reset")
     end
 end
 
@@ -1722,7 +1858,7 @@ if LibStub then
         settingsCategory = ns.Options and ns.Options.Register(controller)
         _G.BINDING_HEADER_WITCHCRAFT, _G.BINDING_NAME_WITCHCRAFT_TOGGLE = "Witchcraft", "Toggle terminal window"
         _G.BINDING_NAME_WITCHCRAFT_FOCUS = "Open and type a prompt"
-        _G.BINDING_NAME_WITCHCRAFT_NEXTTAB = "Cycle Claude, Codex and Copilot"
+        _G.BINDING_NAME_WITCHCRAFT_NEXTTAB = "Cycle Claude, Codex, Copilot and AGY"
         _G.BINDING_NAME_WITCHCRAFT_INTERRUPT = "Interrupt the selected agent"
     end
     function Witchcraft:OnEnable()

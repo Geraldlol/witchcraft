@@ -21,6 +21,8 @@ and reports what the ring, cache and carrier files say from outside.
 | Start in the proven mode (screen strip bootstrap), joining current sessions: Claude tab mirrors the running Claude Code console in `-Cwd` (default: the current folder), Codex tab resumes the newest Codex thread there | `-Action start` |
 | Start Copilot only (fresh by default; use `/resume` in its tab) | `-Action start -Only copilot` |
 | Add Copilot alongside Claude and Codex | `-Action start -WithCopilot` |
+| Start AGY (Antigravity CLI) only | `-Action start -Only agy` |
+| Add AGY alongside Claude and Codex | `-Action start -WithAgy` |
 | Start with new Claude and Codex sessions instead | `-Action start -Fresh` |
 | Start without the strip: the cooldown carrier's heartbeat drives the ring (unproven in game) | `-Action start -Mode carrier` |
 | One agent only; the overlay remains off by default | `-Action start -Only codex` |

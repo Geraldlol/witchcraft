@@ -4,8 +4,8 @@ local Pixel = {}
 ns.Pixel = Pixel
 
 local floor = math.floor
-local ACTIONS = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5 }
-local TABS = { claude = 1, codex = 2, copilot = 3 }
+local ACTIONS = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5, control = 6 }
+local TABS = { claude = 1, codex = 2, copilot = 3, agy = 4 }
 local MAX_ID, MAX_TEXT = 262143, 600
 local BURST_ROWS, BURST_TEXT = 22, 560
 local BURST_TOKEN = "WITCHCRAFT-BURST-PROBE|"
@@ -79,8 +79,11 @@ function Pixel.Encode(message)
     local route = message.tab
     if route == nil then route = message.session end
     local tab, action = TABS[route], ACTIONS[message.action]
+    local hasText = action == 0 or action == 6
     if not epoch or not integer(message.id, 1, MAX_ID) or not tab or action == nil or not validText(text)
-        or (action ~= 0 and text ~= "") then return nil, "Invalid epoch, ID, tab, action or text" end
+        or (not hasText and text ~= "") or (action == 6 and text == "") then
+        return nil, "Invalid epoch, ID, tab, action or text"
+    end
     local body = epoch .. tab .. action .. text
     local frames = {}
     for start = 1, #body, 11 do

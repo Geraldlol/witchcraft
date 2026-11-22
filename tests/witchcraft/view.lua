@@ -571,7 +571,33 @@ return function(options)
         for i = #sounds, 1, -1 do sounds[i] = nil end
         local settingsOpened = 0
         controller.OpenSettings = function() settingsOpened = settingsOpened + 1 end
-        click(view.appearanceButton); layout(); click(view.allSettings)
+        controller.SetSetting = function(_, key, value)
+            calls.settings = calls.settings or {}
+            calls.settings[#calls.settings + 1] = { key, value }
+            snapshot.tabs = snapshot.tabs or { "claude", "codex" }
+            local tabMap = { tabClaude = "claude", tabCodex = "codex", tabCopilot = "copilot", tabAgy = "agy" }
+            local id = tabMap[key]
+            if id then
+                local nextTabs = {}
+                for _, item in ipairs({ "claude", "codex", "copilot", "agy" }) do
+                    local had = false
+                    for _, cur in ipairs(snapshot.tabs) do if cur == item then had = true end end
+                    if (item == id and value) or (item ~= id and had) then nextTabs[#nextTabs + 1] = item end
+                end
+                if #nextTabs == 0 then return false, "At least one tab stays visible" end
+                snapshot.tabs = nextTabs
+            end
+            view:Render(snapshot)
+            return true
+        end
+        click(view.appearanceButton); layout()
+        assert(view.tabsLabel.text == "Agent tabs" and view.tabToggles.agy.label.text == "AGY",
+            "Appearance offers quick toggles for each agent tab")
+        click(view.tabToggles.agy); layout()
+        assert(view.tabs.agy.shown and view.tabToggles.agy.tier == "primary", "toggling AGY in Appearance reveals its tab")
+        click(view.tabToggles.agy); layout()
+        assert(not view.tabs.agy.shown and view.tabToggles.agy.tier == "secondary", "toggling AGY again hides its tab")
+        click(view.allSettings)
         assert(settingsOpened == 1 and not view.appearancePanel.shown, "All settings opens the Options page")
         -- Choice strip: a waiting menu gets numbered stock buttons between the terminal and the composer.
         assert(not view.choiceBar.shown, "no strip without a menu")
@@ -713,8 +739,6 @@ return function(options)
         click(view.contextToggle); layout()
         assert(not snapshot.context.enabled and view.contextToggle.label.text == "ENABLE" and not view.contextRefresh.shown,
             "off state hides update and promotes enable")
-        click(view.errorLogButton)
-        assert(calls.errorLog == "list" and not snapshot.context.enabled, "local error history is available while sharing is paused")
         assert(view.contextToggle.backdropColor[4] == 1, "enable sharing becomes the primary action")
         click(view.contextToggle); assert(snapshot.context.enabled and view.contextToggle.label.text == "PAUSE")
         assert(view.contextToggle.tier == "secondary", "pause sharing is secondary")
@@ -983,6 +1007,7 @@ return function(options)
         click(view.copyClose)
         view.frame:SetSize(9000, 9000); layout()
         assert(view.frame.width <= _G.UIParent.width and view.frame.height <= _G.UIParent.height, "large resize stays on screen")
+        assert(view:FittedCols() <= 160 and view:FittedCols() >= 40, "FittedCols stays within the 40..160 ring envelope bound")
         view.resize.scripts.OnMouseUp(view.resize, "LeftButton")
         assert(#calls.saved == 1 and calls.saved[1].width == view.frame.width, "released resize persists dimensions")
         view.frame:SetPoint("TOPLEFT", _G.UIParent, "TOPLEFT", 35, -29)

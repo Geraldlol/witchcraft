@@ -14,13 +14,14 @@ param(
     # the ring (built 2026-09-22, unproven in game). Older docs called the second mode 'binding'.
     [ValidateSet('pixels', 'carrier', 'binding')]
     [string]$Mode = 'pixels',
-    [ValidateSet('', 'claude', 'codex', 'copilot')]
+    [ValidateSet('', 'claude', 'codex', 'copilot', 'agy')]
     [string]$Only = '',
     # Mirror a console you started yourself instead of launching that tab: claude=24492, or
     # claude=pick to choose from a list in the daemon's own window. `witchcraft consoles` lists
     # the candidates with their process ids. Both tabs can be named: -Attach claude=1,codex=2
     [string[]]$Attach = @(),
     [switch]$WithCopilot,
+    [switch]$WithAgy,
     [switch]$Overlay,
     [switch]$NoOverlay,
     [switch]$NoMcp,
@@ -187,10 +188,11 @@ function Start-Daemon([string]$dir) {
     if ($Mode -ne 'pixels') { $args += '--no-pixels' }
     if ($Only) { $args += @('--only', $Only) }
     if ($WithCopilot) { $args += '--with-copilot' }
+    if ($WithAgy) { $args += '--with-agy' }
     $picking = $false
     foreach ($entry in $Attach) {
-        if ($entry -notmatch '^(claude|codex|copilot)=([1-9][0-9]*|pick)$') {
-            Write-Output "bad -Attach '$entry': use claude=PID|pick, codex=PID|pick, or copilot=PID|pick. Run 'node bin/witchcraft.js consoles' in $dir for the process ids."
+        if ($entry -notmatch '^(claude|codex|copilot|agy)=([1-9][0-9]*|pick|~.+)$') {
+            Write-Output "bad -Attach '$entry': use claude=PID|pick|~TEXT, codex=PID|pick|~TEXT, copilot=PID|pick|~TEXT, or agy=PID|pick|~TEXT. Run 'node bin/witchcraft.js consoles' in $dir for the process ids."
             exit 1
         }
         if ($entry -match '=pick$') { $picking = $true }
@@ -241,7 +243,7 @@ function Show-Status([string]$dir) {
         if ($latest) {
             $text = Get-Content $latest.FullName -Raw
             $field = { param($k) $m = [regex]::Match($text, '\["' + $k + '"\]=("?)([^,}"]*)\1'); if ($m.Success) { $m.Groups[2].Value } else { '?' } }
-            $tabs = foreach ($id in 'claude', 'codex') {
+            $tabs = foreach ($id in 'claude', 'codex', 'copilot', 'agy') {
                 $i = $text.IndexOf('["id"]="' + $id + '"')
                 if ($i -ge 0) { $m = [regex]::Match($text.Substring($i), '\["status"\]="([^"]*)"'); "$id=$($m.Groups[1].Value)" } else { "$id=?" }
             }
@@ -260,9 +262,13 @@ function Show-Status([string]$dir) {
             Write-Output "context: status $($c.status), heartbeat $(if ($null -ne $hb) { "${hb}s ago" } else { 'never' }), player $player, quests $quests"
         } catch { Write-Output 'context: cache unreadable' }
     }
-    $want = Join-Path $dir '.local\wow-context.want.json'
-    if (Test-Path $want) {
-        try { $w = Get-Content $want -Raw | ConvertFrom-Json; $wa = [int](([DateTimeOffset]::Now.ToUnixTimeMilliseconds() - $w.requestedAt) / 1000); Write-Output "want: requested ${wa}s ago" } catch { }
+    $wants = Get-ChildItem (Join-Path $dir '.local\wow-context.want*.json') -ErrorAction SilentlyContinue
+    foreach ($wantFile in $wants) {
+        try {
+            $w = Get-Content $wantFile.FullName -Raw | ConvertFrom-Json
+            $wa = [int](([DateTimeOffset]::Now.ToUnixTimeMilliseconds() - $w.requestedAt) / 1000)
+            Write-Output "want ($($wantFile.Name)): requested ${wa}s ago"
+        } catch { }
     }
     $cd = if ($CharacterDir) { Join-Path $CharacterDir 'cooldownmanager.txt' } else { '' }
     if ($cd -and (Test-Path $cd)) {

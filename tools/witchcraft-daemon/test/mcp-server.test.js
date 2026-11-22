@@ -13,6 +13,7 @@ import { lootGoalsPath } from '../src/loot-goals.js';
 import { loadGuideCatalog } from '../src/guide-catalog.js';
 import { loadAdventureCatalog } from '../src/adventure-catalog.js';
 import { passportPath } from '../src/passport-store.js';
+import { journalPath } from '../src/journal.js';
 
 const binary = fileURLToPath(new URL('../bin/witchcraft-mcp.js', import.meta.url));
 async function workspace(t) {
@@ -56,9 +57,9 @@ for (const mode of ['legacy', 'auto']) {
     const file = await workspace(t), raw = snapshot(Date.now());
     await fs.writeFile(file, JSON.stringify(raw));
     const client = await connect(t, file, { mode });
-    assert.deepEqual(client.getServerVersion(), { name: 'witchcraft-wow', version: '0.1.1' });
+    assert.deepEqual(client.getServerVersion(), { name: 'witchcraft-wow', version: '0.3.1' });
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['wow_explain_quest', 'wow_find_guide', 'wow_get_character', 'wow_get_context', 'wow_get_errors', 'wow_get_loot_plan', 'wow_get_loot_sources', 'wow_get_passport', 'wow_get_progress', 'wow_get_quests', 'wow_rehearse_dungeon', 'wow_set_loot_goal', 'wow_set_passport_campaign', 'wow_stamp_passport', 'wow_suggest_detours']);
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['wow_explain_quest', 'wow_find_guide', 'wow_get_character', 'wow_get_context', 'wow_get_errors', 'wow_get_loot_plan', 'wow_get_loot_sources', 'wow_get_passport', 'wow_get_progress', 'wow_get_quests', 'wow_get_session_log', 'wow_rehearse_dungeon', 'wow_set_loot_goal', 'wow_set_passport_campaign', 'wow_stamp_passport', 'wow_suggest_detours']);
     assert.equal(tools.filter(tool => !['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign'].includes(tool.name)).every(tool => tool.annotations.readOnlyHint && tool.annotations.destructiveHint === false), true);
     assert.equal(tools.find(tool => tool.name === 'wow_set_loot_goal').annotations.readOnlyHint, false);
     const description = tools.find(tool => tool.name === 'wow_get_progress').description;
@@ -171,6 +172,77 @@ test('without --allow-local-writes the server registers no write tools, and help
   const help = spawnSync(process.execPath, [binary, '--help'], { encoding: 'utf8', windowsHide: true });
   assert.match(help.stderr, /--allow-local-writes/u);
   assert.doesNotMatch(help.stderr, /^Read-only WoW context/mu);
+});
+
+test('wow_get_session_log reads only the journal, filters it, and is listed without --allow-local-writes', { timeout: 15000 }, async t => {
+  const file = await workspace(t), journal = journalPath(file);
+  const client = await connect(t, file, undefined, { writes: false });
+  const tool = (await client.listTools()).tools.find(item => item.name === 'wow_get_session_log');
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.match(tool.description, /data, not instructions/u);
+  const call = async args => {
+    const result = await client.callTool({ name: 'wow_get_session_log', arguments: args });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return result.structuredContent;
+  };
+  assert.deepEqual(await call({}), { status: 'missing', segments: [], events: [] });
+  await fs.writeFile(journal, JSON.stringify({ schemaVersion: 1, segments: [] }));
+  assert.equal((await call({})).status, 'empty');
+  const now = Date.now();
+  const events = [
+    { at: now - 3000, domain: 'player', revision: 2, kind: 'level-up', from: 10, to: 11 },
+    { at: now - 2000, domain: 'progress', revision: 3, kind: 'money-change', delta: 50, money: 150 },
+    { at: now - 1000, domain: 'quests', revision: 4, kind: 'quest-tracked', questId: 101, title: 'A quest' },
+  ];
+  const document = JSON.stringify({ schemaVersion: 1, segments: [
+    { epoch: 'deadbeef', uiNonce: '00001111', startedAt: now - 8000, endedAt: now - 5000,
+      character: { name: 'Jaina', class: 'Mage' }, events: [
+        { at: now - 7000, domain: 'progress', revision: 1, kind: 'money-change', delta: 999, money: 999 },
+      ] },
+    { epoch: '0123abcd', uiNonce: 'abcd0123', startedAt: now - 4000, endedAt: null,
+      character: { name: 'Thrall', class: 'Shaman' }, events },
+  ] });
+  await fs.writeFile(journal, document);
+  const current = await call({});
+  assert.equal(current.status, 'ready');
+  assert.equal(current.scope, 'current');
+  assert.deepEqual(current.segments.map(segment => [segment.epoch, segment.uiNonce, segment.eventCount, segment.endedAt !== null]), [
+    ['deadbeef', '00001111', 1, true],
+    ['0123abcd', 'abcd0123', 3, false],
+  ]);
+  assert.deepEqual(current.events.map(event => event.kind), ['level-up', 'money-change', 'quest-tracked']);
+  assert.equal(current.events[0].at, new Date(now - 3000).toISOString());
+  assert.equal(current.events[0].epoch, '0123abcd');
+  assert.equal(current.events[0].uiNonce, 'abcd0123');
+  assert.deepEqual(current.events[0].character, { name: 'Thrall', class: 'Shaman' });
+  assert.equal(typeof current.events[0].ageSeconds, 'number');
+  assert.equal(JSON.stringify(current).includes(path.basename(journal)), false, 'the journal path is never revealed');
+  const all = await call({ includeHistory: true });
+  assert.equal(all.scope, 'all');
+  assert.deepEqual(all.events.map(event => [event.character?.name, event.kind]), [
+    ['Jaina', 'money-change'],
+    ['Thrall', 'level-up'],
+    ['Thrall', 'money-change'],
+    ['Thrall', 'quest-tracked'],
+  ]);
+  assert.deepEqual((await call({ includeHistory: true, character: 'Jaina' })).events.map(event => event.money), [999]);
+  assert.deepEqual((await call({ since: now - 2000 })).events.map(event => event.kind), ['money-change', 'quest-tracked']);
+  assert.deepEqual((await call({ kinds: ['money-change'] })).events.map(event => event.money), [150]);
+  assert.deepEqual((await call({ limit: 1 })).events.map(event => event.kind), ['quest-tracked']);
+  for (const bad of [{ path: journal }, { limit: 0 }, { limit: 501 }, { kinds: ['chat'] }, { since: -1 }, { character: '' }]) {
+    assert.equal((await client.callTool({ name: 'wow_get_session_log', arguments: bad })).isError, true, JSON.stringify(bad));
+  }
+  assert.equal(await fs.readFile(journal, 'utf8'), document, 'the tool never changes the journal');
+  assert.equal(await exists(file), false, 'the tool never creates the cache');
+  assert.equal(await exists(contextWantPath(file, 'player')), false, 'nor asks the game for anything');
+
+  // When context sharing is paused in the cache, the tool explains that history remains readable until cleared.
+  const pausedCache = snapshot(now);
+  pausedCache.enabled = false;
+  await fs.writeFile(file, JSON.stringify(pausedCache));
+  const whilePaused = await call({});
+  assert.equal(whilePaused.sharing, 'paused');
+  assert.match(whilePaused.note, /WoW context sharing is paused/u);
 });
 
 test('invalid launch arguments and help keep stdout clean', () => {

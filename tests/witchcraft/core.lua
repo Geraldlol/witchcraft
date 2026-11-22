@@ -368,6 +368,28 @@ test("a started Copilot session switches its tab on once per host epoch", functi
     equal(c:Setting("tabCopilot"), true); equal(tabs(), "claude,codex,copilot"); equal(reveals(), 2)
 end)
 
+test("a started AGY session switches its tab on once per host epoch and /witch tab toggles visibility", function()
+    local c, s = fixture()
+    local function sessions(status)
+        local list = payload().sessions
+        list[3] = { id = "copilot", title = "Copilot", status = "not started", lines = {} }
+        list[4] = { id = "agy", title = "AGY", status = status, lines = {} }
+        return list
+    end
+    local function tabs() return table.concat(c:Snapshot().tabs, ",") end
+    s:Accept({ sessions = sessions("not started") })
+    equal(c:Setting("tabAgy"), false); equal(tabs(), "claude,codex")
+    s:Accept({ sessions = sessions("running") })
+    equal(c:Setting("tabAgy"), true); equal(tabs(), "claude,codex,agy")
+    equal(c.global.agyRevealedEpoch, "1234abcd")
+    c:HandleSlash("tab agy off")
+    equal(c:Setting("tabAgy"), false); equal(tabs(), "claude,codex")
+    c:HandleSlash("tab agy")
+    equal(c:Setting("tabAgy"), true); equal(tabs(), "claude,codex,agy")
+    c:HandleSlash("tabs")
+    assert(s.printed[#s.printed]:find("AGY=on", 1, true))
+end)
+
 test("controller wrong nonce cannot acknowledge cached data after UI reload", function()
     local g = { epoch = "1234abcd", reloadAwaitHost = true, outbox = {
         { id = 1, epoch = "1234abcd", tab = "claude", action = "text", text = "retain" } }, nextId = 2 }
@@ -1107,4 +1129,120 @@ test("the controller loads the error store and /witch errors lists or clears it"
     equal(#c.global.errors, 0); equal(s.printed[#s.printed], "Errors cleared")
     c:HandleSlash("errors")
     equal(s.printed[#s.printed], "No Lua errors stored")
+end)
+
+test("the pixel strip stands aside for context while the binding carrier is active, and takes over on key occupation or ACK timeout", function()
+    local clock = { now = 10 }
+    local c, s = fixture(nil, { GetTime = function() return clock.now end, Context = { Capture = function() return { { true } } end } })
+    local offered, hasKey, pumpResult = {}, true, true
+    c.binding = { enabled = true, quarantined = false, lastWriteAt = 0,
+        Now = function() return clock.now end,
+        HasKey = function() return hasKey end,
+        Busy = function(self) return self.active ~= nil or self.outstanding ~= nil end,
+        AcceptHost = function() return false end,
+        Pump = function(self)
+            if self.active and not self.outstanding and pumpResult then
+                self.outstanding = { seq = 1, sentAt = clock.now }
+                return true
+            end
+            return false
+        end,
+        OfferInput = function() return false end,
+        OfferContext = function(self, msg)
+            offered[#offered + 1] = msg.id
+            self.active = { kind = "context", identity = "context:" .. msg.id }
+            return true
+        end,
+        Snapshot = function() return { status = "ready", enabled = true } end,
+        Stop = function() return true end,
+        Cancel = function(self) self.active, self.outstanding = nil, nil; return true end,
+        Heartbeat = function() return true end }
+    s:Accept({ contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    c:ContextTick()
+    assert(c.contextPending, "context snapshot is pending")
+    c:BindingTick()
+    equal(#offered, 1, "BindingTick offered the context frame to the binding carrier")
+    c:PixelTick()
+    equal(s.top, nil, "PixelTick stands aside while BindingContextActive() is true")
+    -- After 5 seconds without a host ACK on the binding frame, the optical strip takes over.
+    clock.now = 15
+    c:BindingTick()
+    equal(c.binding.contextBlocked, true, "ACK timeout blocks the binding context lane until the host answers")
+    assert(s.top ~= nil, "PixelTick immediately transmits context after binding ACK timeout")
+    -- Resetting contextBlocked and occupying all keys also lets the strip take over.
+    c.binding.contextBlocked = nil
+    hasKey = false
+    s.top = nil
+    c:PixelTick()
+    assert(s.top ~= nil, "PixelTick takes over when all reserved binding keys are occupied")
+    -- If a key appeared available before Pump but the claim failed inside Pump, the strip takes over.
+    hasKey, pumpResult = true, false
+    s.top = nil
+    c:BindingTick()
+    equal(c.binding.contextBlocked, true, "failed key claim during Pump falls back to the optical strip")
+    assert(s.top ~= nil, "PixelTick transmits context after failed key claim")
+end)
+
+test("autoBindProbe qualifies the binding carrier once per host session outside combat and bindprobe off releases any claimed key", function()
+    local c, s = fixture({ settings = { autoBindProbe = true, combatUpdates = true } })
+    local probes, stopped = 0, 0
+    c.binding = { enabled = false, quarantined = false, Busy = function() return false end,
+        AcceptHost = function() return false end, Pump = function() end,
+        Probe = function(_, nonce) probes = probes + 1; equal(nonce, c.uiNonce); return true end,
+        Snapshot = function() return { status = "idle", enabled = false } end,
+        Stop = function() stopped = stopped + 1; return true end, Cancel = function() return true end }
+    s.combat = true
+    s:Accept({ epoch = "11111111" })
+    equal(probes, 0, "autoBindProbe waits while in combat")
+    s.combat = false
+    c:OnEvent("PLAYER_REGEN_ENABLED")
+    equal(probes, 1, "autoBindProbe fires when combat ends")
+    s:Accept({ epoch = "11111111" })
+    equal(probes, 1, "autoBindProbe runs only once per host epoch")
+    s:Accept({ epoch = "22222222" })
+    equal(probes, 2, "a new host epoch triggers a fresh probe")
+    c:HandleSlash("bindprobe off")
+    equal(c:Setting("autoBindProbe"), false)
+    assert(stopped >= 1, "bindprobe off immediately stops the carrier and restores any claimed probe key")
+    c:HandleSlash("bindprobe auto")
+    equal(c:Setting("autoBindProbe"), true)
+end)
+
+test("/witch cols and /witch context clear-journal route as control actions to a running session, cap at 160, and expire on host restart", function()
+    local c, s = fixture()
+    local codexOnly = screens({ "claude idle" }, { "codex live" })
+    codexOnly[1].status = "not started"
+    codexOnly[2].status = "running"
+    s:Accept({ sessions = codexOnly })
+    equal(c.global.activeTab, "claude", "activeTab is still claude in a Codex-only session")
+    c.view.FittedCols = function() return 160 end
+    c:HandleSlash("cols 132")
+    local first = c.global.outbox[#c.global.outbox]
+    equal(first.action, "control")
+    equal(first.tab, "codex", "control requests target a running session instead of an inactive claude tab")
+    equal(first.text, "cols=132")
+    equal(s.printed[#s.printed], "Terminal width request queued (132 columns)")
+    c:HandleSlash("cols 160")
+    equal(c.global.outbox[#c.global.outbox].text, "cols=160")
+    c:HandleSlash("cols 161")
+    equal(s.printed[#s.printed], "Columns must be 40 to 160, or fit")
+    c:HandleSlash("cols fit")
+    equal(c.global.outbox[#c.global.outbox].text, "cols=160")
+    c:HandleSlash("cols 20")
+    equal(s.printed[#s.printed], "Columns must be 40 to 160, or fit")
+    c:HandleSlash("context clear-journal")
+    local clearMsg = c.global.outbox[#c.global.outbox]
+    equal(clearMsg.action, "control")
+    equal(clearMsg.tab, "codex")
+    equal(clearMsg.text, "clear-journal")
+    equal(s.printed[#s.printed], "Session journal clear queued")
+    -- Queue an ordinary prompt alongside the control messages, then restart the host.
+    assert(c:Send("codex", "keep this prompt"))
+    s:Accept({ epoch = "87654321", sessions = codexOnly })
+    equal(#c.global.outbox, 1, "control requests expire when the host changes")
+    equal(c.global.outbox[1].action, "text")
+    equal(c.global.outbox[1].text, "keep this prompt")
+    assert(c:Resend())
+    equal(#c.global.outbox, 1)
+    equal(c.global.outbox[1].text, "keep this prompt")
 end)

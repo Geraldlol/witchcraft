@@ -12,12 +12,28 @@ test('resolveProgram ignores empty and relative PATH entries instead of resolvin
   fs.mkdirSync(real);
   fs.writeFileSync(path.join(planted, 'fam-agent.exe'), '');
   fs.writeFileSync(path.join(planted, 'bin', 'fam-agent.exe'), '');
-  fs.writeFileSync(path.join(real, 'fam-agent.exe'), '');
+  fs.writeFileSync(path.join(real, 'fam-agent.exe'), '', { mode: 0o755 });
   const cwd = process.cwd(), oldPath = process.env.PATH;
   t.after(() => { process.chdir(cwd); process.env.PATH = oldPath; fs.rmSync(root, { recursive: true, force: true }); });
   process.chdir(planted);
   process.env.PATH = ['', '.', 'bin', real].join(path.delimiter);
   assert.equal(resolveProgram('fam-agent.exe'), path.join(real, 'fam-agent.exe'));
+});
+
+test('resolveProgram skips a file on PATH that lacks the execute bit', { skip: process.platform === 'win32' && 'POSIX execute bits only' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'witchcraft-resolve-'));
+  const plain = path.join(root, 'plain'), runnable = path.join(root, 'runnable');
+  fs.mkdirSync(plain); fs.mkdirSync(runnable);
+  fs.writeFileSync(path.join(plain, 'fam-agent'), '', { mode: 0o644 });
+  fs.chmodSync(path.join(plain, 'fam-agent'), 0o644);
+  fs.writeFileSync(path.join(runnable, 'fam-agent'), '', { mode: 0o755 });
+  fs.chmodSync(path.join(runnable, 'fam-agent'), 0o755);
+  const oldPath = process.env.PATH;
+  t.after(() => { process.env.PATH = oldPath; fs.rmSync(root, { recursive: true, force: true }); });
+  process.env.PATH = [plain, runnable].join(path.delimiter);
+  assert.equal(resolveProgram('fam-agent'), path.join(runnable, 'fam-agent'));
+  process.env.PATH = plain;
+  assert.throws(() => resolveProgram('fam-agent'), /Cannot find executable/u);
 });
 
 // The Store's PowerShell 7 is reached through an app-execution alias under WindowsApps: a

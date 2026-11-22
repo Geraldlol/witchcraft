@@ -53,7 +53,9 @@ function parseFrame(line, { region, calibration }) {
     throw new Error('Capture helper returned an unknown protocol');
   }
   if (frame.type === 'error') throw new Error(`Capture helper: ${String(frame.message || 'capture failed').slice(0, 1024)}`);
-  if (frame.type === 'idle' && frame.foreground === false && !calibration) return { idle: true };
+  if (frame.type === 'idle' && frame.foreground === false && !calibration) {
+    return frame.reason === 'outside' ? { idle: true, reason: 'outside' } : { idle: true };
+  }
   if (frame.type !== 'frame') throw new Error('Capture helper returned an unknown record');
   const { width, height, x, y, captureMs, foreground, rgba } = frame;
   if (![width, height, x, y].every(Number.isInteger) || width <= 0 || height <= 0 || width > 32768 || height > 32768
@@ -142,7 +144,7 @@ function runHelper({ region, calibration, once, scale, spawn, receive, idle = ()
     if (stopped) return;
     const frame = parseFrame(line, { region, calibration });
     if (frame || !once) clearTimeout(startup);
-    if (frame?.idle) idle();
+    if (frame?.idle) idle(frame.reason);
     else if (frame) receive(frame, stop);
   });
   try {
@@ -172,8 +174,8 @@ export class Capture {
     this.running = true;
     const generation = ++this.generation;
     const stop = runHelper({ region: this.region, calibration: false, once: false, spawn: this.spawn,
-      idle: () => {
-        if (this.running && generation === this.generation) this.onIdle();
+      idle: reason => {
+        if (this.running && generation === this.generation) this.onIdle(reason);
       },
       receive: frame => {
         if (this.running && generation === this.generation && frame.foreground) this.onFrame(frame);

@@ -76,6 +76,16 @@ def game_process(comm):
     return name.startswith("wow")
 
 
+def mac_game_owner(owner):
+    """Whether a macOS window owner (the app name) is the game: World of Warcraft*, or a Wine exe name."""
+    name = str(owner).strip().lower()
+    if name.startswith("world of warcraft"):
+        return True
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name in ("wow", "wowclassic", "wowb", "wowt")
+
+
 def mac_game_window(entry):
     """Whether a macOS Quartz CGWindowListCopyWindowInfo dictionary belongs to World of Warcraft."""
     if not isinstance(entry, dict) or entry.get("kCGWindowLayer", -1) != 0:
@@ -85,7 +95,7 @@ def mac_game_window(entry):
         return False
     owner = str(entry.get("kCGWindowOwnerName") or "").strip()
     title = str(entry.get("kCGWindowName") or "").strip()
-    owner_ok = owner.lower() == "world of warcraft" or game_process(owner)
+    owner_ok = mac_game_owner(owner)
     title_ok = not title or title == "World of Warcraft"
     return owner_ok and title_ok
 
@@ -111,6 +121,17 @@ class MacScreen:
     K_IMAGE_FRAMELESS = 1
     K_PLIST_XML = 100
     K_BITMAP_BGRX_32LE = 6 | (2 << 12)
+    # The window bounds include the title bar, so the calibration strip may start below it.
+    TITLE_BAR = True
+    LIST_TTL = 0.05
+    SEARCH_INTERVAL = 1.0
+    PROBE_INTERVAL = 1.0
+    clock = staticmethod(time.monotonic)
+    _screen_list = None
+    _screen_list_at = float("-inf")
+    _last_search = float("-inf")
+    _probe_bounds = None
+    _probe_at = float("-inf")
 
     def __init__(self):
         cg_path = ctypes.util.find_library("CoreGraphics") or "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
@@ -173,7 +194,51 @@ class MacScreen:
         finally:
             self.cf.CFRelease(info)
 
+    def _on_screen(self):
+        """The on-screen window list, reused until the next image capture or cycle.
+
+        Every new cycle and every image capture (grab() and the backing probe) drop it. A steady
+        cycle reads it twice and captures one image; a cycle that runs the backing probe (once a
+        second, or when the window moved or resized) reads it three times and captures two images.
+        A search for a new game window adds its own list reads. LIST_TTL is only a staleness backstop.
+        """
+        now = self.clock()
+        if self._screen_list is None or now - self._screen_list_at >= self.LIST_TTL:
+            self._screen_list = self._windows(on_screen_only=True)
+            self._screen_list_at = now
+        return self._screen_list
+
+    def new_cycle(self):
+        """Drops the window list, so no cycle's focus checks reuse a list read in an earlier cycle."""
+        self._screen_list = None
+
+    def _rediscover(self):
+        """The tracked window left the on-screen list: adopt a new game window when the old one is gone.
+
+        A restarted game opens a new window number. A window that is only hidden, minimised or on
+        another Space stays in the all-windows list and is kept. WITCHCRAFT_WINDOW_ID is never replaced.
+        """
+        if os.environ.get("WITCHCRAFT_WINDOW_ID"):
+            return
+        now = self.clock()
+        if now - self._last_search < self.SEARCH_INTERVAL:
+            return
+        self._last_search = now
+        if any(entry.get("kCGWindowNumber") == self.window for entry in self._windows(on_screen_only=False)):
+            return
+        try:
+            window = self._find()
+        except RuntimeError as error:
+            if "No World of Warcraft window found" not in str(error):
+                raise
+            return
+        if window != self.window:
+            self.window = window
+            self._probe_bounds = None
+            self._screen_list = None
+
     def _refresh_backing(self):
+        self._screen_list = None  # the focus check after this probe must see a fresh window list
         probe = CGRect(CGPoint(float(self._bounds.get("X", 0.0)), float(self._bounds.get("Y", 0.0))), CGSize(1.0, 1.0))
         image = self.cg.CGWindowListCreateImage(probe, self.K_INCLUDING_WINDOW, self.window, self.K_IMAGE_FRAMELESS)
         if not image:
@@ -210,7 +275,7 @@ class MacScreen:
 
     def size(self, window=None):
         target = window or self.window
-        for entry in self._windows(on_screen_only=True):
+        for entry in self._on_screen():
             if entry.get("kCGWindowNumber") == target:
                 bounds = entry.get("kCGWindowBounds") or {}
                 width, height = float(bounds.get("Width", 0)), float(bounds.get("Height", 0))
@@ -218,14 +283,25 @@ class MacScreen:
                     if target == self.window:
                         self._bounds = bounds
                         self.pid = entry.get("kCGWindowOwnerPID")
-                        self._refresh_backing()
+                        # The 1x1 backing probe is an image capture: repeat it only when the window
+                        # moved or resized, or once a second. grab() corrects _backing from each image.
+                        now = self.clock()
+                        if bounds != self._probe_bounds or now - self._probe_at >= self.PROBE_INTERVAL:
+                            self._probe_bounds = dict(bounds)
+                            self._probe_at = now
+                            self._refresh_backing()
                     backing = self._backing if target == self.window else 1.0
                     return max(1, int(round(width * backing))), max(1, int(round(height * backing)))
         raise GrabFailed("The game window is not on screen. Keep World of Warcraft visible and not minimized.")
 
     def focused(self):
-        windows = self._windows(on_screen_only=True)
+        # A frame is accepted only when the game was focused before and after its read. Every new
+        # cycle and every image capture (grab() and the backing probe) drop the cached list, so the
+        # cycle's first check, the check after a probe and the check after a grab each read a fresh
+        # list, and a focus change during either capture turns the frame into an idle.
+        windows = self._on_screen()
         if not any(entry.get("kCGWindowNumber") == self.window for entry in windows):
+            self._rediscover()
             return False
         for entry in windows:
             if entry.get("kCGWindowLayer", -1) != 0:
@@ -241,6 +317,7 @@ class MacScreen:
         return False
 
     def grab(self, x, y, width, height):
+        self._screen_list = None  # the focus check after this read must see a fresh window list
         scale = max(1.0, float(self._backing))
         pt_x0 = int(x // scale)
         pt_y0 = int(y // scale)
@@ -542,21 +619,25 @@ def measure_scale(screen, window_width, window_height=None):
     """Window pixels per game pixel (0.5..4.0), measured from the /witch calibrate strip.
 
     An unscaled window returns 1.0; a 3-point-per-cell nominal Retina capture returns 0.5; an
-    upscaled Retina capture returns 2.0 (or the measured fractional ratio). Also scans below any
-    window title bar when window_height is supplied and row y=4 / y=1 did not match.
+    upscaled Retina capture returns about 2.0 (the middle of the passing run). On a screen with a
+    TITLE_BAR it also scans below the title bar when window_height is supplied and row y=4 / y=1 did
+    not match.
     """
     width = min(window_width, CELLS * CELL * 4 + 8)
     if width < CELLS * 3:
         return None
     row4 = screen.grab(0, 4, width, 1)
-    found = _match_row_scale(row4, width, 1000, 4000, exact_candidates=(1.0, 2.0))
+    # Exactly 1.0 when it passes; otherwise the middle of the longest passing run, since a true
+    # ratio is rarely round (1.515 for a nominal 1.5) and a run edge has no margin.
+    found = _match_row_scale(row4, width, 1000, 4000, exact_candidates=(1.0,))
     if found is not None:
         return found
     row1 = row4 if window_height is not None and window_height <= 4 else screen.grab(0, 1, width, 1)
     found = _match_row_scale(row1, width, 495, 999, exact_candidates=(0.5,))
     if found is not None:
         return found
-    if window_height is not None and window_height > 16:
+    # Only a macOS window's bounds include a title bar; an X window is the client area.
+    if getattr(screen, "TITLE_BAR", False) and window_height is not None and window_height > 16:
         for y in range(2, min(window_height, 128)):
             if y in (1, 4):
                 continue
@@ -610,6 +691,9 @@ def frame_record(screen, mode, x, y, width, height, scale):
 
 def cycle_record(screen, mode, x, y, width, height, scale, calibration=False):
     """One cycle of main(): resolves window geometry and returns a frame or Stream idle record."""
+    new_cycle = getattr(screen, "new_cycle", None)
+    if new_cycle:
+        new_cycle()
     if mode == "Stream" and not screen.focused():
         return {"protocol": 1, "type": "idle", "foreground": False}
     try:
@@ -625,7 +709,7 @@ def cycle_record(screen, mode, x, y, width, height, scale, calibration=False):
         raise RuntimeError("Capture exceeds the bounded dimensions (sixteen million pixels).")
     if x < 0 or y < 0 or real_pixel(x + width - 1, scale) >= window_width or real_pixel(y + height - 1, scale) >= window_height:
         if mode == "Stream":
-            return {"protocol": 1, "type": "idle", "foreground": False}
+            return {"protocol": 1, "type": "idle", "foreground": False, "reason": "outside"}
         raise RuntimeError("The calibrated strip is outside the game window. Calibrate again.")
     return frame_record(screen, mode, x, y, width, height, scale)
 

@@ -36,7 +36,7 @@ export function parseArgs(argv) {
     const token = rest[index];
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
     if (token === '--clean') { options.clean = true; continue; }
-    if (token === '--clear') { options.clear = true; continue; }
+    if (token === '--clear' && command === 'journal') { options.clear = true; continue; }
     if (token === '--with-copilot') { options.withCopilot = true; continue; }
     if (token === '--with-agy') { options.withAgy = true; continue; }
     if (token === '--no-mcp') { options.noMcp = true; continue; }
@@ -563,9 +563,17 @@ Cooldown carrier retained for inspection: ${error.message}
     // The strip stays available wherever it is calibrated: the carrier's gate can refuse in game
     // (build mismatch, taint, combat), and then the strip is the only signal that tells the writer
     // which slot the addon wants. --no-pixels is the explicit way to run on the carrier alone.
+    let stripOutsideReported = false;
     if (config.region && !options.noPixels) capture = new CaptureStream({ region: config.region,
       onError: error => { void stop(error); },
+      onIdle: reason => {
+        if (reason !== 'outside' || stripOutsideReported) return;
+        stripOutsideReported = true;
+        process.stderr.write('\nWitchcraft: the calibrated strip is outside the game window; calibrate again '
+          + '(show /witch calibrate, then run witchcraft calibrate).\n');
+      },
       onFrame: image => {
+        stripOutsideReported = false;
         if (stopped || !image.foreground) return;
         const heartbeat = decodeHeartbeat(sampleFrame(image, { row: 1 }));
         const previousSeq = writer.cursor, previousNonce = writer.uiNonce;

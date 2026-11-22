@@ -77,14 +77,38 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
       // claim, so it never moves a newer owner's file and opens a gap for a third writer.
       const claim = recordType && `${lockPath}.recover-${verdict.identity.dev}-${verdict.identity.ino}`;
       if (claim) {
-        try { await fs.link(temporary, claim); }
-        catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          throw refuse(`recovery is already claimed; retry, or if its recorded process has exited and no operation is running, set aside ${claim}`);
+        const claimed = held => refuse(`recovery is already claimed; retry, or if its recorded process has exited and no operation is running, set aside ${held}`);
+        const judge = name => staleReason(name, { now, bootTime, isAlive, fs, recordType }).catch(error => {
+          if (error.code === 'ENOENT') return { gone: true };
+          throw error;
+        });
+        for (let retry = 0; ; retry++) {
+          try { await fs.link(temporary, claim); break; }
+          catch (error) { if (error.code !== 'EEXIST') throw error; }
+          if (retry > 0) throw claimed(claim);
+          // A claimer that died while holding its claim would otherwise block every later start.
+          // The claim is a link to its claimer's record, so it is judged like the lock itself.
+          const holder = await judge(claim);
+          if (holder.gone) continue;
+          if (holder.live) throw claimed(claim);
+          // The claim is never renamed or moved. Only a holder of the exclusive guard keyed to the
+          // dead claim's identity removes a claim with that identity, and it judges the claim again
+          // under the guard, so the name it unlinks is that dead claim and never a newer live one.
+          const guard = `${claim}.recover-${holder.identity.dev}-${holder.identity.ino}`;
+          try { await fs.link(temporary, guard); }
+          catch (error) { throw error.code === 'EEXIST' ? claimed(guard) : error; }
+          try {
+            const again = await judge(claim);
+            if (!again.gone) {
+              if (again.live || !same(again.identity, holder.identity)) throw claimed(claim);
+              await fs.unlink(claim).catch(error => { if (error.code !== 'ENOENT') throw error; });
+            }
+          } finally { await releaseOwnedLock({ lockPath: guard, identity, tag, fs }); }
         }
       }
       try {
         if (claim && !same(await fs.lstat(lockPath, { bigint: true }), verdict.identity)) throw refuse('another operation took it');
+        // Set-aside files are kept on purpose: each pins the judged inode, so it is never reused.
         await fs.rename(lockPath, aside);
       } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       finally { if (claim) await releaseOwnedLock({ lockPath: claim, identity, tag, fs }); }

@@ -7,6 +7,9 @@ import { lootGoalsPath } from './loot-goals.js';
 import { registerAdventureTools } from './adventure-tools.js';
 import { passportPath } from './passport-store.js';
 import { JOURNAL_KINDS, JournalStore, journalPath, presentJournal } from './journal.js';
+import { readFileSync } from 'node:fs';
+
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 // Measured over the screen strip on 2026-09-24: player 3.1 s, player then progress 6.6 s. A fresh
 // copy still returns at once; this only bounds how long a stale pull waits for the game.
@@ -67,7 +70,7 @@ const READ_ONLY_NOTE = 'This server was started read-only: wishlists and the pas
 
 export function createMcpServer({ cachePath, guidePath, adventurePath, now = Date.now, allowWrites = false } = {}) {
   if (typeof cachePath !== 'string' || !cachePath) throw new TypeError('A fixed context cache path is required');
-  const server = new McpServer({ name: 'witchcraft-wow', version: '0.3.1' }, { instructions: instructions.replace('WRITES ', allowWrites ? WRITE_NOTE : READ_ONLY_NOTE) });
+  const server = new McpServer({ name: 'witchcraft-wow', version: VERSION }, { instructions: instructions.replace('WRITES ', allowWrites ? WRITE_NOTE : READ_ONLY_NOTE) });
   const readCache = () => readContextFile(cachePath, { now: now() });
   // Each domain has its own want file, so the two adapters never rewrite each other's request.
   const request = ({ now: requestedAt, domains }) => Promise.all(domains.map(domain => requestContext(contextWantPath(cachePath, domain), { now: requestedAt })));

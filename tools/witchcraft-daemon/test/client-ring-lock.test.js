@@ -123,19 +123,154 @@ test('a delayed stale recovery never moves the new client owner or gives a third
   }
 });
 
-test('recovery interrupted while holding its claim preserves both records and names the manual action', async t => {
+// A dead lock owner plus a recovery claim already on disk, as a claimer that died mid-recovery leaves.
+async function claimedDeadLock(t, claimText) {
   const root = await sandbox(t), lockPath = path.join(root, RING_LOCK_NAME), recordType = 'witchcraft-ring-v1';
   const dead = JSON.stringify({ type: recordType, pid: process.pid + 1, startedAt: new Date().toISOString() });
   await fs.writeFile(lockPath, dead);
   const stat = await fs.stat(lockPath, { bigint: true });
   const claim = `${lockPath}.recover-${stat.dev}-${stat.ino}`;
-  await fs.writeFile(claim, dead);
-  await assert.rejects(acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid },
-    tag: 'next', isAlive: pid => pid === process.pid }), error => {
+  await fs.writeFile(claim, claimText ?? dead);
+  const take = files => acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid },
+    tag: 'next', isAlive: pid => pid === process.pid, ...(files ? { fs: files } : {}) });
+  return { root, lockPath, recordType, dead, claim, take };
+}
+
+async function refusedUntouched(t, claimText, files) {
+  const { root, lockPath, dead, claim, take } = await claimedDeadLock(t, claimText);
+  const before = (await fs.readdir(root)).sort();
+  await assert.rejects(take(files), error => {
     assert.equal(error.code, 'LOCK_HELD');
-    assert.ok(error.message.includes(claim) && error.message.includes('recorded process has exited'));
+    assert.ok(error.message.includes('recovery is already claimed') && error.message.includes(claim));
     return true;
   });
   assert.equal(await fs.readFile(lockPath, 'utf8'), dead);
-  assert.equal(await fs.readFile(claim, 'utf8'), dead);
+  assert.deepEqual((await fs.readdir(root)).sort(), before);
+  return claim;
+}
+
+test('a recovery claim left by a claimer that exited is dropped and the dead lock is recovered', async t => {
+  const { root, lockPath, dead, claim, take } = await claimedDeadLock(t);
+  const taken = await take();
+  try {
+    assert.equal(taken.reclaimed.length, 1);
+    assert.match(path.basename(taken.reclaimed[0].path), /^\.witchcraft-ring\.lock\.stale-.*-next\.json$/u);
+    assert.equal(await fs.readFile(taken.reclaimed[0].path, 'utf8'), dead);
+    await assert.rejects(fs.stat(claim), { code: 'ENOENT' });
+    assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.recover-')), []);
+    assert.equal(JSON.parse(await fs.readFile(lockPath, 'utf8')).pid, process.pid);
+  } finally {
+    await taken.handle.close();
+    await releaseOwnedLock({ lockPath, identity: taken.identity, tag: 'next' });
+  }
+});
+
+test('a recovery claim whose claimer still runs is refused and both records are untouched', async t => {
+  const live = JSON.stringify({ type: 'witchcraft-ring-v1', pid: process.pid, startedAt: new Date().toISOString() });
+  const claim = await refusedUntouched(t, live);
+  assert.equal(await fs.readFile(claim, 'utf8'), live);
+});
+
+test('a recovery claim that is not a ring record is refused and untouched', async t => {
+  const foreign = JSON.stringify({ type: 'something-else', pid: process.pid + 1 });
+  assert.equal(await fs.readFile(await refusedUntouched(t, foreign), 'utf8'), foreign);
+  const large = JSON.stringify({ type: 'witchcraft-ring-v1', pid: process.pid + 1, pad: 'x'.repeat(5000) });
+  assert.equal(await fs.readFile(await refusedUntouched(t, large), 'utf8'), large);
+});
+
+test('a recoverer that judged a dead claim late never moves or vacates the newer live claim', async t => {
+  const { root, lockPath, recordType, dead, claim } = await claimedDeadLock(t);
+  const take = (tag, files) => acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid, tag },
+    tag, fs: files, isAlive: pid => pid === process.pid });
+  const judged = Promise.withResolvers(), resumeB = Promise.withResolvers();
+  const holding = Promise.withResolvers(), resumeA = Promise.withResolvers();
+  let paused = false, aHolds = false;
+  const violations = [];
+  // After every step of B while A holds its claim: the claim is A's and the lock path is not vacant.
+  const watch = async step => {
+    if (!aHolds) return;
+    const text = await fs.readFile(claim, 'utf8').catch(error => error.code);
+    if (!text.startsWith('{') || JSON.parse(text).tag !== 'A') violations.push(`${step}: claim is ${text}`);
+    const lock = await fs.readFile(lockPath, 'utf8').catch(error => error.code);
+    if (lock !== dead) violations.push(`${step}: lock is ${lock}`);
+  };
+  // B pauses at its first move after judging the dead claim (taking a guard, or renaming the claim).
+  const filesB = Object.fromEntries(Object.entries(fs).map(([name, fn]) => [name, typeof fn !== 'function' ? fn
+    : async (...args) => {
+      const [from, to] = args;
+      if (!paused && ((name === 'link' && String(to).startsWith(`${claim}.`)) || (name === 'rename' && from === claim))) {
+        paused = true; judged.resolve(); await resumeB.promise;
+      }
+      try { return await fn(...args); } finally { await watch(`${name} ${args.slice(0, 2).join(' -> ')}`); }
+    }]));
+  const filesA = { ...fs, async link(from, to) {
+    await fs.link(from, to);
+    if (to === claim) { aHolds = true; holding.resolve(); await resumeA.promise; }
+  } };
+  const b = take('B', filesB);
+  await judged.promise;
+  const a = take('A', filesA);
+  await Promise.race([holding.promise, a.then(() => { throw new Error('A finished without pausing'); })]);
+  const aClaim = await fs.readFile(claim, 'utf8');
+  assert.equal(JSON.parse(aClaim).tag, 'A');
+  resumeB.resolve();
+  await assert.rejects(b, error => {
+    assert.equal(error.code, 'LOCK_HELD');
+    assert.ok(error.message.includes('recovery is already claimed'), error.message);
+    return true;
+  });
+  assert.deepEqual(violations, []);
+  assert.equal(await fs.readFile(claim, 'utf8'), aClaim);
+  assert.equal(await fs.readFile(lockPath, 'utf8'), dead);
+  aHolds = false;
+  resumeA.resolve();
+  const owner = await a;
+  try {
+    assert.equal(JSON.parse(await fs.readFile(lockPath, 'utf8')).tag, 'A');
+    assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.recover-')), []);
+  } finally {
+    await owner.handle.close();
+    await releaseOwnedLock({ lockPath, identity: owner.identity, tag: 'A' });
+  }
+});
+
+test('a recovery guard left by a process that exited refuses the start and names the guard', async t => {
+  const { root, lockPath, dead, claim, take } = await claimedDeadLock(t);
+  const held = await fs.stat(claim, { bigint: true });
+  const guard = `${claim}.recover-${held.dev}-${held.ino}`;
+  await fs.writeFile(guard, dead);
+  const contents = async () => Promise.all((await fs.readdir(root)).sort()
+    .map(async name => [name, await fs.readFile(path.join(root, name), 'utf8')]));
+  const before = await contents();
+  await assert.rejects(take(), error => {
+    assert.equal(error.code, 'LOCK_HELD');
+    assert.ok(error.message.includes(guard), error.message);
+    return true;
+  });
+  assert.deepEqual(await contents(), before);
+  assert.equal(await fs.readFile(lockPath, 'utf8'), dead);
+});
+
+test('two concurrent recoveries of a dead lock and a dead claim never make two owners', async t => {
+  for (let round = 0; round < 5; round++) {
+    const { root, lockPath, recordType } = await claimedDeadLock(t);
+    const take = tag => acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid, tag },
+      tag, isAlive: pid => pid === process.pid });
+    const results = await Promise.allSettled([take('one'), take('two')]);
+    const won = results.map((result, i) => [result, ['one', 'two'][i]]).filter(([result]) => result.status === 'fulfilled');
+    for (const result of results) {
+      if (result.status === 'rejected') assert.equal(result.reason.code, 'LOCK_HELD', result.reason.message);
+    }
+    assert.ok(won.length <= 1, `round ${round}: ${won.length} owners`);
+    if (won.length === 1) {
+      const [[{ value }, tag]] = won;
+      try {
+        assert.equal(JSON.parse(await fs.readFile(lockPath, 'utf8')).tag, tag);
+        assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.recover-')), []);
+      } finally {
+        await value.handle.close();
+        await releaseOwnedLock({ lockPath, identity: value.identity, tag });
+      }
+    }
+  }
 });

@@ -374,6 +374,7 @@ function methods:MaybeAutoBindProbe()
     self.autoProbedEpoch = self.global.epoch
     local ok = carrier:Probe(self.uiNonce)
     if ok then
+        self.bindingAuto = true
         self:Schedule("binding", 0, self.BindingTick)
         self:Schedule("load", 0.2, self.LoadTick)
     end
@@ -964,7 +965,11 @@ function methods:SetSetting(key, value)
     if key == "combatUpdates" and value and self.active and self:Combat() then self:Schedule("load", 0.2, self.LoadTick) end
     if key == "autoBindProbe" then
         if value then self:MaybeAutoBindProbe()
-        elseif self.binding and not self.binding:Stop() then self.bindingStopPending = true end
+        else
+            -- Only a carrier this option qualified stops; one qualified by hand stays up.
+            if self.bindingAuto and self.binding and not self.binding:Stop() then self.bindingStopPending = true end
+            self.bindingAuto = nil
+        end
     end
     self:Render()
     return true
@@ -1115,8 +1120,12 @@ end
 function methods:Send(tab, text) return self:Queue(tab, "text", text) end
 
 function methods:SendLong(tab, text, replace)
-    if type(text) ~= "string" or not text:find("%S") then return false, "Nothing to send" end
+    if type(text) ~= "string" then return false, "Nothing to send" end
+    -- Pasted text: normalise line ends, keep tab indentation as four spaces, drop other control bytes.
+    text = text:gsub("\r\n?", "\n"):gsub("\t", "    "):gsub("[%z\1-\8\11-\31\127]", "")
+    if not text:find("%S") then return false, "Nothing to send" end
     if not replace and #text <= 600 and not text:find("[\r\n]") and not Prompts.Reserved(text) then return self:Send(tab, text) end
+    if not self.active or not self.connected then return false, "Wait for the terminal host" end
     if self.promptProtocol ~= 1 then return false, "Update the desktop daemon to send this prompt; the draft is retained" end
     local parts, reason = Prompts.Parts(text)
     if not parts then return false, reason end
@@ -1223,7 +1232,7 @@ function methods:InspectPending(id)
     self:Print(string.format("Retained #%d for %s. %s", first, message.tab, note))
     if self.view and self.view.InspectPrompt then
         self:SetVisible(true); self.view:InspectPrompt(text, first, message.tab)
-    else self:Print(text:gsub("|", "||")) end
+    else self:Print((text:gsub("|", "||"))) end
     self:Print((message.review ~= "legacy" and ("/witch resend " .. first .. " retries this input. ") or "")
         .. "/witch discard " .. first .. " removes it. /witch pending lists retained IDs.")
     return true
@@ -1759,6 +1768,8 @@ function methods:HandleSlash(input)
         local mode = arg:lower()
         if mode == "auto" or mode == "on" or mode == "off" then
             local enabled = mode ~= "off"
+            -- An explicit off always stops (and releases any claimed key) here, so SetSetting does not stop too.
+            if not enabled then self.bindingAuto = nil end
             self:SetSetting("autoBindProbe", enabled)
             if not enabled and self.binding and not self.binding:Stop() then
                 self.bindingStopPending = true
@@ -1768,6 +1779,7 @@ function methods:HandleSlash(input)
         else
             local ok, reason = self.binding:Probe(self.uiNonce)
             if ok then
+                self.bindingAuto = nil
                 self:Print("Binding carrier canary armed; one verified-empty key will be restored after host ACK")
                 self:Schedule("binding", 0, self.BindingTick)
                 self:Schedule("load", 0.2, self.LoadTick)

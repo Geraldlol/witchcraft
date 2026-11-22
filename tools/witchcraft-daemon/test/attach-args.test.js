@@ -51,3 +51,7 @@ test('journal is a command of its own, and takes --clear', () => {
   assert.equal(parseArgs(['journal']).options.clear, undefined);
   assert.equal(parseArgs(['journal', '--clear']).options.clear, true);
 });
+
+test('--clear belongs to journal; any other command refuses it as an unknown option', () => {
+  assert.throws(() => parseArgs(['run', '--clear']), /Unknown or incomplete option: --clear/u);
+});

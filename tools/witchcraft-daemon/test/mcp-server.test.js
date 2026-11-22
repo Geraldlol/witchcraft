@@ -57,7 +57,8 @@ for (const mode of ['legacy', 'auto']) {
     const file = await workspace(t), raw = snapshot(Date.now());
     await fs.writeFile(file, JSON.stringify(raw));
     const client = await connect(t, file, { mode });
-    assert.deepEqual(client.getServerVersion(), { name: 'witchcraft-wow', version: '0.3.1' });
+    const { version } = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    assert.deepEqual(client.getServerVersion(), { name: 'witchcraft-wow', version });
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['wow_explain_quest', 'wow_find_guide', 'wow_get_character', 'wow_get_context', 'wow_get_errors', 'wow_get_loot_plan', 'wow_get_loot_sources', 'wow_get_passport', 'wow_get_progress', 'wow_get_quests', 'wow_get_session_log', 'wow_rehearse_dungeon', 'wow_set_loot_goal', 'wow_set_passport_campaign', 'wow_stamp_passport', 'wow_suggest_detours']);
     assert.equal(tools.filter(tool => !['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign'].includes(tool.name)).every(tool => tool.annotations.readOnlyHint && tool.annotations.destructiveHint === false), true);

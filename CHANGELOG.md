@@ -13,6 +13,14 @@
 - `witchcraft doctor` diagnoses setup and connection progress, with a redacted JSON report.
 - `/witch errors watch` follows a selected error across reloads. Players can mark reproduction attempts and compare recurrence counts.
 - The public CI runs the addon and daemon regression suites. Tagged builds produce a verified addon ZIP for manual publication.
+- Short prompts from the input box now use the delivery receipt with a current daemon, so one that could not be delivered stays in the outbox for `/witch resend`; an input-box line over 600 bytes is sent as a multi-part prompt instead of being refused. An older daemon keeps the plain send, also for a short retained prompt that is resent, and still refuses a line over 600 bytes.
+- Pasted text is cleaned before sending again: line ends become newlines, each tab becomes four spaces and other control bytes are removed, so a draft with tabs is no longer refused.
+- Turning off **Probe binding carrier on connect** now stops only a binding carrier that option qualified; one qualified by hand with `/witch bindprobe` stays up until `/witch bindprobe off`.
+- `/witch errors status` says when startup errors overflowed the 20-entry buffer before SavedVariables loaded, since the watched error's counts from that load on may then be incomplete. The mark is saved with the watch and names the first such UI load.
+- Daemon: `wow_get_session_log` answers `waiting` until the current game session is known, instead of serving the last stored character's events as current; an event recorded while the journal is being cleared is kept.
+- Daemon: a not-started AGY tab is no longer listed to the addon, so the 0.3.1 addon keeps working with a current daemon. Take the addon and the daemon from the same revision; the AGY tab needs addon 0.4.0 or later.
+- Daemon: `init` builds each helper folder completely before putting it in place and names an incomplete folder to remove; a start clears old helper slots above a smaller ring; `doctor` reports another installation holding the client's ring lock before advising a start.
+- Daemon: Codex session resume compares project paths with case on Linux; ring lock recovery judges the lock again before setting it aside, and a dead recovery claim no longer blocks later starts; the macOS reader reads the window list once per cycle and reads again when the display scale changed under an unmoved window.
 
 ## 0.3.1 - 2026-11-22
 

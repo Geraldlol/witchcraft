@@ -355,8 +355,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       } while (dirty && !stopped);
     } catch (error) {
       trace.note({ what: 'publish-error', code: error?.code, reason: error?.message, slot: writer.cursor });
-      // A slot the game still has open is skipped; the next heartbeat asks for a fresh one.
-      if (isTransientWriteError(error)) process.stderr.write(`\r\nWitchcraft: skipped a chunk write (${error.code}); retrying on the next tick\r\n`);
+      // A binding heartbeat can retry the requested slot before the regular display tick.
+      if (isTransientWriteError(error)) process.stderr.write(`\r\nWitchcraft: skipped a chunk write (${error.code}); will retry\r\n`);
       else if (error.code === 'LUA_OUTPUT_BUDGET') process.stderr.write('\r\nWitchcraft: display snapshot exceeds the chunk budget; keeping terminal sessions active.\r\n');
       else if (error.code === 'DISPLAY_CONTENT') {
         // Agent text the Lua serializer refuses skips this frame and the next change publishes again.

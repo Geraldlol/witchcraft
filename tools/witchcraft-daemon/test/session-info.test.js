@@ -136,7 +136,7 @@ test('the Claude transcript is found through the process record, and bad records
     JSON.stringify({ pid: 42, sessionId: '892e7425-5e44-4ddc-9d5e-6fe6c09a398e', cwd: 'E:\\Fixtures\\Demo Project' }));
   await fs.writeFile(path.join(home, '.claude', 'sessions', '43.json'), JSON.stringify({ pid: 43, sessionId: '../../etc', cwd: 'C:\\x' }));
   assert.equal(await claudeTranscript(42, { home }),
-    path.join(home, '.claude', 'projects', 'E--Projects-Personal-WoW-Addons', '892e7425-5e44-4ddc-9d5e-6fe6c09a398e.jsonl'));
+    path.join(home, '.claude', 'projects', 'E--Fixtures-Demo-Project', '892e7425-5e44-4ddc-9d5e-6fe6c09a398e.jsonl'));
   assert.equal(await claudeTranscript(43, { home }), undefined, 'a session id that is not a UUID never becomes a path');
   assert.equal(await claudeTranscript(44, { home }), undefined);
   assert.equal(await claudeTranscript(undefined, { home }), undefined);

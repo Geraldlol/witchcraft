@@ -105,6 +105,24 @@
             </span>
             <span class="tab-signal" aria-hidden="true"></span>
           </button>
+          <button
+            id="tab-agy"
+            class="agent-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel-agy"
+            aria-keyshortcuts="Alt+4"
+            tabindex="-1"
+            data-tab="agy"
+          >
+            <span class="agent-glyph agy-glyph" aria-hidden="true">A</span>
+            <span class="agent-copy">
+              <strong>AGY</strong>
+              <small id="agy-status">WAITING</small>
+            </span>
+            <span class="tab-signal" aria-hidden="true"></span>
+          </button>
         </nav>
 
         <div class="rail-controls no-drag">
@@ -178,6 +196,27 @@
           <div id="empty-copilot" class="terminal-empty" role="status">
             <span class="empty-reticle" aria-hidden="true"></span>
             <strong>AWAITING COPILOT LINK</strong>
+            <small>Start the Witchcraft companion to open this channel.</small>
+          </div>
+        </article>
+
+        <article
+          id="panel-agy"
+          class="terminal-panel"
+          role="tabpanel"
+          aria-labelledby="tab-agy"
+          data-tab="agy"
+          hidden
+        >
+          <div class="terminal-chrome" aria-hidden="true">
+            <span>SESSION / AGY</span>
+            <span class="chrome-rule"></span>
+            <span id="agy-sequence">NO SIGNAL</span>
+          </div>
+          <div id="terminal-agy" class="terminal-host" aria-label="AGY terminal" tabindex="0"></div>
+          <div id="empty-agy" class="terminal-empty" role="status">
+            <span class="empty-reticle" aria-hidden="true"></span>
+            <strong>AWAITING AGY LINK</strong>
             <small>Start the Witchcraft companion to open this channel.</small>
           </div>
         </article>

@@ -2,10 +2,10 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const TABS = new Set(['claude', 'codex', 'copilot']);
+const TABS = new Set(['claude', 'codex', 'copilot', 'agy']);
 
 function tab(value) {
-  if (!TABS.has(value)) throw new TypeError('tab must be claude, codex, or copilot');
+  if (!TABS.has(value)) throw new TypeError('tab must be claude, codex, copilot, or agy');
   return value;
 }
 

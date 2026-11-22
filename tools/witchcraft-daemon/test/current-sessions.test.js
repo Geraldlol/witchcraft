@@ -10,7 +10,7 @@ async function temp(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
-const repo = 'E:\\Fixtures\\Demo Project';
+const repo = 'E:\\Projects\\Personal\\WoW Addons';
 
 test('a joined Claude session is still live only while its own record names it and its process runs', async t => {
   // A pid alone can be reused by any process after Claude exits; its record is what names a session.
@@ -28,7 +28,7 @@ test('the newest live interactive Claude session in the folder is chosen', async
   const dir = await temp(t);
   const write = (pid, record) => fs.writeFile(path.join(dir, `${pid}.json`), JSON.stringify({ pid, kind: 'interactive', ...record }));
   await write(11, { cwd: repo, startedAt: 100, sessionId: 'older' });
-  await write(12, { cwd: 'e:\\fixtures\\demo project\\', startedAt: 200, sessionId: 'newest' });
+  await write(12, { cwd: 'e:\\projects\\personal\\wow addons\\', startedAt: 200, sessionId: 'newest' });
   await write(13, { cwd: repo, startedAt: 300, sessionId: 'dead' });
   await write(14, { cwd: 'C:\\elsewhere', startedAt: 400 });
   await write(15, { cwd: repo, startedAt: 500, kind: 'sdk' });
@@ -54,7 +54,7 @@ test('the most recently written top-level Codex thread in the folder is chosen',
   const id = n => `01a0cd0c-b928-77f2-993d-02${String(n).padStart(10, '0')}`;
   // Oldest to newest by write time; only the second is a top-level thread in this folder.
   await rollout(id(1), { cwd: repo, source: 'cli' });
-  await rollout(id(2), { cwd: 'e:\\Fixtures\\Demo Project', source: 'vscode' }, 'x'.repeat(200000));
+  await rollout(id(2), { cwd: 'e:\\Projects\\Personal\\WoW Addons', source: 'vscode' }, 'x'.repeat(200000));
   await rollout(id(3), { cwd: repo, source: { subagent: { other: 'guardian' } } });
   await rollout(id(4), { cwd: repo, source: 'exec' });
   await rollout(id(5), { cwd: 'C:\\elsewhere', source: 'vscode' });

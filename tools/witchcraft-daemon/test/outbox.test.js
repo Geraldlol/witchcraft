@@ -82,15 +82,20 @@ test('multi-line parts are joined per tab and delivered as one bracketed paste, 
   assert.deepEqual(writes.at(-1), ['claude', 'next prompt\r', 'text'], 'the next prompt starts clean');
 });
 
-test('a control message asks for a terminal width and is never typed', async () => {
+test('a control message asks for a terminal width (capped at 160) or journal clear and is never typed', async () => {
   const { CONTROL } = await import('../src/outbox.js');
-  const writes = [], widths = [];
-  const outbox = new Outbox({ epoch: '0123abcd', write: (...args) => writes.push(args), onControl: request => widths.push(request.cols) });
-  const message = (id, text) => ({ epoch: '0123abcd', id, tab: 'claude', action: 'text', text });
-  assert.deepEqual(outbox.accept(message(1, `${CONTROL}cols=180`)), { accepted: true, control: true, ack: 1 });
-  for (const [id, bad] of [[2, 'cols=39'], [3, 'cols=241'], [4, 'rows=20'], [5, 'cols=abc']]) {
-    assert.equal(outbox.accept(message(id, `${CONTROL}${bad}`)).dropped, true, bad);
+  const writes = [], requests = [];
+  const outbox = new Outbox({ epoch: '0123abcd', write: (...args) => writes.push(args), onControl: request => requests.push(request) });
+  const controlMsg = (id, text) => ({ epoch: '0123abcd', id, tab: 'claude', action: 'control', text });
+  const legacyMsg = (id, text) => ({ epoch: '0123abcd', id, tab: 'claude', action: 'text', text: `${CONTROL}${text}` });
+  assert.deepEqual(outbox.accept(controlMsg(1, 'cols=160')), { accepted: true, control: true, ack: 1 });
+  for (const [id, bad] of [[2, 'cols=39'], [3, 'cols=161'], [4, 'rows=20'], [5, 'cols=abc']]) {
+    assert.equal(outbox.accept(controlMsg(id, bad)).dropped, true, bad);
   }
-  assert.deepEqual(widths, [180]); assert.deepEqual(writes, [], 'no control text reaches a terminal');
-  assert.equal(outbox.ack, 5);
+  assert.deepEqual(outbox.accept(controlMsg(6, 'clear-journal')), { accepted: true, control: true, ack: 6 });
+  assert.deepEqual(outbox.accept(legacyMsg(7, 'cols=132')), { accepted: true, control: true, ack: 7 });
+  assert.equal(outbox.accept(legacyMsg(8, 'cols=161')).dropped, true);
+  assert.deepEqual(requests, [{ cols: 160 }, { clearJournal: true }, { cols: 132 }]);
+  assert.deepEqual(writes, [], 'no control text reaches a terminal');
+  assert.equal(outbox.ack, 8);
 });

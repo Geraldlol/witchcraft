@@ -10,15 +10,17 @@ test('a calibrated region keeps its window scale and rejects an invalid one', ()
   for (const scale of [0.5, 4.5, '1.5', Number.NaN]) assert.throws(() => validateScale(scale), RangeError);
 });
 
-// The helper's sampling map is pure arithmetic, so it is checked wherever python3 exists.
-const python = (() => { try { execFileSync('python3', ['--version']); return true; } catch { return false; } })();
+// The helper's sampling map is pure arithmetic, so it is checked wherever Python 3 exists.
+const python = ['python3', 'python', 'py'].find(cmd => {
+  try { return /^Python 3\./u.test(execFileSync(cmd, ['--version'], { encoding: 'utf8' })); } catch { return false; }
+}) ?? null;
 test('the Linux helper samples every game pixel inside its own upscaled cell', { skip: !python }, () => {
   const helper = fileURLToPath(new URL('../capture/capture-strip.py', import.meta.url));
   const script = `
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location('helper', sys.argv[1]); helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
 print(json.dumps({str(s): [helper.real_pixel(v, s) for v in range(132)] for s in (1, 1.5, 1.511, 2, 3)}))`;
-  const maps = JSON.parse(execFileSync('python3', ['-c', script, helper], { encoding: 'utf8' }));
+  const maps = JSON.parse(execFileSync(python, ['-c', script, helper], { encoding: 'utf8' }));
   assert.deepEqual(maps['1'], Array.from({ length: 132 }, (_, v) => v));
   for (const [scale, map] of Object.entries(maps)) {
     if (scale === '1') continue;
@@ -38,7 +40,7 @@ function runHelper(body) {
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location('helper', sys.argv[1]); helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
 ${body}`;
-  return JSON.parse(execFileSync('python3', ['-c', script, helperPath], { encoding: 'utf8' }));
+  return JSON.parse(execFileSync(python, ['-c', script, helperPath], { encoding: 'utf8' }));
 }
 
 test('the Linux calibration capture keeps its last game pixel inside the window', { skip: !python }, () => {

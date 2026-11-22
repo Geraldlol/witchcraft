@@ -304,8 +304,8 @@ test("a leftover frame from an earlier protocol is still ours, and is scrubbed r
             math.floor(value / 256) % 256, value % 256)
     end
     local function legacy(payload)
-        local body = "FC" .. string.char(1, 1) .. "8*y" .. "_y9"
-            .. "!.9" .. "  " .. "  " .. ""
+        local body = "FC" .. string.char(1, 1) .. "\0018*y\194\133" .. "_y\194\133\0199"
+            .. "\014!.9" .. "\000\000\001" .. "\000\000\001" .. "\001\001"
             .. string.char(0, #payload) .. payload
         return body .. u32(Carrier.CRC32(body))
     end
@@ -323,7 +323,7 @@ test("a leftover frame from an earlier protocol is still ours, and is scrubbed r
     equal(bootState.sets, 1); assert(bootState.persisted[127])
 
     -- A value that is not one of our frames is still never touched.
-    for _, value in ipairs({ "FC not a frame", "other owner", stale:sub(1, -2) .. " " }) do
+    for _, value in ipairs({ "FC not a frame", "other owner", stale:sub(1, -2) .. "\000" }) do
         local foreign, foreignState = fixture({ [1] = 5, [2] = {}, [3] = {}, [4] = {}, [127] = value })
         local ok, reason = foreign:Start(session)
         equal(ok, false); equal(reason, "cooldown layout field 127 is already occupied")

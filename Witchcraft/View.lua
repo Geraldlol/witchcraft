@@ -30,6 +30,7 @@ local C = {
     claude = { 232, 158, 115 }, claudeDeep = { 196, 110, 66 },
     copilot = { 183, 157, 242 }, copilotDeep = { 126, 91, 192 },
     codex = { 102, 212, 189 }, codexDeep = { 35, 150, 125 },
+    agy = { 122, 184, 255 }, agyDeep = { 58, 122, 214 },
     warning = { 255, 128, 64 }, inkWarn = { 255, 128, 64 }, inkErr = { 255, 26, 26 }, pauseInk = { 255, 128, 64 },
     stale = { 255, 26, 26 }, staleDim = { 153, 20, 20 }, staleText = { 255, 64, 64 }, staleRing = { 178, 26, 26 },
     onAccent = { 26, 15, 8 }, onWarning = { 40, 20, 8 }, tabText = { 255, 255, 255 },
@@ -40,8 +41,20 @@ for key, value in pairs(C) do C[key] = { value[1] / 255, value[2] / 255, value[3
 -- is prefilled for the player to finish; the rest are typed with Enter at once. Pickers they open
 -- (/model, /resume) are driven from Keys. Claude Code's come from its documentation; Codex's from
 -- codex-rs/tui/src/slash_command.rs. Commands that exit, log out or delete a session are left out.
-local TITLES = { claude = "Claude", codex = "Codex", copilot = "Copilot" }
+local TITLES = { claude = "Claude", codex = "Codex", copilot = "Copilot", agy = "AGY" }
+local TAB_ORDER = { "claude", "codex", "copilot", "agy" }
+local TAB_KEYS = { claude = "tabClaude", codex = "tabCodex", copilot = "tabCopilot", agy = "tabAgy" }
 local COMMANDS = {
+    agy = {
+        { { "/model", "Choose the model" }, { "/plan", "Plan step-by-step before execution" },
+          { "/boost", "Deep strategic planning and verification" }, { "/goal", "Thorough long-running execution" } },
+        { { "/compact", "Summarize context to free the context window" },
+          { "/clear", "Start a new conversation" } },
+        { { "/grill-me", "Align on a plan through an interactive interview" },
+          { "/teamwork", "Coordinate a team of autonomous agents" } },
+        { { "/learn", "Persist a correction or setup for future tasks" },
+          { "/help", "Command help" } },
+    },
     copilot = {
         { { "/model", "Choose the model" }, { "/help", "Command help" } },
         { { "/compact", "Compress the conversation" }, { "/usage", "Session usage" } },
@@ -232,6 +245,13 @@ function View:Bounds()
     return math.min(260, width), math.min(280, height), math.min(1600, width), math.min(1100, height)
 end
 
+-- Columns that fit the terminal pane at the current font size, bounded to the ring's 40..160 range.
+function View:FittedCols()
+    local width = (self.frame:GetWidth() or 900) - 2 * PAD
+    local cellWidth = math.max(4, (self.fontSize or 10) * 0.6)
+    return math.floor(clamp(math.floor(width / cellWidth), 40, 160, 120))
+end
+
 function View:Save()
     local point, _, relativePoint, x, y = self.frame:GetPoint(1)
     -- Docking is a setting, not a place the player chose: keep their own position for undocking.
@@ -271,6 +291,15 @@ function View:LayoutHeader(width)
     local tabIds, listed = self.snapshot and self.snapshot.tabs or { "claude", "codex" }, {}
     for _, id in ipairs(tabIds) do listed[id] = true end
     for id, tab in pairs(self.tabs) do show(tab, listed[id]); if not listed[id] then tab.unread:Hide() end end
+    if self.tabToggles then
+        for _, id in ipairs(TAB_ORDER) do
+            local toggle = self.tabToggles[id]
+            if toggle then
+                style(toggle, listed[id] and "primary" or "secondary",
+                    listed[id] and { accent = C[id] } or { textColor = C.muted })
+            end
+        end
+    end
     local tabWidth = math.min(78, math.floor((width - tabX - (minimized and 12 or 44)) / #tabIds) - 4)
     for _, id in ipairs(tabIds) do
         local tab = self.tabs[id]
@@ -337,23 +366,34 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
     -- Appearance: under the header, right edge.
     local panel, panelWidth = self.appearancePanel, math.min(260, width - 2 * PAD)
     local fontRow = width < COLLAPSE.font
-    local panelHeight = fontRow and 182 or 148
-    place(panel, content, width - PAD - panelWidth, HEADER + ACCENT + 6, panelWidth, panelHeight)
+    local panelHeight = fontRow and 224 or 196
+    local panelY = math.min(HEADER + ACCENT + 6, math.max(0, height - panelHeight - 6))
+    place(panel, content, width - PAD - panelWidth, panelY, panelWidth, panelHeight)
     place(self.appearanceTitle, panel, PAD, 3, panelWidth - 2 * PAD - 22, 16)
     place(self.appearanceClose, panel, panelWidth - PAD - 16, 0, 16, 22)
     place(self.appearanceRule, panel, PAD, 22, panelWidth - 2 * PAD, 1)
-    place(self.opacityLabel, panel, PAD, 34, panelWidth - 2 * PAD - 50, 14)
-    place(self.opacityValue, panel, panelWidth - PAD - 60, 34, 60, 14)
-    place(self.opacitySlider, panel, PAD, 58, panelWidth - 2 * PAD, 14)
+    place(self.opacityLabel, panel, PAD, 30, panelWidth - 2 * PAD - 50, 14)
+    place(self.opacityValue, panel, panelWidth - PAD - 60, 30, 60, 14)
+    place(self.opacitySlider, panel, PAD, 50, panelWidth - 2 * PAD, 14)
     place(self.sliderTrack, self.opacitySlider, 0, 6, panelWidth - 2 * PAD, 3)
     place(self.sliderFill, self.opacitySlider, 0, 6, 0, 3)
     local presetWidth = math.floor((panelWidth - 2 * PAD - 12) / 3)
-    for i, preset in ipairs(self.opacityPresets) do place(preset, panel, PAD + (i - 1) * (presetWidth + 6), 82, presetWidth, 24) end
+    for i, preset in ipairs(self.opacityPresets) do place(preset, panel, PAD + (i - 1) * (presetWidth + 6), 70, presetWidth, 22) end
+    place(self.tabsLabel, panel, PAD, 100, panelWidth - 2 * PAD, 14)
+    local tabInner = panelWidth - 2 * PAD
+    local tabHalf = math.floor((tabInner - 6) / 2)
+    for index, id in ipairs(TAB_ORDER) do
+        local col = (index - 1) % 2
+        local row = math.floor((index - 1) / 2)
+        local buttonX = PAD + col * (tabHalf + 6)
+        local buttonW = col == 0 and tabHalf or (tabInner - tabHalf - 6)
+        place(self.tabToggles[id], panel, buttonX, 117 + row * 24, buttonW, 20)
+    end
     show(self.fontLabel, fontRow); show(self.panelSmaller, fontRow); show(self.panelLarger, fontRow)
-    place(self.fontLabel, panel, PAD, 116, panelWidth - 2 * PAD - 62, 24)
-    place(self.panelSmaller, panel, panelWidth - PAD - 50, 117, 22, 22)
-    place(self.panelLarger, panel, panelWidth - PAD - 22, 117, 22, 22)
-    place(self.allSettings, panel, PAD, fontRow and 151 or 117, panelWidth - 2 * PAD, 24)
+    place(self.fontLabel, panel, PAD, 167, panelWidth - 2 * PAD - 62, 22)
+    place(self.panelSmaller, panel, panelWidth - PAD - 50, 167, 22, 22)
+    place(self.panelLarger, panel, panelWidth - PAD - 22, 167, 22, 22)
+    place(self.allSettings, panel, PAD, fontRow and 193 or 167, panelWidth - 2 * PAD, 22)
     -- Keys: above the composer, right edge.
     local keys, keysWidth = self.keysPanel, math.min(216, width - 2 * PAD)
     local keyHalf = (keysWidth - 2 * PAD - 6) / 2
@@ -1274,9 +1314,24 @@ function View:Show() self.frame:Show() end
 function View:Hide() self.input:ClearFocus(); self.frame:Hide() end
 function View:IsShown() return self.frame:IsShown() end
 
+function View:ToggleAgentTab(id)
+    local key = TAB_KEYS[id]
+    if not key or not self.controller.SetSetting then return false end
+    local shown = false
+    for _, tabId in ipairs(self.snapshot and self.snapshot.tabs or { "claude", "codex" }) do
+        if tabId == id then shown = true; break end
+    end
+    local ok, reason = self.controller:SetSetting(key, not shown)
+    if not ok then
+        self.message = plain(reason or "At least one tab stays visible")
+        self:RenderStatus()
+    end
+    return ok, reason
+end
+
 function View.Create(controller)
     local self = setmetatable({ controller = controller, rows = {}, drafts = {}, tabs = {}, controls = {}, buttons = {}, settings = {},
-        history = { claude = {}, codex = {}, copilot = {} } }, View)
+        history = { claude = {}, codex = {}, copilot = {}, agy = {} } }, View)
     local function makeButton(parent, caption, action, tier, options)
         local widget = button(parent, caption, action, tier, options)
         self.buttons[#self.buttons + 1] = widget; return widget
@@ -1323,7 +1378,7 @@ function View.Create(controller)
     self.brand = text(self.titleBar, 12, C.ink, { justify = "CENTER" }); self.brand:SetText("Witchcraft")
     self.divider = fill(header, C.ink, .4, "ARTWORK")
     self.barDivider = fill(header, C.ink, .4, "ARTWORK")
-    for _, id in ipairs({ "claude", "codex", "copilot" }) do
+    for _, id in ipairs(TAB_ORDER) do
         local tabID = id
         local tab = makeButton(header, agentName(id), function() controller:SelectTab(tabID) end, "tab", { size = 11, shadow = false })
         tab:SetFrameLevel(level + 3)
@@ -1495,6 +1550,15 @@ function View.Create(controller)
         local percent = pair[2]
         self.opacityPresets[#self.opacityPresets + 1] = makeButton(self.appearancePanel, pair[1],
             function() controller:SetOpacity(percent) end, "secondary", { size = 11 })
+    end
+    self.tabsLabel = text(self.appearancePanel, 11, C.muted); self.tabsLabel:SetText("Agent tabs")
+    self.tabToggles = {}
+    for _, id in ipairs(TAB_ORDER) do
+        local tabID = id
+        local toggle = makeButton(self.appearancePanel, agentName(id),
+            function() self:ToggleAgentTab(tabID) end, "secondary", { size = 10 })
+        toggle.tooltip = "Show or hide the " .. (TITLES[id] or id) .. " tab"
+        self.tabToggles[id] = toggle
     end
     self.fontLabel = text(self.appearancePanel, 11, C.muted); self.fontLabel:SetText("Terminal font")
     self.allSettings = makeButton(self.appearancePanel, "ALL SETTINGS...", function()

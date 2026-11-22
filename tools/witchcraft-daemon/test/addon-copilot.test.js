@@ -22,7 +22,7 @@ test('Lua controller keeps Copilot as a tab setting, cycles tabs and accepts old
   }
   try {
     run('ns = {}');
-    for (const file of ['Ring.lua', 'Pixel.lua', 'Prompts.lua', 'Binding.lua', 'Core.lua']) {
+    for (const file of ['Ring.lua', 'Pixel.lua', 'Binding.lua', 'Core.lua']) {
       run(`(function(...)\n${fs.readFileSync(new URL(file, addon), 'utf8')}\nend)("Witchcraft", ns)`);
     }
     run(`
@@ -43,15 +43,23 @@ test('Lua controller keeps Copilot as a tab setting, cycles tabs and accepts old
       assert(#controller:Snapshot().tabs == 3)
       controller:NextTab(); assert(controller.global.activeTab == "codex")
       controller:NextTab(); assert(controller.global.activeTab == "copilot")
+      assert(not controller:SelectTab("agy"), "AGY is hidden until its tab setting is on")
+      assert(controller:SetSetting("tabAgy", true))
+      assert(#controller:Snapshot().tabs == 4)
+      controller:NextTab(); assert(controller.global.activeTab == "agy")
+      controller:NextTab(); assert(controller.global.activeTab == "claude")
       assert(not controller:SelectTab("unknown"))
       local function session(id) return { id = id, title = id, status = "running", lines = { id } } end
       local copied = ns.Ring.Sessions({ session("copilot"), session("claude"), session("codex") }, 40)
       assert(copied and copied[1].id == "claude" and copied[3].id == "copilot")
+      local copiedFour = ns.Ring.Sessions({ session("agy"), session("copilot"), session("claude"), session("codex") }, 40)
+      assert(copiedFour and copiedFour[1].id == "claude" and copiedFour[4].id == "agy")
       assert(ns.Ring.Sessions({ session("codex"), session("claude") }, 40))
       assert(not ns.Ring.Sessions({ session("copilot"), session("claude") }, 40))
       assert(not ns.Ring.Sessions({ session("claude"), session("codex"), session("codex") }, 40))
       assert(not ns.Ring.Sessions({ session("claude"), session("codex"), session("unknown") }, 40))
       assert(ns.Pixel.Encode({ epoch = "1234abcd", id = 1, tab = "copilot", action = "text", text = "hello" }))
+      assert(ns.Pixel.Encode({ epoch = "1234abcd", id = 1, tab = "agy", action = "text", text = "hello" }))
     `);
   } finally { lua.lua_close(state); }
 });

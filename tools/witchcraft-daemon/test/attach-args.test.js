@@ -45,3 +45,9 @@ test('--no-current turns off joining the sessions already running', () => {
   assert.equal(parseArgs(['run']).options.noCurrent, undefined);
   assert.equal(parseArgs(['run', '--no-current']).options.noCurrent, true);
 });
+
+test('journal is a command of its own, and takes --clear', () => {
+  assert.equal(parseArgs(['journal']).command, 'journal');
+  assert.equal(parseArgs(['journal']).options.clear, undefined);
+  assert.equal(parseArgs(['journal', '--clear']).options.clear, true);
+});

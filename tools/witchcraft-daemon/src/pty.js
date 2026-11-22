@@ -20,6 +20,11 @@ export function resolveProgram(command) {
       if (process.platform === 'win32' && !path.extname(command)) candidates.push(path.join(folder, `${command}.exe`));
     }
     if (command === 'claude') candidates.push(path.join(os.homedir(), '.local', 'bin', 'claude.exe'));
+    if (command === 'agy') {
+      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      if (path.isAbsolute(localAppData)) candidates.push(path.join(localAppData, 'agy', 'bin', 'agy.exe'));
+      candidates.push(path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'agy.exe' : 'agy'));
+    }
   }
   for (const candidate of candidates) {
     const extension = path.extname(candidate).toLowerCase();

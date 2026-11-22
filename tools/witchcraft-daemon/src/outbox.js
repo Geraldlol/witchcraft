@@ -9,17 +9,19 @@ const ACTIONS = Object.freeze({ enter: '\r', interrupt: '\x03', escape: '\x1b', 
 // SEPARATOR, and each part but the last starts with INVISIBLE SEPARATOR. The outbox joins the
 // parts and delivers them as one bracketed paste, then Enter, so the CLI takes one input.
 export const MORE = '\u2063', LINE = '\u2028', PASTE_LIMIT = 8192;
-// A text message that starts with INVISIBLE TIMES is a request from the addon, never typed:
-// `cols=N` asks for terminals as wide as the in-game pane (40-240 columns).
+// A control message (action 'control', or legacy INVISIBLE TIMES prefix) is a request from the
+// addon, never typed: `cols=N` asks for terminals as wide as the in-game pane (40-160 columns),
+// and `clear-journal` clears the session journal.
 export const CONTROL = '\u2062';
 const PROMPT_PART = /^\u2062P([0-9a-f]{5})([0-9]{2})([0-9]{2}):(.+)$/su;
 const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 export function validMessage(message) {
-  return message && typeof message === 'object' && /^[0-9a-f]{8}$/u.test(message.epoch) && message.epoch !== '00000000'
+  const hasText = message?.action === 'text' || message?.action === 'control';
+  return Boolean(message && typeof message === 'object' && /^[0-9a-f]{8}$/u.test(message.epoch) && message.epoch !== '00000000'
     && Number.isInteger(message.id) && message.id > 0 && message.id <= 262143
-    && AGENT_TABS.includes(message.tab) && ['text', ...Object.keys(ACTIONS)].includes(message.action)
+    && AGENT_TABS.includes(message.tab) && ['text', 'control', ...Object.keys(ACTIONS)].includes(message.action)
     && typeof message.text === 'string' && message.text.isWellFormed() && Buffer.byteLength(message.text) <= 600
-    && !/[\x00-\x1f\x7f-\x9f]/u.test(message.text) && (message.action === 'text' ? message.text.length > 0 : message.text === '');
+    && !/[\x00-\x1f\x7f-\x9f]/u.test(message.text) && (hasText ? message.text.length > 0 : message.text === ''));
 }
 // Parse one literal SavedVariables assignment. Nothing from the file is executed.
 export function parseSavedVariables(source) {
@@ -143,11 +145,16 @@ export class Outbox {
       // The action travels beside the bytes: a PTY wants the bytes, while a mirrored console
       // wants the name, and recovering one from the other means parsing escapes back into keys.
       if (message.action === 'text' && message.text.startsWith(CONTROL + 'P')) return this.acceptPrompt(message);
-      if (message.action === 'text' && message.text.startsWith(CONTROL)) {
-        const cols = /^cols=(\d{2,3})$/u.exec(message.text.slice(CONTROL.length));
-        const width = cols ? Number(cols[1]) : 0;
+      if (message.action === 'control' || (message.action === 'text' && message.text.startsWith(CONTROL))) {
+        const body = message.text.startsWith(CONTROL) ? message.text.slice(CONTROL.length) : message.text;
         this.ack = message.id;
-        if (width < 40 || width > 240) return { accepted: true, dropped: true, reason: 'invalid control request', ack: this.ack };
+        if (body === 'clear-journal') {
+          this.onControl({ clearJournal: true });
+          return { accepted: true, control: true, ack: this.ack };
+        }
+        const cols = /^cols=(\d{2,3})$/u.exec(body);
+        const width = cols ? Number(cols[1]) : 0;
+        if (width < 40 || width > 160) return { accepted: true, dropped: true, reason: 'invalid control request', ack: this.ack };
         this.onControl({ cols: width });
         return { accepted: true, control: true, ack: this.ack };
       }

@@ -10,8 +10,8 @@ class FakePair {
     this.written = [];
     this.cols = options.cols ?? 120;
     this.rows = options.rows ?? 40;
-    this.sessions = new Map(['claude', 'codex', 'copilot'].map(tab => [tab, {
-      id: tab, title: { claude: 'Claude', codex: 'Codex', copilot: 'Copilot' }[tab],
+    this.sessions = new Map(['claude', 'codex', 'copilot', 'agy'].map(tab => [tab, {
+      id: tab, title: { claude: 'Claude', codex: 'Codex', copilot: 'Copilot', agy: 'AGY' }[tab],
       status: options.commands[tab] ? 'running' : 'not started', screen: {},
     }]));
     this.disposed = 0;
@@ -60,7 +60,7 @@ test('an attached tab is not spawned, and the other tab still is', () => {
 test('both tabs snapshot in order, whichever source is behind them', () => {
   const { set } = build({ claude: 24492 });
   const snapshot = set.snapshot();
-  assert.deepEqual(snapshot.map(session => session.id), ['claude', 'codex', 'copilot']);
+  assert.deepEqual(snapshot.map(session => session.id), ['claude', 'codex', 'copilot', 'agy']);
   assert.deepEqual(snapshot[0].lines, ['console 24492']);
   assert.equal(snapshot[0].scrolled, 3, 'the mirror decides the anchor for an attached tab');
   assert.equal(snapshot[0].title, 'Claude');

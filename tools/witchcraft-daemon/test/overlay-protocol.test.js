@@ -35,6 +35,7 @@ test('overlay protocol: clipboard is bounded text and host state is an ordered t
       { id: 'claude', title: 'Claude', status: 'running', lines: ['one'] },
       { id: 'codex', title: 'Codex', status: 'running', lines: ['two'] },
       { id: 'copilot', title: 'Copilot', status: 'not started', lines: [] },
+      { id: 'agy', title: 'AGY', status: 'not started', lines: [] },
     ] };
   assert.deepEqual(validateHostMessage(host('state', 3, payload)).payload, payload);
   const reversed = { ...payload, sessions: [...payload.sessions].reverse() };
@@ -57,12 +58,13 @@ test('overlay protocol: serialized record and terminal stream byte bounds use UT
       { id: 'claude', title: 'Claude', status: 'running', lines: Array(100).fill('x'.repeat(4000)) },
       { id: 'codex', title: 'Codex', status: 'running', lines: Array(100).fill('x'.repeat(4000)) },
       { id: 'copilot', title: 'Copilot', status: 'not started', lines: [] },
+      { id: 'agy', title: 'AGY', status: 'not started', lines: [] },
     ] });
   assert.throws(() => encodeOverlayRecord(hugeState, 'host'), error => error.code === 'RECORD_TOO_LARGE');
-  // Three populated tabs, each at the host's allowance of 48 KiB of lines and 64 KiB of ANSI, still fit.
+  // Populated tabs, each at the host's allowance of 48 KiB of lines and 64 KiB of ANSI, still fit.
   const full = (id, title) => ({ id, title, status: 'running', lines: Array(6).fill('x'.repeat(7900)), ansi: 'x'.repeat(64 * 1024) });
   const fullState = host('state', 2, { authoritative: true, generation: 1, activeTab: 'claude', cols: 120, rows: 40,
-    sessions: [full('claude', 'Claude'), full('codex', 'Codex'), full('copilot', 'Copilot')] });
+    sessions: [full('claude', 'Claude'), full('codex', 'Codex'), full('copilot', 'Copilot'), full('agy', 'AGY')] });
   assert.ok(encodeOverlayRecord(fullState, 'host').bytes > 256 * 1024);
 });
 

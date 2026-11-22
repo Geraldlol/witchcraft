@@ -10,8 +10,8 @@ local KEYS = { "CTRL-ALT-SHIFT-F12", "CTRL-ALT-SHIFT-F11", "CTRL-ALT-SHIFT-F10",
 local ZERO, PROBE = "00000000", "PFAM_BIND_PROBE"
 local ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 local MAX_SEQ, MAX_PAYLOAD = 16777215, 32
-local tabCodes = { claude = 0, codex = 1, copilot = 2 }
-local actionCodes = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5 }
+local tabCodes = { claude = 0, codex = 1, copilot = 2, agy = 3 }
+local actionCodes = { text = 0, enter = 1, interrupt = 2, escape = 3, up = 4, down = 5, control = 6 }
 
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -266,12 +266,19 @@ function methods:Write(frame)
     return key, action
 end
 
+function methods:HasKey()
+    if self.bindingSet ~= nil and self:CurrentSet() ~= self.bindingSet then return false end
+    if self.heartbeat and self:GetAction(self.heartbeat.key) == self.heartbeat.action then return true end
+    for _, candidate in ipairs(KEYS) do if self:GetAction(candidate) == "" then return true end end
+    return false
+end
+
 function methods:Claim(frame)
     if self:Combat() then return false, "Carrier paused in combat" end
     if self.quarantined then return false, self.status end
     local key, action = self:Write(frame)
     if not key then return false, action end
-    self.outstanding = { key = key, action = action, seq = frame.seq, probe = self.active.probe == true }
+    self.outstanding = { key = key, action = action, seq = frame.seq, probe = self.active.probe == true, sentAt = self:Now() }
     self.status = self.outstanding.probe and "Probe persisted; waiting for host" or "Carrier frame persisted"
     return true
 end
@@ -341,7 +348,7 @@ function methods:Probe(uiNonce)
     if self.outstanding or self.active then return false, "Carrier busy" end
     local ok, reason = self:StartupScrub()
     if not ok then return false, reason end
-    self.enabled, self.epoch, self.nonce, self.uiNonce, self.nextSeq = false, nil, nil, uiNonce, 1
+    self.enabled, self.epoch, self.nonce, self.uiNonce, self.nextSeq, self.contextBlocked = false, nil, nil, uiNonce, 1, nil
     return self:Begin("probe", PROBE, "probe:" .. uiNonce), reason
 end
 
@@ -412,7 +419,7 @@ function methods:AcceptHost(result)
     if result.bindingAck > outstanding.seq then return self:Quarantine("carrier acknowledgement jumped") end
     local cleaned = self:ClearExact(outstanding.key, outstanding.action)
     if not cleaned then return false end
-    self.outstanding = nil
+    self.outstanding, self.contextBlocked = nil, nil
     if outstanding.probe then
         self.epoch, self.nonce, self.enabled = result.epoch, result.bindingNonce, true
         self.nextSeq, self.active, self.status = result.bindingAck + 1, nil, "Carrier ready"

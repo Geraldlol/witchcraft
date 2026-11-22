@@ -61,7 +61,7 @@ test('overlay transport: inherited child handshakes then receives an authoritati
   assert.equal(host.lifecycle, 'ready'); assert.equal(overlay.lifecycle, 'ready');
   assert.equal(overlay.latestState.authoritative, true);
   assert.deepEqual(overlay.latestState.sessions.map(session => [session.id, session.lines[0]]), [
-    ['claude', 'Claude authoritative'], ['codex', 'Codex authoritative'], ['copilot', undefined],
+    ['claude', 'Claude authoritative'], ['codex', 'Codex authoritative'], ['copilot', undefined], ['agy', undefined],
   ]);
   assert.equal(overlay.latestState.sessions[0].ansi, '\u001b[31mClaude authoritative\u001b[0m');
   assert.equal(host.lastChildSeq, 0); assert.equal(overlay.lastHostSeq, 2);

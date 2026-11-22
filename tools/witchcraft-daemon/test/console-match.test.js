@@ -49,8 +49,8 @@ test('an empty pattern, zero, or anything else is refused with its label', () =>
 });
 
 test('config attach takes the same forms per tab, and refuses an unknown tab or a bad target', () => {
-  assert.deepEqual(parseAttachConfig({ claude: '~claude', codex: 37272, copilot: 'pick' }),
-    { claude: { pattern: 'claude' }, codex: { pid: 37272 }, copilot: { pick: true } });
+  assert.deepEqual(parseAttachConfig({ claude: '~claude', codex: 37272, copilot: 'pick', agy: '~agy' }),
+    { claude: { pattern: 'claude' }, codex: { pid: 37272 }, copilot: { pick: true }, agy: { pattern: 'agy' } });
   assert.throws(() => parseAttachConfig({ browser: '~x' }), /names browser/u);
   assert.throws(() => parseAttachConfig({ codex: '~' }), /attach\.codex in config\.json takes/u);
   for (const bad of [null, 'claude', ['~claude']]) assert.throws(() => parseAttachConfig(bad), /must map/u);

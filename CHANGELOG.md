@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add Google Antigravity CLI (`agy`, tab **AGY**) as a fourth agent tab across the addon, daemon (`--only agy`, `--with-agy`, `--attach agy=...`, `commands.agy`), desktop overlay (`Alt+4`) and `witchcraft-daemon` management skill, with automatic Windows `%LOCALAPPDATA%\agy\bin\agy.exe` discovery and AGY slash-command menu entries.
+- Add in-window **Agent tabs** quick-toggle buttons (`CLAUDE`, `CODEX`, `COPILOT`, `AGY`) inside the **... (Appearance)** popover, a `/witch tab <claude|codex|copilot|agy> [on|off]` (`/witch tabs`) slash command, and the **AGY tab** option under `Esc > Options > AddOns > Witchcraft > Tabs` so you can show or hide tabs for whichever agents you use.
+- Add the session journal (`wow_get_session_log`, `witchcraft journal [--clear]`, and `/witch context clear-journal`): the daemon diffs persisted context revisions into a bounded local journal (level-ups, zone changes, tracked quest changes and objective progress, money deltas, instance enter/leave, death/ghost/revive and group size) with cross-process clear markers, clear-generation fencing and lock-ownership verification. `wow_get_session_log` defaults to the current session and character, labels each event with its `epoch`, `uiNonce` and `character` origin, supports explicit `includeHistory` and `character` filters, and notes when context sharing is paused.
+- Stand the pixel strip aside for context frames while the binding carrier is active outside combat, and let the optical strip take over automatically after a failed key claim or a 5-second binding acknowledgement timeout.
+- Add opt-in automatic binding carrier qualification (`Probe binding carrier on connect` under Options > Terminal, or `/witch bindprobe auto|off`, releasing any unacknowledged probe key when turned off) and in-game terminal width requests (`/witch cols <40-160|fit>`) over a dedicated daemon control action that expires across host restarts.
 - Long and multiline prompts retain their complete draft across host restarts. Review retained input before deciding to resend.
 - Each updated bridge takes a lock for its target client. The same lock serializes ring setup, cleanup and bridge shutdown across installations.
 - `witchcraft doctor` diagnoses setup and connection progress, with a redacted JSON report.
@@ -35,7 +40,6 @@
 - `Resend` checks the message-ID capacity before touching the saved queue.
 - The desktop overlay's record and pending budgets scale with the tab count.
 - An absolute configured Windows command path keeps its previous behaviour; PATH-derived candidates must still be `.exe`.
-
 
 ## 0.1.1 - 2026-11-04
 

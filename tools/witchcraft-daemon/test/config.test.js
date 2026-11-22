@@ -46,5 +46,10 @@ test('character resolution is opt-in, skips SavedVariables and refuses an ambigu
   assert.equal((await loadConfig({ ...options, character: 'Altchar-Testrealm' })).characterDir,
     path.join(account, '70/Altchar-Testrealm'));
   await assert.rejects(loadConfig({ ...options, character: '../Testchar-Testrealm' }), /Invalid character/u);
+  for (const unsafe of ['Alt\\char', 'Alt/char', 'Alt:char', 'Alt\0char', '.', '..']) {
+    await assert.rejects(loadConfig({ ...options, character: unsafe }), /Invalid character/u);
+  }
   await assert.rejects(loadConfig({ ...options, character: 'Ghost' }), /No character folder named/u);
+  const source = await fs.readFile(new URL('../src/config.js', import.meta.url), 'utf8');
+  assert.equal(source.includes('\0'), false, 'config.js must remain pure text without NUL bytes');
 });

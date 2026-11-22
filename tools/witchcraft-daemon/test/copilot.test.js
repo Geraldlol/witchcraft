@@ -15,10 +15,13 @@ import { BindingReceiver, BINDING_PROBE_BODY, encodeBindingAction, parseBindingA
 import { snapshotOverlayTerminals } from '../src/overlay-host.js';
 import { validateHostMessage, validateChildMessage, OVERLAY_PROTOCOL_VERSION as v } from '../src/overlay-protocol.js';
 
-test('Copilot selection and attach validation', () => {
+test('Copilot and AGY selection and attach validation', () => {
   assert.equal(parseArgs(['run', '--only', 'copilot']).options.only, 'copilot');
+  assert.equal(parseArgs(['run', '--only', 'agy']).options.only, 'agy');
   assert.equal(parseArgs(['run', '--with-copilot']).options.withCopilot, true);
+  assert.equal(parseArgs(['run', '--with-agy']).options.withAgy, true);
   assert.deepEqual(parseArgs(['run', '--tab', 'copilot', '--attach', 'copilot=pick']).options.attach.copilot, { pick: true });
+  assert.deepEqual(parseArgs(['run', '--tab', 'agy', '--attach', 'agy=pick']).options.attach.agy, { pick: true });
   for (const only of AGENT_TABS) for (const other of AGENT_TABS.filter(tab => tab !== only)) {
     assert.throws(() => parseArgs(['run', '--only', only, '--attach', `${other}=123`]), /cannot also be attached/u);
   }
@@ -80,9 +83,9 @@ test('three PTYs route input, cycle through running tabs and clean up', async ()
   const stdout = Object.assign(new EventEmitter(), { write() {} });
   const display = attachTerminal(pair, { stdin, stdout, initialTab: 'claude' });
   try {
-    assert.deepEqual(pair.snapshot().map(session => session.title), ['Claude', 'Codex', 'Copilot']);
-    stdin.emit('data', Buffer.from('a\x1db\x1dc\x1dd'));
-    assert.deepEqual(writes, [['claude', 'a'], ['codex', 'b'], ['copilot', 'c'], ['claude', 'd']]);
+    assert.deepEqual(pair.snapshot().map(session => session.title), ['Claude', 'Codex', 'Copilot', 'AGY']);
+    stdin.emit('data', Buffer.from('a\x1db\x1dc\x1dd\x1df'));
+    assert.deepEqual(writes, [['claude', 'a'], ['codex', 'b'], ['copilot', 'c'], ['agy', 'd'], ['claude', 'f']]);
     exits[1]({ exitCode: 0 });
     stdin.emit('data', Buffer.from('\x1de'));
     assert.deepEqual(writes.at(-1), ['copilot', 'e']);
@@ -155,18 +158,26 @@ test('overlay accepts Copilot snapshots, ready, input and selection, rejecting u
 });
 
 
-test('Copilot is opt-in and --only never launches other configured agents', () => {
+test('Copilot and AGY are opt-in and --only never launches other configured agents', () => {
   assert.equal(selectAgentCommands().commands.copilot, undefined);
+  assert.equal(selectAgentCommands().commands.agy, undefined);
   assert.equal(selectAgentCommands({}, { withCopilot: true }).commands.copilot.file, 'copilot');
+  assert.equal(selectAgentCommands({}, { withAgy: true }).commands.agy.file, 'agy');
   const only = selectAgentCommands({}, { only: 'copilot' });
   assert.equal(only.initialTab, 'copilot');
   assert.equal(only.commands.claude, null);
   assert.equal(only.commands.codex, null);
   assert.equal(only.commands.copilot.file, 'copilot');
+  assert.equal(only.commands.agy, null);
+  const onlyAgy = selectAgentCommands({}, { only: 'agy' });
+  assert.equal(onlyAgy.initialTab, 'agy');
+  assert.equal(onlyAgy.commands.claude, null);
+  assert.equal(onlyAgy.commands.agy.file, 'agy');
   const config = { commands: { copilot: { file: 'copilot', args: ['--resume', 'saved-id'] } } };
   assert.deepEqual(selectAgentCommands(config).commands.copilot.args, ['--resume', 'saved-id']);
   assert.equal(selectAgentCommands(config, { only: 'claude', withCopilot: true }).commands.copilot, null);
   assert.throws(() => selectAgentCommands({}, { tab: 'copilot' }), /--tab copilot names a terminal that is not started/u);
+  assert.throws(() => selectAgentCommands({}, { tab: 'agy' }), /--tab agy names a terminal that is not started/u);
   assert.equal(selectAgentCommands({}, { tab: 'copilot' }, [process.execPath, '--help']).commands.copilot.file, process.execPath);
   assert.equal(selectAgentCommands({ commands: { copilot: { file: 'copilot', args: [] } } }, { tab: 'copilot' }).commands.copilot.file, 'copilot');
   assert.equal(selectAgentCommands({}, { only: 'copilot' }, [process.execPath, '--help']).commands.copilot.file, process.execPath);

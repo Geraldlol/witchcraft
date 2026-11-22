@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y lua5.1 lua-check
-      - run: luacheck Witchcraft
+      - run: luacheck Witchcraft tests/witchcraft
       - run: lua5.1 tests/witchcraft/run.lua
 
   daemon:
@@ -37,3 +37,22 @@ jobs:
       - run: npm ci
       - run: python3 --version
       - run: npm test
+
+  daemon-ubuntu:
+    name: Daemon (Node 24 on Ubuntu)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/witchcraft-daemon
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/witchcraft-daemon/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild node-pty --ignore-scripts=false --foreground-scripts
+      - run: node --test test/capture-linux.test.js test/config.test.js test/ring.test.js test/outbox.test.js test/journal.test.js test/mcp-server.test.js test/copilot.test.js test/addon-copilot.test.js test/attach-args.test.js test/client-ring-lock.test.js test/context-want.test.js test/prompt-recovery.test.js test/session-info.test.js

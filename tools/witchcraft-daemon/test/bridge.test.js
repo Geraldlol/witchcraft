@@ -9,10 +9,12 @@ import { initializeRing } from '../src/init.js';
 import { encodeMessage, encodeContext, encodeHeartbeat } from '../src/pixel.js';
 import { readContextFile } from '../src/context-cache.js';
 import { BINDING_KEYS, BINDING_PROBE_BODY, encodeBindingAction } from '../src/binding-carrier.js';
-import { atomicWrite } from '../src/ring.js';
 import { encodeCooldownContext, encodeCooldownFrame } from '../src/cooldown-carrier.js';
 import { cooldownLayout } from './helpers/cooldown-layout.js';
 import { contextWantPath, requestContext } from '../src/context-want.js';
+import { journalPath } from '../src/journal.js';
+import { atomicWrite } from '../src/ring.js';
+import { CONTROL } from '../src/outbox.js';
 
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 async function until(predicate, label, timeout = 3000) {
@@ -77,11 +79,11 @@ async function fixture(t, settings = {}) {
         throw error;
       }
       this.cols = options.cols; this.rows = options.rows; this.options = options;
-      this.sessions = new Map(['claude', 'codex', 'copilot'].map(tab => [tab, { status: options.commands[tab] ? 'running' : 'not started' }]));
+      this.sessions = new Map(['claude', 'codex', 'copilot', 'agy'].map(tab => [tab, { status: options.commands[tab] ? 'running' : 'not started' }]));
       state.pair = this;
     }
     write(tab, text) { state.writes.push([tab, text]); }
-    snapshot() { if (state.snapshotError) throw state.snapshotError; return ['claude', 'codex', 'copilot'].map(id => ({ id, title: id, status: this.sessions.get(id).status,
+    snapshot() { if (state.snapshotError) throw state.snapshotError; return ['claude', 'codex', 'copilot', 'agy'].map(id => ({ id, title: id, status: this.sessions.get(id).status,
       lines: Array.from({ length: this.rows }, (_, index) => `${id} row ${index}`),
       ...(settings.history ? { history: settings.history.map(line => `${id} ${line}`) } : {}) })); }
     async dispose() { state.pairDisposed++; if (settings.disposeFailure) throw new Error('synthetic dispose failure'); }
@@ -519,7 +521,7 @@ test('bridge: heartbeat to real chunk, both tab inputs, ACK and clean resource t
   f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
   const payload = await f.payload(2, value => value.uiNonce === nonce && value.ready);
   assert.equal(payload.epoch, JSON.parse(await fs.readFile(f.lockPath, 'utf8')).epoch);
-  assert.deepEqual(payload.sessions.map(session => session.id), ['claude', 'codex', 'copilot']);
+  assert.deepEqual(payload.sessions.map(session => session.id), ['claude', 'codex', 'copilot', 'agy']);
   const heartbeat = encodeHeartbeat(payload.epoch, 2, 0, nonce);
   const first = { epoch: payload.epoch, id: 1, tab: 'codex', action: 'text', text: 'Codex request' };
   for (let repeat = 0; repeat < 2; repeat++) for (const frame of encodeMessage(first)) f.state.capture.emit(image(frame, heartbeat));
@@ -633,6 +635,127 @@ test('bridge: context reaches the MCP cache with independent ACKs and never reac
   assert.equal((await readContextFile(cachePath)).player.status, 'missing');
   f.state.pair.finish(); assert.equal(await within(f.running), undefined);
   assert.equal((await readContextFile(cachePath)).connection.status, 'disconnected');
+});
+
+test('bridge: two accepted player revisions leave one level-up in the session journal, and a control message clears it', async t => {
+  const f = await fixture(t); await f.ready();
+  const nonce = '12345678', cachePath = path.join(f.adapters.localDir, 'wow-context.json');
+  f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
+  const ready = await f.payload(2, row => row.uiNonce === nonce && row.contextProtocol === 4);
+  const heartbeat = encodeHeartbeat(ready.epoch, 2, 0, nonce);
+  const send = (id, data) => {
+    for (const frame of encodeContext({ kind: 'context', epoch: ready.epoch, uiNonce: nonce, id, text: JSON.stringify(data) }))
+      f.state.capture.emit(image(frame, heartbeat));
+  };
+  send(1, [1, 'player', 1, 1, 1, 0, ['Test player', 'Shaman', 10, 215, 'Mulgore', '', []]]);
+  await f.payload(2, row => row.contextAck === 1);
+  send(2, [1, 'player', 2, 1, 1, 0, ['Test player', 'Shaman', 11, 215, 'Mulgore', '', []]]);
+  await f.payload(2, row => row.contextAck === 2);
+  // Windows refuses the read while the daemon renames the journal into place; that is a moment to retry.
+  const journal = await until(async () => {
+    try { return JSON.parse(await fs.readFile(journalPath(cachePath), 'utf8')); } catch { return false; }
+  }, 'Journal write');
+  assert.equal(journal.segments.length, 1);
+  assert.equal(journal.segments[0].epoch, ready.epoch);
+  assert.equal(journal.segments[0].uiNonce, nonce);
+  assert.deepEqual(journal.segments[0].character, { name: 'Test player', class: 'Shaman' });
+  assert.deepEqual(journal.segments[0].events.map(({ domain, kind, from, to }) => ({ domain, kind, from, to })),
+    [{ domain: 'player', kind: 'level-up', from: 10, to: 11 }]);
+  for (const frame of encodeMessage({ epoch: ready.epoch, id: 1, tab: 'claude', action: 'control', text: 'clear-journal' }))
+    f.state.capture.emit(image(frame, heartbeat));
+  await f.payload(2, row => row.ack === 1);
+  await until(async () => !(await fs.access(journalPath(cachePath)).then(() => true, () => false)), 'Journal clear');
+  assert.deepEqual(f.state.writes, []);
+  f.state.pair.finish(); assert.equal(await within(f.running), undefined);
+});
+
+test('bridge: a reload onto another character opens a new journal segment and diffs nothing across it', async t => {
+  const f = await fixture(t); await f.ready();
+  const first = '12345678', second = '87654321', cachePath = path.join(f.adapters.localDir, 'wow-context.json');
+  f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, first)));
+  const ready = await f.payload(2, row => row.uiNonce === first && row.contextProtocol === 4);
+  const send = (nonce, seq, id, data) => {
+    const heartbeat = encodeHeartbeat(ready.epoch, seq, 0, nonce);
+    for (const frame of encodeContext({ kind: 'context', epoch: ready.epoch, uiNonce: nonce, id, text: JSON.stringify(data) }))
+      f.state.capture.emit(image(frame, heartbeat));
+  };
+  send(first, 2, 1, [1, 'player', 1, 1, 1, 0, ['Test player', 'Shaman', 10, 215, 'Mulgore', '', []]]);
+  await f.payload(2, row => row.contextAck === 1);
+  send(first, 2, 2, [1, 'player', 2, 1, 1, 0, ['Test player', 'Shaman', 11, 215, 'Mulgore', '', []]]);
+  await f.payload(2, row => row.contextAck === 2);
+  // The new session and its first records arrive in one synchronous burst, before any cache write,
+  // so the next persisted document is the other character's while the baseline is still this one's.
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 1, 0, second)));
+  send(second, 1, 1, [1, 'player', 1, 1, 1, 0, ['Other player', 'Mage', 20, 1411, 'Durotar', '', []]]);
+  send(second, 1, 2, [1, 'quests', 1, 1, 1, 0, [true, '', 1, false, [[101, 'A quest', false, [['Claws', 1, 4, false]], false]]]]);
+  await f.payload(1, row => row.uiNonce === second && row.contextAck === 2);
+  const journal = await until(async () => {
+    try {
+      const value = JSON.parse(await fs.readFile(journalPath(cachePath), 'utf8'));
+      return value.segments.length === 2 && value;
+    } catch { return false; }
+  }, 'Second journal segment');
+  assert.deepEqual(journal.segments.map(({ epoch, uiNonce, character, events }) => [epoch, uiNonce, character?.name, events.map(event => event.kind)]),
+    [[ready.epoch, first, 'Test player', ['level-up']], [ready.epoch, second, 'Other player', ['quest-tracked']]]);
+  assert.equal(typeof journal.segments[0].endedAt, 'number');
+  assert.equal(journal.segments[1].endedAt, null);
+  f.state.pair.finish(); assert.equal(await within(f.running), undefined);
+});
+
+test('bridge: a slow journal write holds neither the next cache write nor its ack, and a stuck one does not hold the shutdown', async t => {
+  let journalWrites = 0, release, releaseLate;
+  const gate = new Promise(resolve => { release = resolve; }), late = new Promise(resolve => { releaseLate = resolve; });
+  const f = await fixture(t, { adapters: { async writeJournal(file, source) {
+    const write = ++journalWrites;
+    if (write === 1) await gate;
+    // The third write is held through shutdown and then lets go without touching the disk.
+    if (write === 3) return late;
+    await atomicWrite(file, source);
+  } } });
+  await f.ready();
+  const nonce = '12345678', cachePath = path.join(f.adapters.localDir, 'wow-context.json');
+  f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
+  const ready = await f.payload(2, row => row.uiNonce === nonce && row.contextProtocol === 4);
+  const heartbeat = encodeHeartbeat(ready.epoch, 2, 0, nonce);
+  const send = (id, level) => {
+    const text = JSON.stringify([1, 'player', id, 1, 1, 0, ['Test player', 'Shaman', level, 215, 'Mulgore', '', []]]);
+    for (const frame of encodeContext({ kind: 'context', epoch: ready.epoch, uiNonce: nonce, id, text }))
+      f.state.capture.emit(image(frame, heartbeat));
+  };
+  // The first revision has nothing to diff against; the second makes the first journal write, held open.
+  send(1, 10);
+  await f.payload(2, row => row.contextAck === 1);
+  send(2, 11);
+  await f.payload(2, row => row.contextAck === 2);
+  await until(() => journalWrites === 1, 'the first journal write to be in flight');
+  send(3, 12);
+  await f.payload(2, row => row.contextAck === 3);
+  const cached = await until(async () => {
+    try {
+      const value = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+      return value.player?.data?.level === 12 && value;
+    } catch { return false; }
+  }, 'the third revision in the cache');
+  assert.equal(cached.player.data.name, 'Test player');
+  assert.equal(journalWrites, 1, 'the next batch waits on the journal chain, not on the cache chain');
+  assert.equal(await fs.access(journalPath(cachePath)).then(() => true, () => false), false, 'the first journal write is still pending');
+  release();
+  const journal = await until(async () => {
+    try {
+      const value = JSON.parse(await fs.readFile(journalPath(cachePath), 'utf8'));
+      return value.segments[0]?.events.length === 2 && value;
+    } catch { return false; }
+  }, 'both journal batches');
+  assert.deepEqual(journal.segments[0].events.map(({ kind, from, to }) => ({ kind, from, to })),
+    [{ kind: 'level-up', from: 10, to: 11 }, { kind: 'level-up', from: 11, to: 12 }]);
+  // A fourth revision's journal write is held through shutdown: the bridge still stops within the
+  // journal's bound, releases its lock and logs the write it left behind.
+  send(4, 13);
+  await until(() => journalWrites === 3, 'the late journal write to be in flight');
+  f.state.pair.finish(); assert.equal(await within(f.running), undefined);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+  assert.match(await fs.readFile(path.join(path.dirname(f.lockPath), 'events.log'), 'utf8'), /journal write still pending at shutdown/u);
+  releaseLate();
 });
 
 test('bridge: per-domain wants fold into one id carrying an incremental mask', async t => {
@@ -759,6 +882,24 @@ test('bridge: a cooldown heartbeat bootstraps the ring in the background without
   assert.equal(f.state.captureStopped, 1);
 });
 
+test('bridge: a binding heartbeat advances the ring beside a silent strip', async t => {
+  const f = await fixture(t, { binding: true, pixels: true }); await f.ready();
+  assert.equal(f.state.capture?.started, true, 'the strip is on and never sees the game');
+  const uiNonce = 'abcdef01', bindingFile = path.join(f.config.accountDir, 'bindings-cache.wtf');
+  const writeAction = value => fs.writeFile(bindingFile, `bind ${BINDING_KEYS[0]} ${value}\n`);
+  await writeAction(encodeBindingAction({ epoch: '00000000', nonce: '00000000', uiNonce,
+    slot: 1, seq: 1, part: 1, count: 1, payload: BINDING_PROBE_BODY }));
+  const connected = await f.payload(1, value => value.uiNonce === uiNonce && value.bindingAck === 1);
+  assert.equal(connected.cursorLane, 'file');
+  // The heartbeat replaces the probe on the key; it names slot 2 and is never acknowledged.
+  await writeAction(encodeBindingAction({ epoch: connected.epoch, nonce: connected.bindingNonce, uiNonce,
+    slot: 2, seq: 0, part: 1, count: 1, payload: Buffer.from([0x48, 0]) }));
+  const advanced = await f.payload(2, value => value.uiNonce === uiNonce && value.ready);
+  assert.equal(advanced.cursorLane, 'file'); assert.equal(advanced.bindingAck, 1);
+  f.state.pair.finish(); assert.equal(await within(f.running), undefined);
+  assert.equal(f.state.captureStopped, 1);
+});
+
 test('bridge: a binding heartbeat retries an unpublished slot beside a silent strip', async t => {
   let holdNext = false, refused = 0;
   const writeChunk = async (filename, source) => {
@@ -881,7 +1022,7 @@ test('bridge: a published chunk carries the session history the pair provides', 
   const payload = await f.payload(2, value => value.uiNonce === nonce && value.ready);
   assert.deepEqual(payload.sessions.map(session => session.history),
     [['claude earlier |cffff0000red|r', 'claude later'], ['codex earlier |cffff0000red|r', 'codex later'],
-      ['copilot earlier |cffff0000red|r', 'copilot later']]);
+      ['copilot earlier |cffff0000red|r', 'copilot later'], ['agy earlier |cffff0000red|r', 'agy later']]);
   assert.equal(payload.sessions[0].lines.length, 10);
   f.state.pair.finish(); assert.equal(await within(f.running), undefined);
 });

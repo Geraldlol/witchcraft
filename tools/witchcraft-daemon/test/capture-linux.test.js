@@ -89,6 +89,43 @@ print(json.dumps({name: helper.game_process(name) for name in names}))`);
   });
 });
 
+test('the macOS Quartz helper accepts only normal-layer World of Warcraft windows', { skip: !python }, () => {
+  const result = runHelper(`
+bounds = {"X": 0, "Y": 25, "Width": 2560, "Height": 1440}
+cases = {
+    "native": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "World of Warcraft", "kCGWindowName": "World of Warcraft", "kCGWindowBounds": bounds},
+    "unlisted_title": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "World of Warcraft", "kCGWindowBounds": bounds},
+    "crossover": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "WowB.exe", "kCGWindowName": "World of Warcraft", "kCGWindowBounds": bounds},
+    "wrong_title": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "World of Warcraft", "kCGWindowName": "Crash Reporter", "kCGWindowBounds": bounds},
+    "overlay_layer": {"kCGWindowLayer": 25, "kCGWindowOwnerName": "World of Warcraft", "kCGWindowName": "World of Warcraft", "kCGWindowBounds": bounds},
+    "tiny": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "World of Warcraft", "kCGWindowName": "World of Warcraft", "kCGWindowBounds": {"Width": 64, "Height": 10}},
+    "other_app": {"kCGWindowLayer": 0, "kCGWindowOwnerName": "Safari", "kCGWindowName": "World of Warcraft", "kCGWindowBounds": bounds},
+}
+print(json.dumps({k: helper.mac_game_window(v) for k, v in cases.items()}))`);
+  assert.deepEqual(result, {
+    native: true,
+    unlisted_title: true,
+    crossover: true,
+    wrong_title: false,
+    overlay_layer: false,
+    tiny: false,
+    other_app: false,
+  });
+});
+
+test('the macOS Quartz helper loads CoreGraphics and enumerates window records on darwin', { skip: !python || process.platform !== 'darwin' }, () => {
+  const result = runHelper(`
+screen = helper.MacScreen.__new__(helper.MacScreen)
+try:
+    helper.MacScreen.__init__(screen)
+except RuntimeError as error:
+    if "No World of Warcraft window found" not in str(error):
+        raise
+windows = screen._windows()
+print(json.dumps({"is_list": isinstance(windows, list)}))`);
+  assert.equal(result.is_list, true);
+});
+
 test('a failed grab is an idle record in Stream mode and an error in Once mode', { skip: !python }, () => {
   const result = runHelper(`
 class Fake:

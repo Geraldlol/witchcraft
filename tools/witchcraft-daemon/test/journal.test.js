@@ -508,7 +508,10 @@ test('presentation defaults to the current session/character, labels event origi
   const current = presentJournal(document, {}, 10_000);
   assert.equal(current.status, 'ready');
   assert.equal(current.scope, 'current');
-  assert.equal(current.segments.length, 2, 'segment summaries remain visible');
+  assert.equal(current.segments.length, 1, 'current-session summary only includes the active segment');
+  assert.deepEqual(current.segments[0].character, { name: 'Thrall', class: 'Shaman' });
+  assert.equal(current.segments[0].eventCount, 1);
+  assert.ok(!JSON.stringify(current).includes('Jaina'), 'current-session response never names another character');
   assert.equal(current.events.length, 1, 'defaults to the current session so an alt\'s activity is not mixed in');
   assert.deepEqual(current.events[0].character, { name: 'Thrall', class: 'Shaman' });
   assert.equal(current.events[0].epoch, '89abcdef');

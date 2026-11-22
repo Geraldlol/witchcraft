@@ -159,12 +159,12 @@ export function presentJournal(document, { since, limit = 100, kinds, includeHis
     character: segment.character,
   })));
   const matching = all.filter(event => (since === undefined || event.at >= since) && (!kinds || kinds.includes(event.kind)));
-  const hasAnyEvents = document.segments.some(segment => segment.events.length > 0);
+  const hasAnyEvents = selectedSegments.some(segment => segment.events.length > 0);
   return {
     status: hasAnyEvents ? 'ready' : 'empty',
     scope: includeHistory ? 'all' : 'current',
     ...(paused ? { sharing: 'paused', note: pauseNote } : {}),
-    segments: document.segments.map(({ epoch, uiNonce, startedAt, endedAt, character: segCharacter, events }) =>
+    segments: selectedSegments.map(({ epoch, uiNonce, startedAt, endedAt, character: segCharacter, events }) =>
       ({ epoch, uiNonce, startedAt: iso(startedAt), endedAt: endedAt === null ? null : iso(endedAt), character: segCharacter, eventCount: events.length })),
     events: matching.slice(-limit).map(event => ({ ...event, at: iso(event.at), ageSeconds: Math.max(0, Math.round((now - event.at) / 1000)) })),
   };

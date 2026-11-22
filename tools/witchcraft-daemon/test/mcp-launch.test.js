@@ -42,18 +42,22 @@ test('CLI: --character names the cooldown carrier character and still rejects un
 });
 
 // The joined Claude tab mirrors a session the player started, which no launcher configured.
-const spaced = { repoRoot: 'E:\\Some Repo', cachePath: 'E:\\Some Repo\\daemon\\.local\\wow-context.json',
-  nodePath: 'C:\\Program Files\\nodejs\\node.exe', scriptPath: 'E:\\Some Repo\\daemon\\bin\\witchcraft-mcp.js' };
+const repoRoot = path.resolve('Some Repo');
+const spaced = {
+  repoRoot,
+  cachePath: path.join(repoRoot, 'daemon', '.local', 'wow-context.json'),
+  nodePath: path.resolve('Program Files', 'nodejs', 'node'),
+  scriptPath: path.join(repoRoot, 'daemon', 'bin', 'witchcraft-mcp.js'),
+};
 
 test('mcp-setup prints the local registration for this checkout and changes nothing by itself', async () => {
   const printed = [], ran = [];
   const result = await setupClaudeMcp({ ...spaced, print: line => printed.push(line), run: (...call) => { ran.push(call); } });
   assert.equal(ran.length, 0, 'without --apply nothing is run');
   assert.equal(result.applied, false);
-  assert.ok(printed.includes('  claude mcp add -s local witchcraft_wow -- "C:\\Program Files\\nodejs\\node.exe" '
-    + '"E:\\Some Repo\\daemon\\bin\\witchcraft-mcp.js" --cache "E:\\Some Repo\\daemon\\.local\\wow-context.json" --allow-local-writes'),
-  printed.join('\n'));
-  assert.match(printed.join('\n'), /E:\\Some Repo/u, 'it says which folder to run it in');
+  assert.ok(printed.includes(`  claude mcp add -s local witchcraft_wow -- "${spaced.nodePath}" "${spaced.scriptPath}" --cache "${spaced.cachePath}" --allow-local-writes`),
+    printed.join('\n'));
+  assert.ok(printed.some(line => line.includes(`run this once in ${repoRoot}:`)), 'it says which folder to run it in');
 });
 
 test('mcp-setup --apply on an identical registration only says to restart, instead of failing as a duplicate', async () => {
@@ -70,7 +74,7 @@ test('mcp-setup --apply on an identical registration only says to restart, inste
 
 test('mcp-setup --apply refuses to stack on a different witchcraft_wow registration and says how to replace it', async () => {
   const ran = [];
-  const stale = { type: 'stdio', command: spaced.nodePath, args: ['E:\\old checkout\\bin\\witchcraft-mcp.js'] };
+  const stale = { type: 'stdio', command: spaced.nodePath, args: [path.resolve('old checkout', 'bin', 'witchcraft-mcp.js')] };
   await assert.rejects(setupClaudeMcp({ ...spaced, apply: true, existing: async () => stale, print: () => {}, run: (...call) => { ran.push(call); } }),
     /claude mcp remove -s local witchcraft_wow/u);
   assert.equal(ran.length, 0);

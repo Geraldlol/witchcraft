@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SessionSet } from '../src/sessions.js';
+import { SessionSet, addonSessions } from '../src/sessions.js';
 import { Outbox } from '../src/outbox.js';
 
 // A stand-in for the spawned pair: it records what it was asked for without starting a process.
@@ -66,6 +66,19 @@ test('both tabs snapshot in order, whichever source is behind them', () => {
   assert.equal(snapshot[0].title, 'Claude');
   assert.equal(snapshot[0].status, 'running');
   assert.deepEqual(snapshot[1].lines, ['codex spawned']);
+});
+
+test('the addon is sent AGY only once it has been started: the 0.3.1 addon rejects a frame with four sessions', () => {
+  const { set } = build({ claude: 24492 });
+  const snapshot = set.snapshot();
+  assert.deepEqual(addonSessions(snapshot).map(session => session.id), ['claude', 'codex', 'copilot'],
+    'a not-started AGY is left out; a not-started Copilot stays, the 0.3.1 addon expects three');
+  assert.deepEqual(addonSessions(snapshot).map(session => session.status), ['running', 'running', 'not started']);
+  assert.equal(set.snapshot().length, 4, 'the snapshot itself still lists every tab');
+  for (const status of ['running', 'exited (code 0)']) {
+    const listed = addonSessions(snapshot.map(session => (session.id === 'agy' ? { ...session, status } : session)));
+    assert.deepEqual(listed.map(session => session.id), ['claude', 'codex', 'copilot', 'agy'], `AGY ${status} is listed`);
+  }
 });
 
 test('an attached frame explicitly invalidates presentation and exposes plain text without an owned screen', () => {

@@ -126,3 +126,28 @@ test('heartbeat and probe acknowledgements must belong to the live daemon and cu
   assert.match(check(report, 'binding').detail, /1s ago/u);
   assert.ok(!JSON.stringify(report).includes(epoch) && !JSON.stringify(report).includes(ui));
 });
+
+test('a live holder of the client ring lock gets wait advice instead of a start', async t => {
+  const f = await setup(t);
+  const lockPath = path.join(f.addonsDir, '.witchcraft-ring.lock');
+  const record = (pid, type = 'witchcraft-ring-v1') => ({ type, pid, startedAt: new Date().toISOString(), operation: 'run' });
+  const diagnose = () => f.diagnose({ isAlive: pid => pid === 4242 });
+  await json(lockPath, record(4242));
+  const lockBytes = await fs.readFile(lockPath, 'utf8');
+  const held = await diagnose();
+  assert.equal(await fs.readFile(lockPath, 'utf8'), lockBytes, 'the ring lock is only read');
+  assert.equal(check(held, 'daemon').status, 'wait');
+  assert.equal(check(held, 'daemon').detail, "Another process holds this client's ring lock (pid 4242).");
+  assert.equal(check(held, 'daemon').next, "Stop the other installation's witchcraft run, or wait for its init to finish, then start here.");
+  assert.doesNotMatch(JSON.stringify(held), /Start witchcraft run/u);
+  assert.ok(!JSON.stringify(held).includes(path.basename(f.repoRoot)));
+  const unchanged = async label => {
+    const report = await diagnose();
+    assert.equal(check(report, 'daemon').detail, 'No live daemon observed for this installation.', label);
+    assert.equal(check(report, 'daemon').next, 'Start witchcraft run with your chosen assistant.', label);
+  };
+  await json(lockPath, record(999)); await unchanged('dead pid');
+  await json(lockPath, record(4242, 'other')); await unchanged('foreign record type');
+  await fs.rm(lockPath); await fs.mkdir(lockPath); await unchanged('unreadable lock');
+  await fs.rm(lockPath, { recursive: true }); await unchanged('no lock');
+});

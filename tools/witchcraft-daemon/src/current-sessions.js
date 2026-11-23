@@ -2,10 +2,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-// Windows paths compare without case or trailing separators: one Codex thread records `e:\...`
-// for the same folder another records as `E:\...`.
-const samePath = (left, right) => typeof left === 'string' && typeof right === 'string'
-  && path.resolve(left).replace(/[\\/]+$/u, '').toLowerCase() === path.resolve(right).replace(/[\\/]+$/u, '').toLowerCase();
+// Paths compare without trailing separators, and without case where the platform's default volume
+// ignores it (Windows, macOS): one Codex thread records `e:\...` for the same folder another records
+// as `E:\...`. A case-sensitive macOS volume is folded too: a recorded path cannot say which it was on.
+export const samePath = (left, right, platform = process.platform) => {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const fold = platform === 'win32' || platform === 'darwin';
+  const plain = value => { const resolved = path.resolve(value).replace(/[\\/]+$/u, ''); return fold ? resolved.toLowerCase() : resolved; };
+  return plain(left) === plain(right);
+};
 
 // A rollout's first line is its session metadata, which embeds the base instructions and can run
 // to tens of kilobytes. Read until the newline, but never more than a megabyte.

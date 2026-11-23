@@ -83,7 +83,8 @@ local function validWatch(watch)
         or not KINDS[watch.kind] or type(watch.message) ~= "string" or #watch.message > MAX_MESSAGE
         or type(watch.frame) ~= "string" or #watch.frame > MAX_STACK
         or not integer(watch.startSession, 1, MAX_STAMP) or not integer(watch.total, 0, MAX_COUNT)
-        or not integer(watch.sinceCheck, 0, watch.total) then return false end
+        or not integer(watch.sinceCheck, 0, watch.total)
+        or (watch.partial ~= nil and not integer(watch.partial, 1, MAX_STAMP)) then return false end
     local check = watch.check
     return check == nil or (type(check) == "table" and getmetatable(check) == nil
         and integer(check.session, 1, MAX_STAMP) and integer(check.total, 0, watch.total)
@@ -112,7 +113,11 @@ function methods:Merge(entry)
         end
     end
     list[#list + 1] = entry
-    while #list > MAX_ENTRIES do table.remove(list, 1) end
+    while #list > MAX_ENTRIES do
+        table.remove(list, 1)
+        -- Before the database exists the watch is unknown, so an evicted row may have been a match.
+        if not self.global then self.bufferOverflow = true end
+    end
 end
 
 function methods:Add(kind, message, stack)
@@ -173,6 +178,10 @@ function methods:Attach(global)
     local buffered = self.buffer
     self.buffer = {}
     for _, entry in ipairs(buffered) do entry.session = self.session; self:Merge(entry) end
+    -- Saved with the watch: counts from this load on may have missed rows evicted before the watch
+    -- was known. The first overflowing load is kept.
+    if self.watch and self.bufferOverflow and not self.watch.partial then self.watch.partial = self.session end
+    self.bufferOverflow = nil
 end
 
 -- Newest first, as copies.
@@ -207,6 +216,9 @@ function methods:WatchStatus(emit)
     if watch.frame ~= "" then emit(display(watch.frame)) end
     emit(string.format("%s matches since selection (UI load %d). %s this load (UI load %d).",
         countText(watch.total), watch.startSession, countText(self.watchInLoad), self.session))
+    if watch.partial then
+        emit(string.format("Startup errors overflowed the 20-entry buffer on UI load %d, so counts from that load on may be incomplete.", watch.partial))
+    end
     local check = watch.check
     if check then
         emit(string.format("Last player-marked attempt on UI load %d: %s matches in that load by then (%s since selection).",

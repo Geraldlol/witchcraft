@@ -7,6 +7,16 @@ const TABS = AGENT_TABS;
 const TITLES = AGENT_TITLES;
 
 /**
+ * The sessions published to the addon: AGY is left out while it is not started. The 0.3.1 addon
+ * accepts at most three sessions and rejects the whole frame otherwise, and the addon does not tell
+ * the host its version; the current addon takes a shorter list. SessionSet.snapshot() itself still
+ * lists every tab for the desktop overlay.
+ */
+export function addonSessions(list) {
+  return list.filter(session => !(session.id === 'agy' && session.status === 'not started'));
+}
+
+/**
  * The assistant tabs, each behind whichever source it was given: a terminal the daemon spawns, or a
  * console the user owns and the daemon only mirrors. It presents what the bridge already
  * consumes — `write`, `snapshot`, `sessions`, `cols`, `rows` — so the ring chunk, and with it the

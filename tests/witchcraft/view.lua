@@ -248,7 +248,9 @@ return function(options)
     function controller:Choose(tab, index) calls.choose = { tab, index }; return true end
     function controller:SendLong(tab, value)
         calls.long = { tab, value }
+        calls.send[#calls.send + 1] = { tab, value, "long" }
         if self.rejectLong then return false, "Too long" end
+        if self.reject then return false, "Queue is full" end
         return true
     end
     function controller:Resend() calls.resend = calls.resend + 1; return true end
@@ -496,6 +498,7 @@ return function(options)
         click(view.commandsButton); menus[#menus].entries[1].callback(); layout()
         view.writeBox:SetText("cat build.log || grep error\nthen fix it"); click(view.writeSend)
         assert(calls.long[2] == "cat build.log | grep error\nthen fix it", "the editor sends a typed pipe as one pipe")
+        for _ = 1, 3 do table.remove(calls.send) end
         -- Snippets, links, history and focus.
         snapshot.snippets = { "Run the tests and summarize failures", string.rep("long snippet ", 8) }
         view:Render(snapshot); click(view.commandsButton)
@@ -705,6 +708,7 @@ return function(options)
         local sent = #calls.send
         view.input:SetText("keep me")
         pick(menu, "/model").callback()
+        assert(calls.send[#calls.send][3] == nil, "a menu command stays a plain send")
         assert(#calls.send == sent + 1 and calls.send[#calls.send][1] == "claude" and calls.send[#calls.send][2] == "/model"
             and view.input.text == "keep me" and view.footerHint.text == "Sent /model to Claude",
             "a plain command is sent at once and leaves the draft alone")
@@ -858,6 +862,7 @@ return function(options)
         view.input:SetText("codex\n\r\0\27\t prompt")
         view.input.scripts.OnEnterPressed(view.input)
         assert(calls.send[1][1] == "codex" and calls.send[1][2] == "codex prompt", "Enter sends sanitized text to exact visible tab")
+        assert(calls.send[1][3] == "long", "the input box sends through SendLong")
         assert(view.input.text == "", "queued text clears")
         view.input:SetText("git log --oneline || head -5"); view.input.scripts.OnEnterPressed(view.input)
         assert(calls.send[#calls.send][2] == "git log --oneline | head -5", "a typed pipe reaches the agent as one pipe")

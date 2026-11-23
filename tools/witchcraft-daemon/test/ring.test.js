@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import luaparse from 'luaparse';
 import { initializeRing } from '../src/init.js';
 import { RingWriter, assertOwnedChunk, atomicWrite } from '../src/ring.js';
@@ -32,6 +33,66 @@ test('foreign reserved paths are rejected before any generated writes or cleanup
   await assert.rejects(initializeRing({ addonsDir: root, ringSize: 3, clean: true }));
   await assert.rejects(fs.stat(path.join(root, 'Witchcraft_Chunk_0001')));
   assert.equal(await fs.readFile(path.join(foreign, 'sentinel'), 'utf8'), 'mine');
+});
+test('an init interrupted before the TOC leaves no helper or temp folder, and a retry builds the full ring', async t => {
+  const root = await workspace(t);
+  const failing = async (file, contents) => {
+    if (file.endsWith('.toc')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return fs.writeFile(file, contents);
+  };
+  await assert.rejects(initializeRing({ addonsDir: root, ringSize: 3, write: failing }), { code: 'ENOSPC' });
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('Witchcraft_Chunk_')), []);
+  assert.equal((await initializeRing({ addonsDir: root, ringSize: 3 })).created, 3);
+  for (const index of [1, 2, 3]) await assertOwnedChunk(root, index, { requirePayload: true });
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.startsWith('.Witchcraft_Chunk_')), []);
+});
+test('a helper folder without its TOC is refused as incomplete and left untouched in both modes', async t => {
+  const root = await workspace(t), partial = path.join(root, 'Witchcraft_Chunk_0002');
+  await fs.mkdir(partial); await fs.writeFile(path.join(partial, 'Chunk.lua'), 'partial');
+  for (const clean of [false, true]) {
+    await assert.rejects(initializeRing({ addonsDir: root, ringSize: 3, clean }), error => error.code !== 'ENOENT'
+      && /Witchcraft_Chunk_0002/u.test(error.message) && /incomplete/iu.test(error.message)
+      && /remove/iu.test(error.message) && /\binit\b/u.test(error.message) && !error.message.includes(root));
+    assert.deepEqual(await fs.readdir(partial), ['Chunk.lua']);
+    assert.equal(await fs.readFile(path.join(partial, 'Chunk.lua'), 'utf8'), 'partial');
+    await assert.rejects(fs.stat(path.join(root, 'Witchcraft_Chunk_0001')), { code: 'ENOENT' });
+  }
+});
+test('init sweeps its own leftover temp folders and leaves other dot-folders alone', async t => {
+  const root = await workspace(t);
+  const leftover = path.join(root, `.Witchcraft_Chunk_0001.tmp-${randomUUID()}`);
+  await fs.mkdir(leftover); await fs.writeFile(path.join(leftover, 'Chunk.lua'), 'stale');
+  const foreign = ['.Witchcraft_Chunk_0001.tmp-keep', `.OtherAddon.tmp-${randomUUID()}`].map(name => path.join(root, name));
+  for (const dir of foreign) { await fs.mkdir(dir); await fs.writeFile(path.join(dir, 'sentinel'), 'keep'); }
+  assert.equal((await initializeRing({ addonsDir: root, ringSize: 3 })).created, 3);
+  await assert.rejects(fs.stat(leftover), { code: 'ENOENT' });
+  for (const dir of foreign) assert.equal(await fs.readFile(path.join(dir, 'sentinel'), 'utf8'), 'keep');
+});
+test('init removes only the exact temp folder names it generates', async t => {
+  // A helper is `.Witchcraft_Chunk_<0001..9999>.tmp-<version-4 UUID>`; any other name is not ours.
+  const root = await workspace(t);
+  const generated = path.join(root, `.Witchcraft_Chunk_0001.tmp-${randomUUID()}`);
+  await fs.mkdir(generated); await fs.writeFile(path.join(generated, 'Chunk.lua'), 'stale');
+  const lookalikes = [`.Witchcraft_Chunk_0001.tmp-${'a'.repeat(36)}`, `.Witchcraft_Chunk_0001.tmp-${'-'.repeat(36)}`,
+    `.Witchcraft_Chunk_0000.tmp-${randomUUID()}`].map(name => path.join(root, name));
+  for (const dir of lookalikes) { await fs.mkdir(dir); await fs.writeFile(path.join(dir, 'sentinel'), 'keep'); }
+  assert.equal((await initializeRing({ addonsDir: root, ringSize: 3 })).created, 3);
+  await assert.rejects(fs.stat(generated), { code: 'ENOENT' });
+  const survivors = await Promise.all(lookalikes.map(dir => fs.readFile(path.join(dir, 'sentinel'), 'utf8').catch(error => error.code)));
+  assert.deepEqual(survivors, ['keep', 'keep', 'keep'], 'all-a, all-hyphen and slot 0000 names are not ours');
+});
+test('a slot folder that appears while init builds that slot is refused and preserved, and no temp folder is left', async t => {
+  const root = await workspace(t), late = path.join(root, 'Witchcraft_Chunk_0002');
+  // Another party creates the empty slot folder after the inventory, while slot 2's TOC is written.
+  const write = async (file, contents) => {
+    if (path.basename(file) === 'Witchcraft_Chunk_0002.toc') await fs.mkdir(late);
+    return fs.writeFile(file, contents);
+  };
+  await assert.rejects(initializeRing({ addonsDir: root, ringSize: 3, write }),
+    error => /Witchcraft_Chunk_0002/u.test(error.message) && /appeared during init/u.test(error.message));
+  assert.ok((await fs.stat(late)).isDirectory());
+  assert.deepEqual(await fs.readdir(late), []);
+  assert.deepEqual((await fs.readdir(root)).filter(name => /^\.Witchcraft_Chunk_.*\.tmp-/u.test(name)), []);
 });
 test('writer follows consumer requests, rejects stale UI, echoes the current UI nonce', async t => {
   const root = await workspace(t); await initializeRing({ addonsDir: root, ringSize: 3 });
@@ -342,4 +403,36 @@ test('scrubStale reports a chunk it cannot read instead of treating it as empty'
   const result = await writer.scrubStale();
   assert.equal(result.scrubbed, 0);
   assert.equal(result.failed.length, 1); assert.match(result.failed[0], /^slot 2:/u);
+});
+
+test('scrubStale also clears an owned slot above a smaller ring and skips foreign folders there', async t => {
+  const root = await workspace(t); await initializeRing({ addonsDir: root, ringSize: 5 });
+  const crashed = new RingWriter({ addonsDir: root, ringSize: 5, epoch: '0123abcd' });
+  crashed.request({ epoch: '0123abcd', uiNonce: 'abcdef01', nextSeq: 5 });
+  await crashed.publish({ changed: true, sessions: [{ id: 'claude', title: 'Claude', status: 'running', lines: ['leftover-secret'] }] });
+  // No stop(): the next run uses a three-slot ring.
+  const foreign = path.join(root, 'Witchcraft_Chunk_0007'), foreignSource = '["ready"]=true not ours';
+  await fs.mkdir(foreign); await fs.writeFile(path.join(foreign, 'Chunk.lua'), foreignSource);
+  const writer = new RingWriter({ addonsDir: root, ringSize: 3, epoch: '4567ef01' });
+  assert.deepEqual(await writer.scrubStale(), { scrubbed: 1, failed: [] });
+  const slot5 = await fs.readFile(path.join(root, 'Witchcraft_Chunk_0005', 'Chunk.lua'), 'utf8');
+  assert.doesNotMatch(slot5, /leftover-secret/u); assert.match(slot5, /\["ready"\]=false/u);
+  assert.deepEqual(await fs.readdir(foreign), ['Chunk.lua']);
+  assert.equal(await fs.readFile(path.join(foreign, 'Chunk.lua'), 'utf8'), foreignSource);
+  // Inside the ring a missing slot is still reported.
+  await fs.rm(path.join(root, 'Witchcraft_Chunk_0002'), { recursive: true });
+  const again = await writer.scrubStale();
+  assert.equal(again.scrubbed, 0);
+  assert.equal(again.failed.length, 1); assert.match(again.failed[0], /^slot 2:/u);
+});
+
+test('scrubStale reports a failed helper folder listing and still scrubs the slots inside the ring', async t => {
+  const root = await workspace(t); await initializeRing({ addonsDir: root, ringSize: 3 });
+  const crashed = new RingWriter({ addonsDir: root, ringSize: 3, epoch: '0123abcd' });
+  crashed.request({ epoch: '0123abcd', uiNonce: 'abcdef01', nextSeq: 2 });
+  await crashed.publish({ changed: true, sessions: [{ id: 'claude', title: 'Claude', status: 'running', lines: ['leftover-secret'] }] });
+  const writer = new RingWriter({ addonsDir: root, ringSize: 3, epoch: '4567ef01',
+    list: async () => { throw Object.assign(new Error('listing denied'), { code: 'EACCES' }); } });
+  assert.deepEqual(await writer.scrubStale(), { scrubbed: 1, failed: ['helper folder listing: listing denied'] });
+  assert.doesNotMatch(await fs.readFile(path.join(root, 'Witchcraft_Chunk_0002', 'Chunk.lua'), 'utf8'), /leftover-secret/u);
 });

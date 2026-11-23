@@ -12,7 +12,11 @@ export async function assertOwnedChunk(addonsDir, index, { requirePayload = fals
   const info = await fs.lstat(directory);
   if (!info.isDirectory() || info.isSymbolicLink() || await fs.realpath(directory) !== directory) throw new Error(`Refusing linked chunk: ${name}`);
   const tocPath = path.join(directory, `${name}.toc`);
-  const tocInfo = await fs.lstat(tocPath);
+  // Older versions could leave a slot folder without its TOC after an interrupted init.
+  const tocInfo = await fs.lstat(tocPath).catch(error => {
+    if (error.code === 'ENOENT') throw new Error(`Incomplete helper folder ${name}: its TOC is missing. Remove that folder, then run witchcraft init again.`);
+    throw error;
+  });
   if (!tocInfo.isFile() || tocInfo.isSymbolicLink()) throw new Error(`Invalid chunk TOC: ${name}`);
   const toc = await fs.readFile(tocPath, 'utf8');
   if (!/^## X-Witchcraft-Chunk: 1\s*$/mu.test(toc) || !/^## Dependencies: Witchcraft\s*$/mu.test(toc)
@@ -105,11 +109,11 @@ function serializeHistoryChunk(payload) {
 const STRIP_QUIET_MS = 1000;
 
 export class RingWriter {
-  constructor({ addonsDir, ringSize = 3000, epoch, write = atomicWrite, check = assertOwnedChunk, now = () => performance.now() }) {
+  constructor({ addonsDir, ringSize = 3000, epoch, write = atomicWrite, check = assertOwnedChunk, list = directory => fs.readdir(directory), now = () => performance.now() }) {
     if (!Number.isInteger(ringSize) || ringSize < 3 || ringSize > 9999 || !/^[0-9a-f]{8}$/u.test(epoch) || epoch === '00000000') {
       throw new Error('Invalid ring configuration');
     }
-    Object.assign(this, { addonsDir: path.resolve(addonsDir), ringSize, epoch, write, check, now });
+    Object.assign(this, { addonsDir: path.resolve(addonsDir), ringSize, epoch, write, check, list, now });
     this.cursor = 1; this.generation = 0; this.chain = Promise.resolve(); this.stopped = false;
     this.uiNonce = '00000000'; this.retired = new Set(); this.changed = false; this.written = new Set();
     this.cursorLane = null; this.stripSeenAt = null;
@@ -188,12 +192,20 @@ export class RingWriter {
     await this.write(path.join(directory, 'Chunk.lua'), serializeChunk({ protocol: 1, ready: false, seq, ringSize: this.ringSize }));
   }
   // A crashed run never reached stop(); clear any ready chunk it left before this run publishes.
+  // A run with a larger ring may have left owned slots above this ringSize, so installed helper
+  // folders are enumerated too; above the ring, a folder that is not ours is skipped silently.
   async scrubStale() {
     const failed = [];
     let scrubbed = 0;
-    for (let seq = 1; seq <= this.ringSize; seq++) {
+    // A failed listing is reported, not taken as nothing to clean; the slots inside the ring still are.
+    const above = (await this.list(this.addonsDir).catch(error => { failed.push(`helper folder listing: ${error.message}`); return []; }))
+      .filter(name => /^Witchcraft_Chunk_\d{4}$/u.test(name)).map(name => Number(name.slice(-4)))
+      .filter(seq => seq > this.ringSize).sort((a, b) => a - b);
+    for (const seq of [...Array.from({ length: this.ringSize }, (_, index) => index + 1), ...above]) {
+      let directory;
+      try { directory = await this.check(this.addonsDir, seq); }
+      catch (error) { if (seq <= this.ringSize) failed.push(`slot ${seq}: ${error.message}`); continue; }
       try {
-        const directory = await this.check(this.addonsDir, seq);
         // Only a missing chunk is nothing to clear; any other read failure may hide a transcript.
         const source = await fs.readFile(path.join(directory, 'Chunk.lua'), 'utf8')
           .catch(error => { if (error.code === 'ENOENT') return ''; throw error; });

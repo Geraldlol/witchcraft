@@ -6,6 +6,8 @@ The WoW MCP bridge adds six read-only game-context tools (context, character, qu
 
 ## Setup
 
+Take the addon and the daemon from the same revision; the AGY tab needs addon 0.4.0 or later, and the daemon lists AGY to the addon only once it has been started.
+
 From this repository's `tools/witchcraft-daemon` folder:
 
 On Windows (PowerShell):
@@ -90,7 +92,7 @@ Overlay startup failure, renderer failure and bounded restart exhaustion leave t
 
 Attached-console frames refresh the overlay using plain text, without the game's color tags. When any tab mirrors a console you own, Witchcraft stays active until explicitly stopped, including after the spawned agent exits. An entirely spawned set still ends when all launched agents exit. Shutdown cancels pending startup and retains the bridge lock until all acquired resources are cleaned up.
 
-`witchcraft run` joins the sessions already running in `--cwd` unless `--no-current` is passed. The Claude tab mirrors the newest live interactive Claude Code session there, found in `~/.claude/sessions/<pid>.json`. The Codex tab launches `codex resume <id>` for the most recently written top-level Codex thread there, read from the first line of each rollout under `~/.codex/sessions`; subagent and `exec` threads are skipped, and folder names compare without case. The VS Code Codex extension has no console to mirror, so this is a second client on its thread: both sides append to the same thread, and the extension's panel does not show turns typed in game until it reloads the thread. An explicit `--attach` or child command overrides discovery for that tab; `--only` leaves the other tabs stopped. A tab with nothing found starts fresh. The daemon window prints what it joined.
+`witchcraft run` joins the sessions already running in `--cwd` unless `--no-current` is passed. The Claude tab mirrors the newest live interactive Claude Code session there, found in `~/.claude/sessions/<pid>.json`. The Codex tab launches `codex resume <id>` for the most recently written top-level Codex thread there, read from the first line of each rollout under `~/.codex/sessions`; subagent and `exec` threads are skipped, and folder names compare without case on Windows and macOS and with case on Linux. The VS Code Codex extension has no console to mirror, so this is a second client on its thread: both sides append to the same thread, and the extension's panel does not show turns typed in game until it reloads the thread. An explicit `--attach` or child command overrides discovery for that tab; `--only` leaves the other tabs stopped. A tab with nothing found starts fresh. The daemon window prints what it joined.
 
 `--attach tab=~TEXT` names a console by what runs in it: the newest console whose running program or command line contains TEXT, ignoring case (`witchcraft consoles` shows both). A pattern that matches nothing stops the start. When a mirrored console closes, its tab reads `exited (console N closed)` and Witchcraft looks for a successor every five seconds: the joined Claude tab takes the newest live Claude session in `--cwd`, and a `~TEXT` tab the newest console matching TEXT. The tab then mirrors that console and takes input again, and the daemon window prints the new process. A tab attached by process id or `pick` stays closed until Witchcraft restarts.
 
@@ -141,7 +143,7 @@ The carrier is fixed to Blizzard's binding configuration file and is treated as 
 
 The standalone burst probe uses the same calibrated origin with a strict 132 by 144 capture profile: the normal two rows plus 22 probe rows. It accepts only a coherent whole page before passing its rows to the existing decoder. A torn, mixed, corrupted, misaligned or invalidly padded page is rejected. This profile is never selected by `run`.
 
-Each CLI has its own PTY and headless xterm screen. Foreground colors, bold/dim and literal text become bounded WoW strings; unsupported non-BMP glyphs use placeholders. The daemon atomically replaces the next chunk requested by the game heartbeat on the strip or on the binding carrier. It does not advance through unused files on its own. Each payload contains all four tabs, an input acknowledgement and the current UI nonce.
+Each CLI has its own PTY and headless xterm screen. Foreground colors, bold/dim and literal text become bounded WoW strings; unsupported non-BMP glyphs use placeholders. The daemon atomically replaces the next chunk requested by the game heartbeat on the strip or on the binding carrier. It does not advance through unused files on its own. Each payload contains every listed tab (AGY is listed only once it has been started), an input acknowledgement and the current UI nonce.
 
 Input is routed only to the named PTY. Retransmissions are deduplicated within a daemon session. After a daemon restart, use `/witch pending`, `/witch inspect <id>`, and then `/witch resend <id>` or `/witch discard <id>` after checking the terminal. These commands operate on the complete retained group. SavedVariables are parsed as literal data and never evaluated. Terminal screen output is not written into SavedVariables.
 
@@ -153,8 +155,8 @@ The strip reader also runs on **Linux** (when the client is an X11 or XWayland w
 
 **Linux and macOS testers wanted.** On macOS, grant **Screen Recording** permission to your terminal app (`System Settings > Privacy & Security > Screen Recording`) so `CoreGraphics` can read the game window pixels. If you try either platform, please open an issue with your OS version, session type, the `region.scale` that `calibrate` saved, and what worked or failed.
 
-- On Linux, the game window is found by its title and accepted only when the X server reports that it belongs to a process named `wow*` (through libXRes and `/proc/<pid>/comm`; Wine names a process after its exe, such as `WowB.exe`). On macOS, the helper selects the largest normal-layer (`kCGWindowLayer == 0`) window owned by `World of Warcraft` (or `Wow*`). On either platform, set `WITCHCRAFT_WINDOW_ID` to the game's window id to select a window explicitly.
-- The helper keeps the window it found at start. Restart `run` after restarting the game.
+- On Linux, the game window is found by its title and accepted only when the X server reports that it belongs to a process named `wow*` (through libXRes and `/proc/<pid>/comm`; Wine names a process after its exe, such as `WowB.exe`). On macOS, the helper selects the largest normal-layer (`kCGWindowLayer == 0`) window whose app name starts with `World of Warcraft` (or is a Wine client exe name: `Wow`, `WowClassic`, `WowB`, `WowT`). On either platform, set `WITCHCRAFT_WINDOW_ID` to the game's window id to select a window explicitly.
+- On Linux the helper keeps the window it found at start: restart `run` after restarting the game. On macOS it looks for the new game window by itself, unless `WITCHCRAFT_WINDOW_ID` pins one.
 - Coordinates are relative to the game window, not the desktop. `calibrate` measures the window's upscale ratio from the strip and stores it as `region.scale`, so a client rendering below its window size (for example 2560x1440 in a 3840x2160 window, or a scaled Retina window) still decodes. Recalibrate after changing resolution, window size or UI scale.
 - Keep overlays such as MangoHud off the top-left corner. While the game window is unmapped, minimized or partly off screen the helper reports idle, as it does when the game is not focused.
 - A native Wayland game window cannot be read this way on Linux.

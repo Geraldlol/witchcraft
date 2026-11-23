@@ -85,6 +85,18 @@ test('one persistent hidden helper delivers only foreground WowB frames until ex
   assert.equal(received.length, 3); capture.stop();
 });
 
+test('an idle record passes its outside reason to onIdle and a plain idle passes none', () => {
+  const mock = mockSpawn(), reasons = [];
+  const capture = new Capture({ region: { x: 0, y: 0 }, spawn: mock.spawn, onFrame() {},
+    onIdle: (...args) => reasons.push(args), onError: error => assert.fail(error) });
+  capture.start();
+  output(mock.children[0], { protocol: 1, type: 'idle', foreground: false, reason: 'outside' });
+  output(mock.children[0], { protocol: 1, type: 'idle', foreground: false });
+  output(mock.children[0], { protocol: 1, type: 'idle', foreground: false, reason: 'other' });
+  assert.deepEqual(reasons, [['outside'], [undefined], [undefined]]);
+  capture.stop();
+});
+
 test('stop inside a frame callback discards additional records from the same pipe fragment', () => {
   const mock = mockSpawn(); let received = 0;
   const capture = new Capture({ region: { x: -1920, y: 0 }, spawn: mock.spawn,

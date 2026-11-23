@@ -14,7 +14,7 @@ export function pidAlive(pid) {
 const stamp = ms => new Date(ms).toISOString().replace(/[-:]/gu, '').replace('T', '-').slice(0, 15);
 
 // Why the lock at lockPath no longer belongs to a running bridge, or { live } while it may.
-async function staleReason(lockPath, { now, bootTime, isAlive, fs, recordType }) {
+async function staleReason(lockPath, { now, bootTime, isAlive, fs, recordType, hold = false }) {
   // A client directory can contain files from other tools. A colliding name alone does not give
   // us ownership. Shared lock records are complete before they are linked into place.
   if (recordType) {
@@ -22,23 +22,30 @@ async function staleReason(lockPath, { now, bootTime, isAlive, fs, recordType })
     if (!entry.isFile() || entry.size > 4096) return { live: 'an unrecognized file is already here' };
   }
   // One open, so the identity checked before the lock is set aside is that of the bytes judged here.
+  // With hold, a stale verdict returns this handle still open: an open file keeps its inode, so no
+  // newer lock can take the judged identity before the caller has acted on it and closed the handle.
+  // Every other outcome closes it here.
   const handle = await fs.open(lockPath, 'r');
-  let text, stats;
-  try { stats = await handle.stat({ bigint: true }); text = await handle.readFile('utf8'); }
-  finally { await handle.close(); }
-  let owner;
-  try { owner = JSON.parse(text); } catch { owner = undefined; }
-  const pid = Number.isSafeInteger(owner?.pid) && owner.pid > 0 ? owner.pid : undefined;
-  if (recordType && (owner?.type !== recordType || !pid)) return { live: 'an unrecognized file is already here' };
-  const writtenAt = Number(stats.mtimeMs);
-  const verdict = reason => ({ reason, identity: stats, pid, startedAt: owner?.startedAt, writtenAt });
-  // A live pid always wins, even over the boot rule: a wall-clock step after the lock was written
-  // can make a running bridge's lock look older than the boot. A pid reused by another process
-  // after a crash is refused here and settled by the witchcraft-daemon skill's status action.
-  if (pid !== undefined) return isAlive(pid) ? { live: `pid ${pid}, started ${owner.startedAt ?? 'at an unknown time'}` }
-    : verdict(`its process ${pid} has exited`);
-  if (writtenAt < bootTime) return verdict('it was written before the last boot');
-  return now - writtenAt > STALE_AFTER_MS ? verdict('it is empty or unreadable') : { live: 'it is being written' };
+  let kept = false;
+  try {
+    const stats = await handle.stat({ bigint: true }), text = await handle.readFile('utf8');
+    let owner;
+    try { owner = JSON.parse(text); } catch { owner = undefined; }
+    const pid = Number.isSafeInteger(owner?.pid) && owner.pid > 0 ? owner.pid : undefined;
+    if (recordType && (owner?.type !== recordType || !pid)) return { live: 'an unrecognized file is already here' };
+    const writtenAt = Number(stats.mtimeMs);
+    const verdict = reason => {
+      kept = hold;
+      return { reason, identity: stats, pid, startedAt: owner?.startedAt, writtenAt, ...(hold ? { handle } : {}) };
+    };
+    // A live pid always wins, even over the boot rule: a wall-clock step after the lock was written
+    // can make a running bridge's lock look older than the boot. A pid reused by another process
+    // after a crash is refused here and settled by the witchcraft-daemon skill's status action.
+    if (pid !== undefined) return isAlive(pid) ? { live: `pid ${pid}, started ${owner.startedAt ?? 'at an unknown time'}` }
+      : verdict(`its process ${pid} has exited`);
+    if (writtenAt < bootTime) return verdict('it was written before the last boot');
+    return now - writtenAt > STALE_AFTER_MS ? verdict('it is empty or unreadable') : { live: 'it is being written' };
+  } finally { if (!kept) await handle.close(); }
 }
 
 /**
@@ -57,6 +64,10 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
     ? `Cannot use the client ring at ${path.dirname(lockPath)} (${reason}). Check the ring lock at ${lockPath}.`
     : `A Witchcraft bridge owns ${lockPath} (${reason}). Stop it first; `
       + 'the witchcraft-daemon skill\'s status action shows whether that process is still the bridge.'), { code: 'LOCK_HELD' });
+  const judge = (name, hold) => staleReason(name, { now, bootTime, isAlive, fs, recordType, hold }).catch(error => {
+    if (error.code === 'ENOENT') return { gone: true };
+    throw error;
+  });
   const reclaimed = [];
   try {
     await handle.writeFile(JSON.stringify(record));
@@ -77,25 +88,71 @@ export async function acquireLock({ lockPath, record, tag, now = Date.now(), boo
       // claim, so it never moves a newer owner's file and opens a gap for a third writer.
       const claim = recordType && `${lockPath}.recover-${verdict.identity.dev}-${verdict.identity.ino}`;
       if (claim) {
-        try { await fs.link(temporary, claim); }
-        catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          throw refuse(`recovery is already claimed; retry, or if its recorded process has exited and no operation is running, set aside ${claim}`);
+        const claimed = held => refuse(`recovery is already claimed; retry, or if its recorded process has exited and no operation is running, set aside ${held}`);
+        for (let retry = 0; ; retry++) {
+          try { await fs.link(temporary, claim); break; }
+          catch (error) { if (error.code !== 'EEXIST') throw error; }
+          if (retry > 0) throw claimed(claim);
+          // A claimer that died while holding its claim would otherwise block every later start.
+          // The claim is a link to its claimer's record, so it is judged like the lock itself.
+          const holder = await judge(claim);
+          if (holder.gone) continue;
+          if (holder.live) throw claimed(claim);
+          // The claim is never renamed or moved. Only a holder of the exclusive guard keyed to the
+          // dead claim's identity removes a claim with that identity, and it judges the claim again
+          // under the guard, so the name it unlinks is that dead claim and never a newer live one.
+          const guard = `${claim}.recover-${holder.identity.dev}-${holder.identity.ino}`;
+          try { await fs.link(temporary, guard); }
+          catch (error) { throw error.code === 'EEXIST' ? claimed(guard) : error; }
+          // The dead claim's handle is held from this judgment through the unlink, so the claim
+          // cannot be replaced by a newer live claim with the judged identity in between.
+          let pinned;
+          try {
+            const again = await judge(claim, true);
+            pinned = again.handle;
+            if (!again.gone) {
+              if (again.live || !same(again.identity, holder.identity)) throw claimed(claim);
+              const current = await fs.lstat(claim, { bigint: true }).catch(error => {
+                if (error.code === 'ENOENT') return undefined;
+                throw error;
+              });
+              if (current && !same(current, again.identity)) throw claimed(claim);
+              if (current) await fs.unlink(claim).catch(error => { if (error.code !== 'ENOENT') throw error; });
+            }
+          } finally {
+            try { await pinned?.close(); }
+            finally { await releaseOwnedLock({ lockPath: guard, identity, tag, fs }); }
+          }
         }
       }
+      // The handle of the lock judged under the claim, held until the set-aside file is checked.
+      let pinned;
       try {
-        if (claim && !same(await fs.lstat(lockPath, { bigint: true }), verdict.identity)) throw refuse('another operation took it');
-        await fs.rename(lockPath, aside);
-      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      finally { if (claim) await releaseOwnedLock({ lockPath: claim, identity, tag, fs }); }
-      // Only the lock that was judged may be set aside. A racer's fresh lock taken by mistake goes
-      // back; if the path was taken again meanwhile, it is kept where it is, not deleted, and named.
-      if (!same(await fs.stat(aside, { bigint: true }), verdict.identity)) {
-        const restored = await fs.link(aside, lockPath).then(() => true, () => false);
-        if (!restored) throw refuse(`another start took it; a lock moved aside by mistake is kept at ${aside}`);
-        await fs.unlink(aside).catch(() => {});
-        throw refuse('another start took it');
-      }
+        try {
+          if (claim) {
+            // Judged again under the claim: the decision to set a lock aside rests on the record that is
+            // there now, not only on an inode number, which a new live lock can reuse after a clean release.
+            // The judged file stays open, so its inode cannot be reused before it is set aside.
+            const again = await judge(lockPath, true);
+            if (again.gone) continue;
+            if (again.live) throw refuse(again.live);
+            pinned = again.handle;
+            if (!same(again.identity, verdict.identity)) throw refuse('another operation took it');
+            if (!same(await fs.lstat(lockPath, { bigint: true }), again.identity)) throw refuse('another operation took it');
+          }
+          // Set-aside files are kept on purpose: each pins the judged inode, so it is never reused.
+          await fs.rename(lockPath, aside);
+        } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        finally { if (claim) await releaseOwnedLock({ lockPath: claim, identity, tag, fs }); }
+        // Only the lock that was judged may be set aside. A racer's fresh lock taken by mistake goes
+        // back; if the path was taken again meanwhile, it is kept where it is, not deleted, and named.
+        if (!same(await fs.stat(aside, { bigint: true }), verdict.identity)) {
+          const restored = await fs.link(aside, lockPath).then(() => true, () => false);
+          if (!restored) throw refuse(`another start took it; a lock moved aside by mistake is kept at ${aside}`);
+          await fs.unlink(aside).catch(() => {});
+          throw refuse('another start took it');
+        }
+      } finally { await pinned?.close(); }
       reclaimed.push({ path: aside, reason: verdict.reason });
     }
     // The lock is held from the link on. A temporary name left behind (antivirus holding it) is

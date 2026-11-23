@@ -38,7 +38,12 @@ export function resolveProgram(command) {
     if (['.cmd', '.bat'].includes(extension)) continue;
     // An absolute configured path keeps the old behaviour; only PATH-derived candidates must be .exe.
     if (process.platform === 'win32' && extension !== '.exe' && candidate !== command) continue;
-    try { if (fs.statSync(candidate).isFile()) return candidate; continue; } catch (error) {
+    try {
+      if (!fs.statSync(candidate).isFile()) continue;
+      // Off Windows a file on PATH without the execute bit would only fail later, at spawn.
+      if (process.platform !== 'win32') fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (error) {
       // A Store app's execution alias (WindowsApps\pwsh.exe) is a reparse point that stat
       // refuses with EACCES although it launches; take it when access says it exists (on
       // Windows X_OK checks existence, not executability: the .exe name is the only filter).

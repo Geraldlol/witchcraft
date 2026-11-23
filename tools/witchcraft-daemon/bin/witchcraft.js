@@ -36,7 +36,7 @@ export function parseArgs(argv) {
     const token = rest[index];
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
     if (token === '--clean') { options.clean = true; continue; }
-    if (token === '--clear') { options.clear = true; continue; }
+    if (token === '--clear' && command === 'journal') { options.clear = true; continue; }
     if (token === '--with-copilot') { options.withCopilot = true; continue; }
     if (token === '--with-agy') { options.withAgy = true; continue; }
     if (token === '--no-mcp') { options.noMcp = true; continue; }
@@ -73,7 +73,7 @@ export function parseArgs(argv) {
 
 export async function runBridge(config, options = {}, child = [], adapters = {}) {
   // Doctor and setup must start even before the native terminal dependencies load.
-  const [{ TerminalPair, attachTerminal }, { SessionSet }, { listConsoles }, { Outbox, watchSavedVariables },
+  const [{ TerminalPair, attachTerminal }, { SessionSet, addonSessions }, { listConsoles }, { Outbox, watchSavedVariables },
     { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants },
     { JournalStore, journalPath, observe }] = await Promise.all([
     import('../src/pty.js'), import('../src/sessions.js'), import('../src/console-list.js'), import('../src/outbox.js'),
@@ -370,8 +370,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         const cooldown = startCooldownSession
           ? { cooldownProtocol: 2, cooldownNonce, cooldownAck: cooldownReceiver?.ack ?? 0,
             cooldownChecksum: cooldownReceiver?.lastChecksum ?? 0 } : {};
-        // The model, context and last reply come from each agent's own session files.
-        const sessions = pair.snapshot().map(session => ({ ...session, ...sessionInfo?.get(session.id),
+        // The model, context and last reply come from each agent's own session files. A not-started
+        // AGY is left out, so a 0.3.1 addon (at most three sessions) still takes the frame.
+        const sessions = addonSessions(pair.snapshot()).map(session => ({ ...session, ...sessionInfo?.get(session.id),
           ...(session.id === 'claude' && claudeTools === false ? { tools: false } : {}) }));
         const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, cooldown });
         const published = await writer.publish({ changed: signature !== oldScreen, ack: outbox.ack,
@@ -563,9 +564,17 @@ Cooldown carrier retained for inspection: ${error.message}
     // The strip stays available wherever it is calibrated: the carrier's gate can refuse in game
     // (build mismatch, taint, combat), and then the strip is the only signal that tells the writer
     // which slot the addon wants. --no-pixels is the explicit way to run on the carrier alone.
+    let stripOutsideReported = false;
     if (config.region && !options.noPixels) capture = new CaptureStream({ region: config.region,
       onError: error => { void stop(error); },
+      onIdle: reason => {
+        if (reason !== 'outside' || stripOutsideReported) return;
+        stripOutsideReported = true;
+        process.stderr.write('\nWitchcraft: the calibrated strip is outside the game window; calibrate again '
+          + '(show /witch calibrate, then run witchcraft calibrate).\n');
+      },
       onFrame: image => {
+        stripOutsideReported = false;
         if (stopped || !image.foreground) return;
         const heartbeat = decodeHeartbeat(sampleFrame(image, { row: 1 }));
         const previousSeq = writer.cursor, previousNonce = writer.uiNonce;

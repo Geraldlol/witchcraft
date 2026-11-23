@@ -1,76 +1,91 @@
-# Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things (WITCHCRAFT)
+# WITCHCRAFT
+
+**Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things**
 
 https://github.com/user-attachments/assets/4ae5190a-4871-4f89-a894-2df423aef8a5
 
-*Real time, uncut: asking Claude about the character from inside the game, then having it fix a Lua error in another addon without leaving WoW.*
+*Real time, uncut: asking Claude about the character from inside the game, then having it fix a Lua error in another addon without ever alt-tabbing out of WoW.*
 
-**Claude Code, Codex CLI, GitHub Copilot CLI and Google Antigravity CLI (`agy`) inside WoW Forever.** Talk to your assistant from the game, continue your existing conversations, ask about your character and tracked quests, or have an agent work on your addons while you play. WITCHCRAFT connects the in-game window to the real assistant sessions on your Windows desktop.
+**Bring Claude Code, Codex CLI, GitHub Copilot CLI, and Google Antigravity (`agy`) straight into WoW Forever.** Chat with your coding agents while waiting on a flight path, ask what's left on your tracked quests, or have an assistant read a fresh Lua error and patch your addon on the spot. Witchcraft links a movable in-game terminal window to the real CLI sessions running on your machine.
 
 *Profession: Prompt Engineering (1/300).*
 
-[Download](https://github.com/Geraldlol/witchcraft/releases/latest) · [Install](#install) · [WoW MCP tools](docs/MCP.md) · [Changelog](CHANGELOG.md) · [Help and feedback](#help-and-feedback)
+[Download](https://github.com/Geraldlol/witchcraft/releases/latest) · [Install](#install) · [First run](#first-run) · [WoW MCP tools](docs/MCP.md) · [Changelog](CHANGELOG.md) · [Help & feedback](#help-and-feedback)
 
-The addon and companion are **free and open source (MIT)**. Your Claude Code, Codex, GitHub Copilot or Google Antigravity account and their normal usage costs are separate.
+Witchcraft is **free and open source (MIT)**. You bring your own Claude Code, Codex, Copilot, or Antigravity account (and whatever usage plan you normally have with them).
 
-## What you can do
+---
 
-| Feature | In game |
-|---|---|
-| **Four assistant terminals** | Claude, Codex, Copilot and AGY have separate tabs, unsent drafts, prompt history, colored output and scrollback. Copilot and AGY appear in game once started, and any tab can be shown or hidden from **... (Appearance) > Agent tabs**, `/witch tab <claude\|codex\|copilot\|agy> [on\|off]` or the addon's Options page. The footer shows model and context usage when available. |
-| **Work on your projects** | Choose the agents' working folder. Continue a running Claude Code session or resume a Codex thread; ask them to inspect, edit and debug the files they can normally access. Their usual permissions still apply. |
-| **Answer terminal prompts** | Use the slash-command menu, numbered choice buttons and **Keys** for permission prompts, model pickers, Enter, Escape, arrows and Interrupt. Unread markers and optional sound/text alerts tell you when an agent needs attention or finishes. |
-| **Compose and reuse prompts** | Shift-click item, quest and spell links into your draft; recall previous prompts; save snippets; or use **/ > Write a long prompt** for multiple lines. Copy the last reply and search the scrollback. |
-| **Ask about WoW** | MCP tools supply character, location, tracked quests, money, experience, rested bonus, your current situation and a bounded session journal of what changed this session. The Lua-error tool lets an assistant inspect recorded errors, warnings and blocked actions while working on a fix. |
-| **Guides and Adventures** | Request spoiler-controlled quest hints, keep a loot wishlist, group goals by dungeon, rehearse encounters by role, find zone detours, and keep a personal campaign passport with notes. |
-| **Make it fit your UI** | Move, resize, minimize, dock or lock the window; adjust font size, terminal column width (`/witch cols 40-160\|fit`), opacity and window layer; configure alerts, combat updates and keybindings. A separate desktop overlay also comes with the daemon. |
+## What you can do with it
 
-Guides and Adventures use a small, source-linked **Classic reference catalog**: seven Defias quest stages, twelve items across Deadmines, Wailing Caverns and Shadowfang Keep, dungeon lessons, zone detours and personal campaigns. These references are not verified Forever mechanics or drop tables. Guide buttons prepare editable prompts; loot acquisitions and passport stamps are recorded when you tell the assistant about them.
+- **Run up to four assistants side by side.** Claude, Codex, Copilot, and AGY each get their own tab, colored terminal output, scrollback, prompt history, and unsent draft. Only use one or two? Hide the rest from **... (Appearance) > Agent tabs**, `/witch tab`, or the AddOns Options page.
+- **Pick up the conversation you already started.** Point Witchcraft at a project folder and it joins your workflow instead of forcing a blank slate: on Windows, the Claude tab mirrors the live Claude Code console you already have open there, and on every platform the Codex tab resumes your latest thread in that folder.
+- **Handle terminal prompts without leaving the game.** Permission prompts and model pickers show up as clickable numbered buttons right above the input box. You also get a `/` slash-command menu, arrow/Escape/Interrupt keys, unread tab badges, and an optional raid-warning ping when an agent finishes a turn or needs an answer.
+- **Write real prompts comfortably.** Shift-click items, quests, and spells into your message, paste multi-line text (up to ~4,600 bytes), save reusable prompt snippets, search scrollback, or copy the agent's last reply in one click.
+- **Give your agents live eyes on your character.** Built-in local MCP tools let your assistants check your character, zone, tracked quests, gold, XP/rested bonus, group situation, and a session journal of recent milestones (`wow_get_session_log`)—plus a Lua error log (`wow_get_errors`) so an agent can inspect stack traces and verify fixes across `/reload`s.
+- **Explore Guides & Adventures.** Ask for spoiler-light quest nudges, track a dungeon loot wishlist, rehearse boss fights by role (tank, healer, or DPS), look up nearby zone detours, and stamp a personal campaign passport. *(Note: the built-in catalog covers Classic Defias quests and Deadmines, Wailing Caverns, and Shadowfang Keep as reference material—Forever custom changes aren't pre-verified.)*
+- **Make the window yours.** Resize, minimize, dock, or lock it; tune font size, terminal column width (`/witch cols fit`), background opacity, and frame strata; pause updates during combat; or pop open the optional desktop Electron overlay.
 
-## What's included
+## How it works under the hood
 
-| Component | Location | Purpose |
+WoW addons can't open network sockets or spawn processes—and they shouldn't be able to. Witchcraft bridges the gap locally:
+
+1. **Desktop → Game:** `init` generates a ring of tiny load-on-demand helper addons (`Witchcraft_Chunk_*`). Whenever terminal output changes, the desktop daemon writes the latest screen into the next chunk so WoW can load it on the fly—no `/reload` needed per message. When the ring eventually fills up, Witchcraft warns you at 90% and asks before reloading.
+2. **Game → Desktop:** Out of combat, Witchcraft sends your prompts, keypresses, and context snapshots through a temporary, verified-empty WoW keybinding (`bindings-cache.wtf`) and immediately restores it once acknowledged. A tiny **132 × 12 pixel strip** in the top-left corner acts as a fallback (and works during combat while WoW is focused). An optional Cooldown Viewer carrier is also enabled on exact client build `1.60.1.71037` and stays off on other builds.
+
+## What's in the repo
+
+| Component | Location | What it does |
 |---|---|---|
-| WoW addon | [`Witchcraft/`](Witchcraft/) | The in-game window, controls and context capture. |
-| Windows daemon and desktop overlay | [`tools/witchcraft-daemon/`](tools/witchcraft-daemon/) | Connect the game to local Claude Code, Codex, Copilot and AGY terminals. |
-| MCP server | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Up to 16 tools over local STDIO: 13 read-only tools and three optional tools that save local goals/passport records. |
-| Claude Code skill | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Start, stop, restart and check the daemon from Claude Code. |
+| **WoW addon** | [`Witchcraft/`](Witchcraft/) | The in-game terminal window, UI controls, error recorder, and context capture. |
+| **Desktop daemon & overlay** | [`tools/witchcraft-daemon/`](tools/witchcraft-daemon/) | Runs on your computer to connect WoW to local Claude, Codex, Copilot, and AGY sessions. |
+| **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only WoW tools and 3 optional wishlist/passport tools. |
+| **Claude Code skill** | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Lets you ask Claude to start, stop, restart, or check the daemon for you (Windows + `pwsh`). |
 
-**Download the full source to get all four.** The addon-only release ZIP contains only the `Witchcraft` folder. It still needs the desktop daemon from the source download or a clone.
+> **Grab the full source** (clone or **Source code (zip)** on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest)) so you get both the addon and the desktop daemon. The standalone `Witchcraft-X.Y.Z.zip` release asset contains only the `Witchcraft/` addon folder.
+
+---
 
 ## Requirements
 
-- Windows 10 or 11 and the **WoW Forever** client, interface `16001`.
-- Linux and macOS are experimental and **need testers**: the daemon can read the game's X11/XWayland window under Wine or Proton on Linux, and the game's Quartz window via CoreGraphics on macOS. See [Linux and macOS (experimental)](tools/witchcraft-daemon/README.md#linux-and-macos-experimental) and please report what you find.
-- [Node.js](https://nodejs.org/) **24 or newer**.
-- [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex), [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started), or Google Antigravity CLI (`agy`), installed and already signed in. The daemon uses native executables (`claude.exe` / `codex.exe` / `copilot.exe` / `agy.exe`). For npm-installed Copilot on Windows it can also launch the package with Node directly; other `.cmd` and `.bat` wrappers do not work. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if yours are not found.
-- PowerShell for setup. The optional Claude Code management skill requires **PowerShell 7** (`pwsh`).
+- **WoW Forever** client (interface `16001`). Other WoW clients aren't supported.
+- **OS:**
+  - **Windows 10 or 11** — primary, tested setup.
+  - **macOS & Linux (experimental — testers wanted!)** — macOS reads the `World of Warcraft` window via Quartz/CoreGraphics (needs **Screen Recording** permission for your terminal app); Linux reads the X11/XWayland window under Wine or Proton (`python3`, `libX11`, `libXRes`). See [Linux and macOS notes](tools/witchcraft-daemon/README.md#linux-and-macos-experimental) and let us know how it goes!
+- **[Node.js](https://nodejs.org/) 24 or newer.**
+- At least one supported CLI installed and signed in:
+  - [Claude Code](https://code.claude.com/docs/en/overview) (`claude`)
+  - [Codex CLI](https://github.com/openai/codex) (`codex`)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started) (`copilot`)
+  - Google Antigravity CLI (`agy`)
+  - On Windows, the daemon launches native `.exe` binaries directly (plus npm-installed `@github/copilot` via Node); `.cmd`/`.bat` shims are skipped. See [custom executable paths](tools/witchcraft-daemon/README.md#custom-executable-paths) if an agent isn't in your default `PATH`.
+- **PowerShell** on Windows (the built-in Windows PowerShell handles capture; the optional Claude Code management skill uses **PowerShell 7** / `pwsh`).
 
-The default binding carrier is not build-pinned; qualify it once per daemon/UI session with `/witch bindprobe`. The optional production cooldown carrier is exact-build-gated in [`Witchcraft/Evidence.lua`](Witchcraft/Evidence.lua), user-confirmed on **1.60.1.71037**, and stays off on every other build. Keep the screen strip calibrated as a separate fallback. The AddOns-state experiment remains a dormant source-only prototype: it is not loaded by the addon, connected to the daemon or runtime-qualified. This release targets Forever; other WoW clients are outside its compatibility claim.
+---
 
 ## Install
 
-1. **Get the full source.** Download **Source code (zip)** from the [latest release](https://github.com/Geraldlol/witchcraft/releases/latest) and extract it somewhere permanent, or clone:
+1. **Clone or download the repository** somewhere permanent:
 
-   ```powershell
+   ```sh
    git clone https://github.com/Geraldlol/witchcraft.git
    ```
 
-2. **Install the addon.** Copy the source's `Witchcraft` folder into your Forever client's `Interface\AddOns` folder. The result must be `Interface\AddOns\Witchcraft\Witchcraft.toc`, without an extra nested folder. The addon-only release ZIP provides the same folder.
+2. **Copy the addon into WoW.** Copy the `Witchcraft` folder into your Forever client's `Interface/AddOns` directory so `Witchcraft.toc` sits at `Interface/AddOns/Witchcraft/Witchcraft.toc` (no extra nested folder).
 
-3. **Point the daemon at that client.** In the source root, copy `wow.config.example.json` to `wow.config.json` and edit `addonsDir`. For example:
+3. **Tell the daemon where WoW lives.** In the repo root, copy `wow.config.example.json` to `wow.config.json` and point `addonsDir` at that `Interface/AddOns` folder:
 
    ```json
    {
-      "addonsDir": "C:/Program Files/World of Warcraft/_forever_/Interface/AddOns"
+     "addonsDir": "C:/Program Files/World of Warcraft/_forever_/Interface/AddOns"
    }
    ```
 
-   Use your actual Forever client path, with forward slashes or doubled backslashes. Log into that client at least once so it has a `WTF\Account` folder.
+   *(Use forward slashes or escaped `\\` backslashes. Make sure you've logged into the client at least once so `WTF/Account` exists.)*
 
-4. **Set up the daemon.** Open a terminal in the source root, then run:
+4. **Install daemon dependencies and create the helper ring.**
 
-   On Windows (PowerShell):
-
+   **Windows (PowerShell):**
    ```powershell
    cd tools\witchcraft-daemon
    npm.cmd ci --ignore-scripts --no-fund
@@ -78,8 +93,7 @@ The default binding carrier is not build-pinned; qualify it once per daemon/UI s
    node bin/witchcraft.js init --ring 3000
    ```
 
-   On macOS and Linux:
-
+   **macOS & Linux:**
    ```sh
    cd tools/witchcraft-daemon
    npm ci --ignore-scripts --no-fund
@@ -87,155 +101,169 @@ The default binding carrier is not build-pinned; qualify it once per daemon/UI s
    node bin/witchcraft.js init --ring 3000
    ```
 
-   `init` creates 3,000 small `Witchcraft_Chunk_*` helper addons for returning terminal output to the game. Keep them alongside `Witchcraft`. To use the optional desktop overlay, also run `node node_modules/electron/install.js` from the daemon folder.
+   - Have multiple WoW accounts under `WTF/Account`? Pass `--account 'ACCOUNT_NAME'` to `init` once—it'll remember your choice.
+   - Want the optional desktop overlay too? Run `node node_modules/electron/install.js` inside `tools/witchcraft-daemon`.
 
-   If several account folders exist, use `node bin/witchcraft.js init --ring 3000 --account 'ACCOUNT_FOLDER'`. Use the exact folder name under that client's `WTF\Account`; the selection is saved for later commands.
+5. **Restart WoW completely.** A full client restart (not just `/reload`) is needed the first time so WoW discovers the 3,000 `Witchcraft_Chunk_*` helpers and the bundled font. Make sure Witchcraft and its helpers are enabled in your character-select AddOns list.
 
-5. **Restart WoW completely** so it discovers the helper addons and bundled font. Enable WITCHCRAFT and its helper addons in the character-select AddOns list.
+---
 
 ## First run
 
-From `tools/witchcraft-daemon`, run `node bin/witchcraft.js doctor` for a read-only setup and connection check. It works before installing daemon dependencies. If you use a single assistant, add the same `--only` option you plan to give `run`. Follow the first **Next step** and repeat the command. For a support report, add `--json`. The report includes versions, counts and link status, and omits names, paths and terminal content.
+Not sure if everything's wired up yet? From `tools/witchcraft-daemon`, run:
 
-### 1. Calibrate the screen strip
+```sh
+node bin/witchcraft.js doctor
+```
 
-In game, type `/witch calibrate`. Keep its colored strip visible and uncovered at the top-left of the game window. From `tools\witchcraft-daemon`, run:
+`doctor` is read-only, works even before `npm ci`, and tells you the single next step to take (add `--only codex`, `--only claude`, etc. if you only use one agent, or `--json` for a redacted support summary with no personal paths or names).
 
-```powershell
+### 1. Calibrate the fallback pixel strip (once)
+
+In game, type `/witch calibrate`—a small colored bar will appear at the top-left of your WoW window. Keep it uncovered and run:
+
+```sh
 node bin/witchcraft.js calibrate
 ```
 
-Wait for **Calibration saved**, then type `/witch calibrate off` in game. Recalibrate after moving the game window or changing resolution, display scaling or UI scale.
+Once it says **Calibration saved**, type `/witch calibrate off` in game. You only need to redo this if you move the game window or change resolution / UI scale.
 
-Once calibrated, ordinary `run` also reads this small strip. It provides a fallback when a fast transport is unavailable and helps establish the connection. During normal use, strip capture only runs while WoW is in the foreground. See [transport and capture details](tools/witchcraft-daemon/README.md#transport-and-lifecycle).
+### 2. Start the daemon
 
-### 2. Start your assistants
+From `tools/witchcraft-daemon`, point `--cwd` at the project folder you want your agents working in:
 
-From `tools\witchcraft-daemon`, point `--cwd` at the existing project folder you want them to work in:
-
-```powershell
-node bin/witchcraft.js run --cwd 'C:\path\to\your\project'
+```sh
+node bin/witchcraft.js run --cwd '/path/to/your/project'
 ```
 
-This starts Claude and Codex. Add `--with-copilot` to also start Copilot, or `--with-agy` to also start AGY. `--tab` only picks which terminal the daemon window shows first and never starts one, so `--tab copilot` / `--tab agy` needs `--with-copilot` / `--with-agy`, `--only`, or a configured `commands.<agent>`. **If you only have one assistant installed**, use one of these instead:
+By default this starts **Claude** and **Codex**. You can tailor which agents launch:
 
-```powershell
-node bin/witchcraft.js run --only claude --cwd 'C:\path\to\your\project'
-node bin/witchcraft.js run --only codex --cwd 'C:\path\to\your\project'
-node bin/witchcraft.js run --only copilot --cwd 'C:\path\to\your\project'
-node bin/witchcraft.js run --only agy --cwd 'C:\path\to\your\project'
+```sh
+# Add Copilot or Antigravity alongside Claude & Codex:
+node bin/witchcraft.js run --with-copilot --cwd '/path/to/your/project'
+node bin/witchcraft.js run --with-agy --cwd '/path/to/your/project'
+
+# Or run just a single assistant:
+node bin/witchcraft.js run --only claude --cwd '/path/to/your/project'
+node bin/witchcraft.js run --only codex --cwd '/path/to/your/project'
+node bin/witchcraft.js run --only copilot --cwd '/path/to/your/project'
+node bin/witchcraft.js run --only agy --cwd '/path/to/your/project'
 ```
 
-By default, Claude mirrors the newest running interactive Claude Code session in that folder, and Codex resumes the newest top-level Codex thread there. Copilot and AGY start fresh; use `/resume` in the Copilot tab to choose a saved conversation. Automatic folder-based session discovery applies to Claude and Codex. A tab with no matching session starts fresh. Add `--no-current` to start fresh deliberately. The daemon window tells you which sessions it joined.
+A few handy flags:
+- `--no-current` starts fresh Claude/Codex sessions instead of joining your existing ones in `--cwd`.
+- `--overlay` launches the optional click-through desktop HUD (**Ctrl+Shift+H** toggles interactive mode).
+- **Ctrl+]** in the desktop console cycles which agent terminal is shown there, independent of which tab you're viewing in WoW.
+- **To stop the daemon:** close its console window (or press **Ctrl+Break** on Windows). Pressing **Ctrl+C** sends a normal interrupt to the active assistant rather than killing the bridge. Any Windows Claude console that Witchcraft merely mirrored stays open and yours.
 
-Updating from 0.1.x: update the addon and the daemon together. With an older two-tab daemon the addon hides the Copilot and AGY tabs, falls back to Claude if an absent tab was selected, and drops any queued messages for absent tabs with a chat notice.
-
-The desktop overlay is off by default. Add `--overlay`, or set `"overlay": true` in `.local/config.json`, to start it after the game link is up. In the overlay, HUD mode passes clicks through; **Ctrl+Shift+H** brings back the interactive workbench. `--no-overlay` overrides a saved setting.
+> **Upgrading?** Always update the `Witchcraft/` addon folder and `tools/witchcraft-daemon` together from the same release/commit.
 
 ### 3. Connect in game
 
-1. After starting the daemon, run `/reload` outside combat, then `/witch` or click the minimap book button.
-2. Run `/witch bindprobe` outside combat once per daemon/UI session (or `/witch bindprobe auto` to probe automatically on connect). Wait for the message confirming host decode, acknowledgement and cleanup succeeded.
-3. Select Claude, Codex, Copilot or AGY and send a short prompt. Confirm its reply appears in the same tab. `/witch status` shows connection details if it does not.
+1. Back in WoW, run `/reload` (out of combat), then type `/witch` or click the book icon on your minimap.
+2. Run `/witch bindprobe` once out of combat to qualify the fast keybinding link for the session—or run `/witch bindprobe auto` once if you want Witchcraft to probe automatically whenever it connects.
+3. Pick a tab, type a message, and hit **Enter**!
 
-The input box's Enter sends your draft; the separate **Enter** button accepts a terminal prompt. Use **Keys** for navigation and Interrupt. The desktop terminal remains usable, and **Ctrl+]** switches its selected agent independently of the game tabs.
+*(Tip: hitting **Enter** inside the input box sends your message; clicking the separate **Enter** button sends a raw Enter keypress to the terminal—handy for interactive menus.)*
 
-Terminal updates pause during combat by default; settings can enable them. Normal messages do not need a reload. When the finite helper-addon ring is exhausted, WITCHCRAFT schedules a guarded reload outside combat.
+---
 
-**To stop:** close the daemon console or press **Ctrl+Break**. Ordinary **Ctrl+C** interrupts the selected assistant. Stopping the daemon ends sessions it launched; a Claude console it merely mirrored stays yours.
+## Giving your agents WoW context (MCP)
 
-## Give the assistants WoW context
+Any Claude, Codex, or Copilot terminal that Witchcraft **launches itself** gets the WoW MCP tools automatically.
 
-Terminals WITCHCRAFT launches get the MCP tools automatically. A Claude Code session it **joins** needs the server registered once in the same working folder:
+- **Joined Claude sessions (Windows):** Because Witchcraft attaches to a Claude Code process you already started, register the MCP server once for that project folder:
+  ```sh
+  node bin/witchcraft.js mcp-setup --apply --cwd '/path/to/your/project'
+  ```
+  Then restart that Claude session (`claude --continue`) and restart Witchcraft. (If a joined Claude session is missing the tools, the in-game footer will let you know.)
+- **Antigravity (`agy`):** Register `witchcraft_wow` in your Antigravity MCP config (`agy mcp add`) pointing `node` at `tools/witchcraft-daemon/bin/witchcraft-mcp.js --cache <absolute-path-to-.local/wow-context.json> --allow-local-writes`.
 
-```powershell
-node bin/witchcraft.js mcp-setup --apply --cwd 'C:\path\to\your\project'
-```
+Context sharing starts **enabled**—click **WoW context** in the window footer (or use `/witch context off`) anytime you want to pause it. All tools are strictly read-only on the game side; they never perform gameplay actions.
 
-Then restart that Claude session and WITCHCRAFT. Open **WoW context** in the footer to check sharing, pause it or request an update. **Sharing starts enabled** and its setting persists across reloads. Tools request snapshots when needed and report missing, stale or unavailable data.
+Things you can ask in game:
+- *"Check my WoW context—where am I, and what's left on my tracked quests?"*
+- *"What changed in my session log over the last 20 minutes?"*
+- *"Grab my latest Lua error, track down why it's happening in this repo, and fix it."*
+- *"Give me a spoiler-free nudge for this Defias quest."*
+- *"Which dungeon knocks out the most items on my loot wishlist?"*
+- *"Quiz me on the Deadmines bosses as a healer, one fight at a time."*
 
-Try:
+See [docs/MCP.md](docs/MCP.md) for all 16 tools and manual MCP setup details.
 
-- "Use the WoW tools to tell me where I am and what remains for my tracked quests."
-- "Read my latest Lua error, find the cause in this addon project, and propose a fix."
-- "Give me a nudge for this Defias quest without spoiling the solution."
-- "Which dungeon covers the most items on my saved loot wishlist?"
-- "Rehearse Deadmines with me as a healer, one question at a time."
+---
 
-The tools read game context; the three local-write tools save loot goals and passport records on your PC. They do not perform gameplay actions. `--no-mcp` skips automatic tool configuration for launched terminals; `/witch context off` controls game-data sharing, including for an already joined session.
+## Useful in-game commands
 
-See [the full tool list and MCP setup](docs/MCP.md), including how to connect another MCP client. Launching the server directly exposes the 13 read-only tools by default; `--allow-local-writes` adds the three personal-record tools.
-
-## Useful in-game controls
-
-| Command or control | Use |
+| Command / shortcut | What it does |
 |---|---|
-| `/witch` | Show or hide the window. |
-| `/witch settings` | Window, font, opacity, notifications, combat updates, prompt history and sharing options. |
-| `/witch status` | Check build, connection, ring cursor and pending input. |
-| `/witch tab <claude\|codex\|copilot\|agy> [on\|off]` | Show, hide or toggle an agent tab (`/witch tabs` lists all four). |
-| `/witch cols 40-160\|fit` | Request daemon terminal width (40-160 columns, or fit to window width). |
-| `/witch bindprobe [auto\|off]` | Qualify the binding carrier once, or toggle automatic probe on connect. |
-| `/witch errors` / `/witch errors clear` | Show the recorded-error count and newest entry, or clear the history. |
-| `/witch errors list` / `/witch errors watch <n>` | Select a Lua error to follow across reloads. After retrying the original action, run `/witch errors checked` and read the result with `/witch errors status`. |
-| `/witch snippet add <prompt>` / `list` / `remove <n>` | Manage reusable prompts in the **/** menu. |
-| `/witch guide` / `/witch quest [nudge\|details\|solution] <quest>` | Open Guides or prepare a quest-help prompt. |
-| `/witch loot [item]` | Prepare a loot-goal prompt; omit the item to ask for your plan. |
-| `/witch rehearse [tank\|healer\|damage] [dungeon]` | Prepare a dungeon-practice prompt. |
-| `/witch nearby [zone]` / `/witch passport` | Ask for detours or your personal campaign records. |
-| `/witch context on\|off\|refresh\|clear-journal` | Enable, pause or refresh context sharing, or clear the session journal. |
-| **Key Bindings > AddOns > Witchcraft** | Bind toggle, open-and-type, switch-tab and interrupt actions. |
+| `/witch` (or minimap book) | Show or hide the Witchcraft window. |
+| `/witch settings` | Open **Esc > Options > AddOns > Witchcraft** (window behavior, alerts, combat updates, tabs, fonts). |
+| `/witch status` | Show version, connection state, active transport lane, and ring usage. |
+| `/witch tab <claude\|codex\|copilot\|agy> [on\|off]` | Show, hide, or toggle an agent tab (`/witch tabs` lists all four). |
+| `/witch cols 40-160\|fit` | Resize the daemon's terminal width to 40–160 columns, or `fit` to your current window width. |
+| `/witch bindprobe [auto\|off]` | Qualify the fast keybinding link once, or enable/disable automatic probing on connect. |
+| `/witch context on\|off\|refresh\|clear-journal` | Resume, pause, or refresh WoW context sharing, or wipe the local session journal. |
+| `/witch errors` / `list` / `clear` | Inspect recorded Lua errors, warnings, and blocked actions, or clear the list. |
+| `/witch errors watch <n>` / `checked` / `status` | Follow a specific error across `/reload`s and mark reproduction attempts to verify a fix. |
+| `/witch pending` / `inspect <id>` / `resend <id>` / `discard <id>` | Review, retry, or discard unconfirmed prompts kept across a daemon restart. |
+| `/witch snippet add <prompt>` / `list` / `remove <n>` | Save reusable prompts into the **/** quick-command menu. |
+| `/witch guide` · `quest` · `loot` · `rehearse` · `nearby` · `passport` | Open Guides/Adventures or prefill a quest, wishlist, dungeon-practice, detour, or passport prompt. |
+| `/witch reload` (or `/witch reset`) | Reload the WoW UI (waits until you're out of combat). |
+| **Key Bindings > AddOns > Witchcraft** | Bind keys to toggle the window, open-and-focus the input box, cycle tabs, or interrupt an agent. |
 
-The [full addon guide](Witchcraft/README.md) covers scrolling, copying, multiline prompts, window controls and diagnostic commands. The [daemon guide](tools/witchcraft-daemon/README.md) covers custom executables, session attachment and transport details.
+For the full rundown on scrolling, multiline drafts, error watching, and transport internals, see the [Addon Guide](Witchcraft/README.md) and the [Daemon Guide](tools/witchcraft-daemon/README.md).
 
-## Claude Code management skill
+---
 
-The included [witchcraft-daemon skill](.claude/skills/witchcraft-daemon/SKILL.md) lets you ask Claude to **"start Witchcraft"**, **"restart Witchcraft"** or **"check the Witchcraft daemon"**. It opens the daemon in its own console, stops it cleanly, and checks the lock, helper-addon ring and context cache. Complete installation and calibration first.
+## Managing the daemon from Claude Code
 
-- Claude Code sessions started inside this repository discover the skill automatically.
-- For other projects, copy `.claude\skills\witchcraft-daemon` to `%USERPROFILE%\.claude\skills\witchcraft-daemon`. Set `WITCHCRAFT_HOME` to the full source checkout path, or pass `-Repo` to its script.
-- The skill requires PowerShell 7 (`pwsh`). By default, its agents work in and join sessions from Claude's current folder.
+If you use Claude Code on Windows with PowerShell 7 (`pwsh`), the bundled [witchcraft-daemon skill](.claude/skills/witchcraft-daemon/SKILL.md) lets you just say **"start Witchcraft"**, **"restart Witchcraft"**, or **"check the Witchcraft daemon"**.
+
+- Sessions opened inside this repo pick up the skill automatically.
+- To use it from other repositories, copy `.claude/skills/witchcraft-daemon` to `%USERPROFILE%\.claude\skills\witchcraft-daemon` and set `WITCHCRAFT_HOME` to your Witchcraft checkout path.
+
+---
 
 ## Troubleshooting
 
-| Symptom | Check |
+| Symptom | Fix |
 |---|---|
-| `Cannot find executable claude`, `codex`, `copilot` or `agy` | Use `--only` for your installed assistant, or configure its native `.exe` path in [the daemon's local config](tools/witchcraft-daemon/README.md#custom-executable-paths). A working `.cmd` wrapper alone is insufficient; an npm-installed `@github/copilot` is found and run through Node. |
-| `--tab copilot` or `--tab agy names a terminal that is not started` | `--tab` never starts a terminal. Add `--with-copilot` / `--with-agy`, use `--only`, or configure `commands.<agent>`. |
-| No Copilot or AGY tab in game | The tab turns on automatically once per host session when the daemon starts that agent, or toggle it anytime via **... (Appearance) > Agent tabs**, **Options > Tabs**, or `/witch tab <copilot\|agy> on`. |
-| No calibration strip found | Run `/witch calibrate`, leave the strip uncovered, and retry. Calibration captures the virtual desktop once; very large multi-monitor layouts can exceed its 16-million-pixel limit. |
-| Window opens but replies stop | Keep WoW in front when relying on the strip; check `/witch status`, the daemon console and calibration. After a daemon restart, `/reload`, then repeat `/witch bindprobe` outside combat. Combat pauses terminal updates by default. |
-| Joined Claude has no WoW tools | Run `mcp-setup --apply` with the same `--cwd`, then restart that Claude session and the daemon. The footer reports when the joined session lacks the tools. |
-| Context is stale or unavailable | Check sharing in **WoW context**, request an update and let delivery finish. Long quest snapshots take longer than character data, especially over the strip. |
-| `A Witchcraft bridge owns ... bridge.lock` | Check the running daemon or the skill's status action. Stop the existing daemon cleanly before starting another; dead-process locks are handled on startup. |
-| Codex's IDE panel does not show the game conversation | The game uses a second CLI client on the resumed thread. Reload the thread in the extension to see appended turns. |
+| `Cannot find executable claude` / `codex` / `copilot` / `agy` | Pass `--only <agent>` if you only have one installed, or set its binary path in `.local/config.json` ([details](tools/witchcraft-daemon/README.md#custom-executable-paths)). On Windows, `.cmd`/`.bat` wrappers are ignored in favor of real `.exe` binaries. |
+| `--tab copilot` or `--tab agy names a terminal that is not started` | `--tab` only chooses which tab is focused first. Add `--with-copilot` / `--with-agy`, use `--only`, or add an entry under `commands` in `.local/config.json`. |
+| Copilot or AGY tab isn't showing in game | Make sure both the addon and daemon are updated (`0.4.0+`) and the agent was started, or toggle it on via **... > Agent tabs** or `/witch tab <copilot\|agy> on`. |
+| `No exact Witchcraft calibration strip found` | Type `/witch calibrate` in game, make sure nothing covers the top-left corner of WoW, and run `calibrate` again. On macOS, check that your terminal app has **Screen Recording** permission in System Settings. |
+| Window opens, but replies stop updating | Check `/witch status` and `node bin/witchcraft.js doctor`. Remember that combat pauses terminal updates by default, and if you're relying solely on the pixel strip, WoW needs to be the active foreground window. After restarting the daemon, `/reload` and run `/witch bindprobe` out of combat. |
+| Joined Claude tab says `no WoW tools` | Run `node bin/witchcraft.js mcp-setup --apply --cwd '<same-folder>'`, restart that Claude session (`claude --continue`), and restart Witchcraft. |
+| `A Witchcraft bridge owns ... bridge.lock` | Another daemon is already running! Close it cleanly first (crashed/stale locks are cleaned up automatically on startup). |
+| Codex VS Code panel doesn't show my in-game messages | Witchcraft attaches a second CLI client to the same thread—reload the thread in the VS Code extension to see the new turns. |
+
+---
+
+## Security & privacy
+
+- **Treat every enabled WoW addon as having shell access while Witchcraft runs.** World of Warcraft puts all enabled addons in a single shared Lua environment with no sandboxing between them—meaning another addon could drive Witchcraft's UI or queue prompts into your open agent tabs. Only run Witchcraft alongside addons you trust.
+- **100% local bridge.** Witchcraft opens no network ports and runs no cloud service. It uses local files and a tiny **132 × 12** screen region (captured only while WoW is focused, or disabled completely with `--no-pixels`). Your assistants themselves still talk to Anthropic, OpenAI, GitHub, or Google under their normal terms whenever you send prompts or tool outputs.
+- **You control context sharing.** Toggle sharing anytime from **WoW context** in the footer or `/witch context off`. Pausing sharing clears the live context cache and stops recording new journal events; previously recorded local journal history stays on disk until you run `/witch context clear-journal` or `node bin/witchcraft.js journal --clear`.
+- **Local state stays local.** Daemon logs, calibration, context cache, journal, wishlists, and passport stamps live in git-ignored `tools/witchcraft-daemon/.local/`. Addon settings, retained drafts, and Lua error history live in WoW's `WitchcraftDB` SavedVariables.
+
+## Updating & uninstalling
+
+- **Updating:** Stop the daemon first, update both `Witchcraft/` and `tools/witchcraft-daemon` together (keeping your `wow.config.json`, `.local/`, and WoW SavedVariables), re-run the `npm` install/rebuild steps if `package-lock.json` changed, start the daemon, and `/reload` in game.
+- **Uninstalling:** Stop the daemon, close WoW, and delete `Witchcraft` plus all `Witchcraft_Chunk_*` folders from `Interface/AddOns`. Delete `WitchcraftDB` from SavedVariables and `tools/witchcraft-daemon/.local/` only if you also want to wipe your saved preferences, wishlist, and passport.
+
+## Contributing & tests
+
+- **Addon checks (root):** `luacheck Witchcraft` and `lua5.1 tests/witchcraft/run.lua` (runs offline against mocked WoW APIs).
+- **Package verifier (root):** `python3 -B tests/test_release_package.py`.
+- **Daemon suite (`tools/witchcraft-daemon`):** Requires Node 24+ (plus Python 3 and `pwsh` 7 on Windows for the full native PTY/capture suite). Install locked dependencies and run `npm test`.
 
 ## Help and feedback
 
-For setup help or a bug, [open a report](https://github.com/Geraldlol/witchcraft/issues/new?template=bug_report.md). Include your WITCHCRAFT version, Forever client build, which assistant you use, and what happened. The template lists useful diagnostics; remove personal paths, account details and private conversation text before sharing them.
-
-Have an idea? [Describe what you want to do in game](https://github.com/Geraldlol/witchcraft/issues/new?template=feature_request.md), or [check existing issues](https://github.com/Geraldlol/witchcraft/issues) for the same problem. If the project is useful, a GitHub star makes it easier to find again, and feedback from your first setup helps improve the next release.
-
-## Security and privacy
-
-- **Every addon you have enabled can type into every running agent session and read their output while the daemon runs.** WoW gives addons no isolation from one another. Run WITCHCRAFT alongside addons you trust as much as a shell.
-- The bridge uses local files and screen capture and opens no network listener. Calibration captures the virtual desktop once to find the strip; normal capture reads only the calibrated **132 × 12 pixel** region while WoW is foreground. It is active on ordinary `run` after calibration unless `--no-pixels` is set.
-- Session discovery reads local Claude Code and Codex records under `~/.claude` and `~/.codex`. The bridge has no separate upload service. The assistants use their normal providers: prompts, file content and tool results you give them can be sent to those services under their own terms.
-- Game-context sharing starts enabled. Pause it in the footer or with `/witch context off`; the desktop cache clears when the pause reaches the daemon. Previously recorded local session journal history remains readable until cleared with `witchcraft journal --clear` or `/witch context clear-journal`. Normal assistant tool approvals still apply.
-- Calibration, bridge logs, cached context, session journal, loot goals and passport records live under ignored `tools/witchcraft-daemon/.local/`. Addon preferences, pending input and error history use the client's `WitchcraftDB` SavedVariables.
-
-## Updating and uninstalling
-
-**Update:** stop the daemon first, including older releases running from other folders. Update the addon and daemon together and preserve `wow.config.json`, `tools/witchcraft-daemon/.local/` and your WoW SavedVariables. If `package-lock.json` changed, repeat the dependency setup from [Install](#install). Restart the daemon and `/reload`. Fully restart WoW if new addon folders or fonts were added.
-
-**Uninstall:** stop the daemon and close WoW, then remove `Witchcraft` and the `Witchcraft_Chunk_*` folders created for it from that client's `Interface\AddOns`. Keep SavedVariables and `.local/` if you want your preferences, goals and passport for a later reinstall; remove them only if you also want to erase that state. Remove any copied management skill and local MCP registration you added.
-
-## Contributor checks
-
-From the repository root, run `lua5.1 tests/witchcraft/run.lua` for the addon regression suite and `luacheck Witchcraft` for lint. The Lua tests supply their own WoW API fixtures. The Windows daemon suite needs Node 24, Python 3 available as `python3`, and PowerShell 7 available as `pwsh`. From `tools/witchcraft-daemon`, install the locked dependencies and run `npm test`. The suite exercises the native terminal with synthetic child processes and temporary directories. Run `python3 -B tests/test_release_package.py` from the root for the package verifier.
+Run into a snag during setup or hit a weird edge case? [Open a bug report](https://github.com/Geraldlol/witchcraft/issues/new?template=bug_report.md) (running `node bin/witchcraft.js doctor --json` gives you a safe, redacted diagnostic block to paste). Have a cool idea for an in-game workflow? [Drop a feature request](https://github.com/Geraldlol/witchcraft/issues/new?template=feature_request.md)—and if Witchcraft makes your time in Azeroth more fun, a star on the repo is always appreciated!
 
 ## License
 
-[MIT](LICENSE). Bundled third-party components keep their own licenses: Ace3 and CallbackHandler ([BSD-style](Witchcraft/Libs/LICENSE-Ace3.txt)), LibStub (public domain), and DejaVu Sans Mono ([font license](Witchcraft/Media/LICENSE-DejaVu.txt)). npm dependencies are installed from `package-lock.json` under their own licenses.
+[MIT](LICENSE). Bundled third-party libraries keep their own licenses: Ace3 and CallbackHandler ([BSD-style](Witchcraft/Libs/LICENSE-Ace3.txt)), LibStub (public domain), and DejaVu Sans Mono ([font license](Witchcraft/Media/LICENSE-DejaVu.txt)).
 
-WITCHCRAFT is a fan project. It is not affiliated with or endorsed by Blizzard Entertainment, Anthropic, OpenAI, GitHub or Google.
+*WITCHCRAFT is an independent fan project and is not affiliated with or endorsed by Blizzard Entertainment, Anthropic, OpenAI, GitHub, or Google.*

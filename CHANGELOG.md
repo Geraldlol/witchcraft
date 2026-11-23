@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-11-23
 
 - Add experimental macOS (`darwin`) support: `capture/capture-strip.py` now includes a Quartz/CoreGraphics window reader (`CGWindowListCopyWindowInfo` / `CGWindowListCreateImage`), `resolveProgram` checks POSIX `~/.local/bin/claude` and macOS Antigravity paths, default `run` on macOS/Linux launches Claude in its PTY instead of invoking Windows console mirroring, and CI runs the portable daemon and capture suite on `macos-latest` and `ubuntu-latest` alongside `windows-latest`.
 - Add Google Antigravity CLI (`agy`, tab **AGY**) as a fourth agent tab across the addon, daemon (`--only agy`, `--with-agy`, `--attach agy=...`, `commands.agy`), desktop overlay (`Alt+4`) and `witchcraft-daemon` management skill, with automatic Windows `%LOCALAPPDATA%\agy\bin\agy.exe` discovery and AGY slash-command menu entries.

@@ -21,6 +21,8 @@
 - Daemon: a not-started AGY tab is no longer listed to the addon, so the 0.3.1 addon keeps working with a current daemon. Take the addon and the daemon from the same revision; the AGY tab needs addon 0.4.0 or later.
 - Daemon: `init` builds each helper folder completely before putting it in place and names an incomplete folder to remove; a start clears old helper slots above a smaller ring; `doctor` reports another installation holding the client's ring lock before advising a start.
 - Daemon: Codex session resume compares project paths with case on Linux; ring lock recovery judges the lock again before setting it aside, and a dead recovery claim no longer blocks later starts; the macOS reader reads the window list once per cycle and reads again when the display scale changed under an unmoved window.
+- Daemon: ring lock recovery keeps the lock it judged, and a recovery claim it judged, open until it has set them aside, so a new owner's file cannot take their identity in between.
+- Daemon: the session journal's clear markers are separate files that cannot move back, so a clear that lost its lock and lands late no longer replaces a newer clear. Restart running MCP clients after updating: an adapter from before this change does not read the new markers.
 
 ## 0.3.1 - 2026-11-22
 

@@ -16,7 +16,7 @@ npx witchcraft-daemon@0.5.0 init --ring 3000
 npx witchcraft-daemon@0.5.0 doctor
 ```
 
-Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.0 run --only codex`. On Windows, `npx.cmd` also works. Linux builds of the native terminal dependency may need Python 3, make and a C++ compiler.
+Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.0 run --only codex`. On Windows, `npx.cmd` also works. On Linux, the terminal dependency builds from source and needs Python 3, make and a C++ compiler. If its build reports a missing `node_api.h` and your home directory contains spaces, set `XDG_CACHE_HOME` to a private, writable path without spaces for the Node headers before running npm.
 
 The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.0`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_HOME` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
 

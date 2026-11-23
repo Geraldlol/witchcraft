@@ -64,6 +64,9 @@ try {
   const env = { ...process.env, HOME: home, USERPROFILE: home, WITCHCRAFT_HOME: state,
     npm_config_cache: npm(['config', 'get', 'cache'], packageDir),
     npm_config_audit: 'false', npm_config_fund: 'false' };
+  // On Linux node-gyp's makefile splits Node header paths at spaces. Keep the headers in a
+  // separate cache while still testing a home, game and assistant project with spaces.
+  if (process.platform === 'linux') env.XDG_CACHE_HOME = path.join(scratch, 'build-cache');
   delete env.NODE_PATH;
   const run = (...args) => npm(['exec', '--yes', '--', tarball, ...args], project, env);
 
@@ -103,7 +106,7 @@ try {
   // Capture the same registration argv a real --apply would pass to Claude, without starting an assistant.
   const install = path.join(scratch, 'temporary install');
   await mkdir(install);
-  npm(['install', '--prefix', install, '--no-save', '--package-lock=false', tarball], install, env);
+  npm(['install', '--foreground-scripts', '--prefix', install, '--no-save', '--package-lock=false', tarball], install, env);
   const module = path.join(install, 'node_modules', pack.name, 'src', 'mcp-launch.js');
   assert.throws(() => createRequire(module).resolve('electron'), { code: 'MODULE_NOT_FOUND' });
   const { setupClaudeMcp } = await import(pathToFileURL(module).href);

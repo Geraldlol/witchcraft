@@ -1,10 +1,41 @@
 # Witchcraft daemon
 
-Windows companion for the Witchcraft WoW addon. Requires Node 24 or newer and at least one installed, authenticated Claude Code, Codex CLI, GitHub Copilot CLI or Google Antigravity CLI (`agy`) installation. The default command starts Claude and Codex; use `--only claude`, `--only codex`, `--only copilot` or `--only agy` for one, or `--with-copilot` / `--with-agy` to add Copilot or AGY. Dependencies are pinned in `package-lock.json`.
+Desktop companion for the WITCHCRAFT WoW addon, with experimental Linux and macOS support. Requires Node 24 or newer and an installed, authenticated assistant. The default command starts Claude and Codex. Use `--only claude`, `--only codex`, `--only copilot` or `--only agy` for one assistant.
 
-The WoW MCP bridge adds six read-only game-context tools (context, character, quests, progress, Lua errors and the session journal) and the `wow://context` resource to recognized Claude/Codex/Copilot launches. Guides and Adventures add reference search, quest hints, loot planning, dungeon practice, zone detours and personal campaigns. Sixteen tools are exposed in total: thirteen read-only and three explicitly writable local goals/passport tools. The Claude tab joins your own running Claude Code session by default, which Witchcraft did not launch: give it the tools once with `node bin/witchcraft.js mcp-setup --apply` (local scope, sessions started in this checkout only; add the same `--cwd` you give `run`), then restart that session and Witchcraft. Running it again when the same server is registered only repeats the restart advice. The daemon window and the in-game footer say when a joined session lacks the tools, and follow a Claude session restarted in the mirrored console. Its default addon-to-host path is the local binding carrier described below; terminal input always takes priority. `run --no-mcp` opts out of launch-time MCP configuration. The in-game **WoW context** panel controls data sharing. Existing daemon/assistant processes must be restarted or resumed to load this extension.
+The WoW MCP bridge adds six read-only game-context tools (context, character, quests, progress, Lua errors and the session journal) and the `wow://context` resource to recognized Claude/Codex/Copilot launches. Guides and Adventures add reference search, quest hints, loot planning, dungeon practice, zone detours and personal campaigns. Sixteen tools are exposed in total: thirteen read-only and three explicitly writable local goals/passport tools. The Claude tab joins your own running Claude Code session by default, which Witchcraft did not launch: give it the tools once from the project used by Claude, then restart that session and Witchcraft. Use the same `--cwd` you give `run`. The npm and source commands are listed below. Running it again when the same server is registered only repeats the restart advice. The daemon window and the in-game footer say when a joined session lacks the tools, and follow a Claude session restarted in the mirrored console. Its default addon-to-host path is the local binding carrier described below; terminal input always takes priority. `run --no-mcp` opts out of launch-time MCP configuration. The in-game **WoW context** panel controls data sharing. Existing daemon/assistant processes must be restarted or resumed to load this extension.
 
 ## Setup
+
+### With npm
+
+Use the addon from the matching WITCHCRAFT release. Extract its `Witchcraft/` folder under the game client's `Interface/AddOns` and log in at least once. From the directory where you want your assistant to work, configure the client and initialize its helper addons:
+
+```sh
+npx witchcraft-daemon@0.5.0 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.0 init --ring 3000
+npx witchcraft-daemon@0.5.0 doctor
+```
+
+Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.0 run --only codex`. On Windows, `npx.cmd` also works. Linux builds of the native terminal dependency may need Python 3, make and a C++ compiler.
+
+The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.0`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_HOME` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
+
+For the optional desktop overlay, install `witchcraft-daemon@0.5.0` and `electron@44.10.1` together in a local npm project, then use `npx witchcraft run --overlay` there. Source checkouts retain their existing overlay setup.
+
+To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.0 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
+
+### Try a local package
+
+Before the version reaches npm, run `npm pack` in the source tree’s `tools/witchcraft-daemon` directory. From another directory run:
+
+```sh
+npm install --no-save "/absolute/path/to/witchcraft-daemon-0.5.0.tgz"
+npx --no-install witchcraft-daemon --help
+```
+
+Use that same local command for `configure`, `init`, `doctor` and `run`. The repository’s `npm run test:package` exercises the packed tarball in a temporary consumer project.
+
+### From source
 
 Take the addon and the daemon from the same revision; the AGY tab needs addon 0.4.0 or later, and the daemon lists AGY to the addon only once it has been started.
 

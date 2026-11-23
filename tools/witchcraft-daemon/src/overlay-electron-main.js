@@ -87,7 +87,13 @@ export class ElectronOverlayMain {
       } catch { this.shortcut.registered = false; }
       this.shortcut.conflict = !this.shortcut.registered;
       this._registerHandlers(ipcMain);
-      await Promise.all([this.window.loadFile(this.rendererPath), connecting]);
+      // npm may hoist these browser assets above the installed daemon.
+      const query = {
+        xterm: import.meta.resolve('@xterm/xterm/lib/xterm.mjs'),
+        fit: import.meta.resolve('@xterm/addon-fit/lib/addon-fit.mjs'),
+        stylesheet: import.meta.resolve('@xterm/xterm/css/xterm.css'),
+      };
+      await Promise.all([this.window.loadFile(this.rendererPath, { query }), connecting]);
       this.lifecycle = 'ready';
       this._emitState();
       return this;

@@ -1,17 +1,39 @@
 {
   "name": "witchcraft-daemon",
-  "version": "0.4.0",
-  "private": true,
+  "version": "0.5.0",
+  "description": "Local terminal and WoW context bridge for the WITCHCRAFT addon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Geraldlol/witchcraft.git",
+    "directory": "tools/witchcraft-daemon"
+  },
+  "homepage": "https://github.com/Geraldlol/witchcraft#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "bin",
+    "capture/*.ps1",
+    "capture/*.py",
+    "console/*.ps1",
+    "data/*.json",
+    "overlay",
+    "src"
+  ],
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "bin": {
     "witchcraft": "bin/witchcraft.js",
+    "witchcraft-daemon": "bin/witchcraft.js",
     "witchcraft-mcp": "bin/witchcraft-mcp.js"
   },
   "scripts": {
     "test": "node --test",
+    "test:package": "node test-support/packed-install.mjs",
     "start": "node bin/witchcraft.js",
     "mcp": "node bin/witchcraft-mcp.js"
   },
@@ -21,13 +43,21 @@
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
     "@xterm/xterm": "6.0.0",
-    "electron": "44.10.1",
     "luaparse": "0.3.1",
     "node-pty": "1.1.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
+    "electron": "44.10.1",
     "fengari": "0.1.5"
+  },
+  "peerDependencies": {
+    "electron": "44.10.1"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
   }
 }

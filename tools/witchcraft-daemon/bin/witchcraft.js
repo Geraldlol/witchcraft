@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { loadConfig, saveConfig, boundedInteger, LOCAL_DIR, REPO_ROOT } from '../src/config.js';
+import { loadConfig, saveConfig, configureClient, boundedInteger, CLI_COMMAND, LOCAL_DIR, PROJECT_DIR } from '../src/config.js';
 import { initializeRing } from '../src/init.js';
 import { RingWriter, isTransientWriteError, atomicWrite } from '../src/ring.js';
 import { runDoctor, formatDoctor } from '../src/doctor.js';
@@ -32,6 +32,7 @@ const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGBREAK'];
 export function parseArgs(argv) {
   const [command = 'help', ...rest] = argv, options = {}, child = [];
   const values = new Set(['ring', 'cols', 'rows', 'hz', 'history', 'account', 'character', 'tab', 'only', 'cwd', 'timeout']);
+  if (command === 'configure') values.add('addons-dir');
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index];
     if (token === '--') { child.push(...rest.slice(index + 1)); break; }
@@ -197,9 +198,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     if (next === claudeTools || stopped) return;
     claudeTools = next;
     if (next === false) {
-      const where = path.resolve(joinCwd) === path.resolve(REPO_ROOT) ? '' : ` --cwd "${joinCwd}"`;
+      const where = path.resolve(joinCwd) === PROJECT_DIR ? '' : ` --cwd "${joinCwd}"`;
       process.stderr.write(`\nWitchcraft: the Claude session this tab mirrors (process ${pid}) has no WoW tools. Run `
-        + `"node bin/witchcraft.js mcp-setup --apply${where}" once, restart that session (claude --continue), then restart Witchcraft.\n`);
+        + `"${CLI_COMMAND} mcp-setup --apply${where}" once, restart that session (claude --continue), then restart Witchcraft.\n`);
     }
     void publish();
   }
@@ -752,6 +753,7 @@ export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR 
   const { command, options, child } = parseArgs(argv);
   if (command === 'help' || command === '--help') {
     console.log(`Witchcraft - separate Claude, Codex, Copilot and AGY terminals inside WoW\n\n` +
+      `witchcraft configure --addons-dir <absolute Interface/AddOns path>\n` +
       `witchcraft init [--ring 3000] [--clean] [--account NAME] [--character NAME]\n` +
       `witchcraft doctor [--only claude|codex|copilot|agy] [--account NAME] [--json]\n` +
       `witchcraft calibrate [--account NAME]    (show /witch calibrate first)\n` +
@@ -767,13 +769,19 @@ export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR 
       `type in that console's own window. Its colour is the sixteen ANSI colours.\n` +
       `~TEXT names the newest console whose program or command line contains TEXT. When a joined\n` +
       `or ~TEXT console closes, its tab mirrors the next one that matches. "attach" in\n` +
-      `.local/config.json takes the same PID|pick|~TEXT per tab; --attach overrides it.\n` +
+      `the daemon's config.json takes the same PID|pick|~TEXT per tab; --attach overrides it.\n` +
       `WoW MCP is added to recognized Claude/Codex/Copilot commands. --no-mcp skips it.\n` +
       `The desktop overlay is off; --overlay or overlay: true starts it, and --no-overlay overrides config.\n` +
       `A saved calibration starts fallback screen capture; --no-pixels disables it.\n` +
       `Ctrl+] selects the real terminal; WoW tabs select independently.\n` +
       `By default the Claude tab mirrors the newest Claude Code console running in --cwd and the\n` +
       `Codex tab resumes the newest Codex thread there; --attach or --no-current overrides that.`);
+    return;
+  }
+  if (command === 'configure') {
+    if (!options['addons-dir']) throw new Error('Usage: witchcraft configure --addons-dir <absolute Interface/AddOns path>');
+    await configureClient(options['addons-dir']);
+    console.log(`Client directory saved. Run ${CLI_COMMAND} doctor to check setup.`);
     return;
   }
   if (command === 'consoles') {
@@ -789,7 +797,7 @@ export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR 
     return;
   }
   if (command === 'doctor') {
-    const report = await runDoctor({ options });
+    const report = await runDoctor({ options, localDir });
     console.log(options.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
     if (report.checks.some(check => check.status === 'fail')) process.exitCode = 1;
     return;
@@ -797,7 +805,7 @@ export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR 
   if (command === 'mcp-setup') {
     // Needs only this checkout's paths, not the game's: it works before wow.config.json exists.
     // Local scope applies only to sessions started in that folder, so it follows run's --cwd.
-    await setupClaudeMcp({ repoRoot: path.resolve(options.cwd ?? REPO_ROOT), cachePath: path.join(localDir, 'wow-context.json'),
+    await setupClaudeMcp({ repoRoot: path.resolve(options.cwd ?? PROJECT_DIR), cachePath: path.join(localDir, 'wow-context.json'),
       apply: options.apply === true });
     return;
   }
@@ -846,7 +854,9 @@ export async function main(argv = process.argv.slice(2), { localDir = LOCAL_DIR 
   } else throw new Error(`Unknown command: ${command}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// npm links POSIX command names to this file; argv[1] can name the link.
+const entryPath = process.argv[1] && await fs.realpath(process.argv[1]).catch(() => null);
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
   // node-pty 1.1.0 can retain a ConPTY worker after its child has exited.
   // This CLI owns that worker's lifetime. runBridge verifies child shutdown and
   // releases the capture, writer, input hooks and lock before main resolves.

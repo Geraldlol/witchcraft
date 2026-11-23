@@ -37,6 +37,7 @@ jobs:
       - run: npm ci
       - run: python3 --version
       - run: npm test
+      - run: npm run test:package
 
   daemon-ubuntu:
     name: Daemon (Node 24 on Ubuntu)
@@ -56,6 +57,13 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm rebuild node-pty --ignore-scripts=false --foreground-scripts
       - run: node --test test/capture-linux.test.js test/config.test.js test/ring.test.js test/outbox.test.js test/journal.test.js test/mcp-server.test.js test/mcp-launch.test.js test/copilot.test.js test/addon-copilot.test.js test/attach-args.test.js test/client-ring-lock.test.js test/context-want.test.js test/prompt-recovery.test.js test/session-info.test.js
+      - run: npm run test:package -- --pack-destination "$RUNNER_TEMP/witchcraft-npm-candidate"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: witchcraft-daemon-npm
+          path: ${{ runner.temp }}/witchcraft-npm-candidate/*.tgz
+          if-no-files-found: error
+          retention-days: 7
 
   daemon-macos:
     name: Daemon (Node 24 on macOS)
@@ -75,3 +83,4 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm rebuild node-pty --ignore-scripts=false --foreground-scripts
       - run: node --test test/capture-linux.test.js test/config.test.js test/ring.test.js test/outbox.test.js test/journal.test.js test/mcp-server.test.js test/mcp-launch.test.js test/copilot.test.js test/addon-copilot.test.js test/attach-args.test.js test/client-ring-lock.test.js test/context-want.test.js test/prompt-recovery.test.js test/session-info.test.js
+      - run: npm run test:package

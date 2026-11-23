@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.5.0)
+
+- Prepare the desktop daemon for npm. The package supports `npx witchcraft-daemon`, client configuration outside a checkout, and a persistent per-user state directory shared with the MCP server. Source installations keep their existing paths.
+
 ## 0.4.0 - 2026-11-23
 
 - Add experimental macOS (`darwin`) support: `capture/capture-strip.py` now includes a Quartz/CoreGraphics window reader (`CGWindowListCopyWindowInfo` / `CGWindowListCreateImage`), `resolveProgram` checks POSIX `~/.local/bin/claude` and macOS Antigravity paths, default `run` on macOS/Linux launches Claude in its PTY instead of invoking Windows console mirroring, and CI runs the portable daemon and capture suite on `macos-latest` and `ubuntu-latest` alongside `windows-latest`.

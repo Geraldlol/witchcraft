@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import manifest from '../package.json' with { type: 'json' };
 import { localRegistration, setupClaudeMcp, withWoWMcp } from '../src/mcp-launch.js';
 import { parseArgs } from '../bin/witchcraft.js';
 
@@ -94,4 +98,44 @@ test('mcp-setup --apply runs exactly that registration in the repo root, without
   assert.deepEqual(ran, [['claude', ['mcp', 'add', '-s', 'local', 'witchcraft_wow', '--', spaced.nodePath, spaced.scriptPath,
     '--cache', spaced.cachePath, '--allow-local-writes'], { cwd: spaced.repoRoot }]]);
   assert.equal(parseArgs(['mcp-setup', '--apply']).options.apply, true);
+});
+
+test('installed mcp-setup registers a pinned launcher that survives npx cache eviction', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'witchcraft-mcp-npm-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const state = path.join(root, 'Witch & Craft');
+  const packageDir = path.join(root, 'temporary npx install');
+  const scriptPath = path.join(packageDir, 'bin', 'witchcraft-mcp.js');
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(scriptPath, "console.log(JSON.stringify({ direct: true, home: process.env.WITCHCRAFT_HOME }));");
+  const npmCli = path.join(root, 'npm-cli.cjs');
+  const archiveName = `${manifest.name}-${manifest.version}.tgz`;
+  const packStub = `require('node:fs').writeFileSync(require('node:path').join(process.cwd(), ${JSON.stringify(archiveName)}), 'candidate');
+    console.log(JSON.stringify([{ files: [{path: 'bin/witchcraft-mcp.js'}] }]));`;
+  await fs.writeFile(npmCli, `if (process.argv[2] === 'pack') { ${packStub} } else {
+    console.log(JSON.stringify({args: process.argv.slice(2), home: process.env.WITCHCRAFT_HOME,
+      parent: Number(process.env.WITCHCRAFT_MCP_CLIENT_PID), cwd: process.cwd()}));
+  }`);
+  const options = { repoRoot: root, cachePath: path.join(state, 'wow-context.json'), scriptPath,
+    installed: true, packageDir, npmCli, print() {}, existing: async () => undefined };
+  const preview = await setupClaudeMcp(options);
+  await assert.rejects(fs.stat(state), { code: 'ENOENT' }, 'preview must not write a launcher or install a package');
+  const calls = [];
+  await setupClaudeMcp({ ...options, apply: true, run: (...args) => calls.push(args) });
+  assert.deepEqual(calls, [['claude', preview.args, { cwd: root }]]);
+  const [node, ...args] = preview.args.slice(preview.args.indexOf('--') + 1);
+  const start = () => JSON.parse(execFileSync(node, args, { cwd: root, encoding: 'utf8' }));
+  assert.deepEqual(start(), { direct: true, home: state }, 'existing exact install works without consulting npm');
+  await fs.writeFile(scriptPath, "throw Error('different build');");
+  assert.equal(start().args[0], 'exec', 'a same-version replacement must not be used');
+  await fs.rm(packageDir, { recursive: true });
+  const result = start();
+  const runtime = path.join(state, 'mcp-runtime', `${manifest.name}@${manifest.version}`);
+  const pointer = JSON.parse(await fs.readFile(path.join(runtime, 'current.json'), 'utf8'));
+  const archive = path.join(runtime, `${pointer.sha256}.tgz`);
+  assert.equal(await fs.readFile(archive, 'utf8'), 'candidate');
+  assert.deepEqual(result, {
+    args: ['exec', '--yes', '--ignore-scripts', '--package', `file:./mcp-runtime/${manifest.name}@${manifest.version}/${pointer.sha256}.tgz`, '--', 'witchcraft-mcp', '--allow-local-writes'],
+    home: state, parent: process.pid, cwd: state,
+  });
 });

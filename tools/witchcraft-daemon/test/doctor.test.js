@@ -38,7 +38,7 @@ async function setup(t) {
     fs.writeFile(path.join(addonsDir, 'Witchcraft', 'Witchcraft.toc'), '## Version: 1.2.3\n'),
   ]);
   await initializeRing({ addonsDir, ringSize: local.ringSize });
-  const diagnose = (overrides = {}) => runDoctor({ repoRoot, localDir, options: { only: 'codex' }, ...overrides });
+  const diagnose = (overrides = {}) => runDoctor({ repoRoot, localDir, packageDir: daemon, options: { only: 'codex' }, ...overrides });
   return { repoRoot, daemon, localDir, addonsDir, local, diagnose };
 }
 
@@ -46,7 +46,7 @@ test('the CLI reports missing dependencies and redacts malformed config in a cle
   const f = await setup(t);
   for (const dir of ['src', 'bin']) await fs.cp(path.join(source, dir), path.join(f.daemon, dir), { recursive: true });
   const args = [path.join(f.daemon, 'bin', 'witchcraft.js'), 'doctor', '--json', '--only', 'codex'];
-  const run = () => promisify(execFile)(process.execPath, args, { cwd: f.daemon });
+  const run = () => promisify(execFile)(process.execPath, args, { cwd: f.daemon, env: { ...process.env, WITCHCRAFT_HOME: undefined } });
   await fs.writeFile(path.join(f.repoRoot, 'wow.config.json'), account + ' invalid JSON');
   await assert.rejects(run(), error => {
     assert.equal(error.code, 1);

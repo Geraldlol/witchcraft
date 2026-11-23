@@ -1,6 +1,6 @@
 # Witchcraft
 
-Claude Code, Codex CLI, GitHub Copilot CLI and Google Antigravity CLI (`agy`) terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. Build: `release-0.4.0`, interface `16001`.
+Claude Code, Codex CLI, GitHub Copilot CLI and Google Antigravity CLI (`agy`) terminals inside WoW Forever, with separate tabs, independent drafts, and an input box addressed to the selected agent. This is build `release-0.5.0` for interface `16001`.
 
 The window uses the client's own metal window frame, red close and minimize buttons, and gold labels over a charcoal body.
 

@@ -46,7 +46,7 @@ WoW addons can't open network sockets or start processes, and that is how it sho
 | **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only WoW tools and 3 optional wishlist/passport tools. |
 | **Claude Code skill** | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Lets you ask Claude to start, stop, restart, or check the daemon for you (Windows + `pwsh`). |
 
-> **Get the full source.** Clone the repo, or take **Source code (zip)** from the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest), so you have both the addon and the desktop daemon. The standalone `Witchcraft-X.Y.Z.zip` release asset contains only the `Witchcraft/` addon folder.
+The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Version 0.5.0 also supports installing the daemon from an npm tarball.
 
 ---
 
@@ -68,6 +68,22 @@ WoW addons can't open network sockets or start processes, and that is how it sho
 ---
 
 ## Install
+
+### With npm (0.5.0)
+
+Install the matching `Witchcraft/` addon in your Forever client’s `Interface/AddOns` directory and log into the client at least once. From the project folder where you want your assistant to work, run these commands with Node 24 or later. Replace the example path with your actual client path.
+
+```sh
+npx witchcraft-daemon@0.5.0 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.0 init --ring 3000
+npx witchcraft-daemon@0.5.0 doctor
+```
+
+Restart WoW completely after `init`. In game, show the strip with `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate` in the terminal, then use `/witch calibrate off`. Start your assistant with `npx witchcraft-daemon@0.5.0 run --only codex` (or `--only claude`). On Windows, `npx.cmd` works in PowerShell when its script execution policy blocks `npx`.
+
+The installed daemon keeps configuration, calibration and session state in `~/.witchcraft` across npm upgrades. Set `WITCHCRAFT_HOME` to an absolute directory to use a separate profile. For a prepublication build, a local tarball works with npm as described in the [daemon package instructions](tools/witchcraft-daemon/README.md#try-a-local-package).
+
+### From source
 
 1. **Clone or download the repository** somewhere permanent:
 

@@ -4,7 +4,7 @@ import { AGENT_TABS, selectAgentCommands } from './agents.js';
 import { RING_LOCK_NAME, pidAlive } from './bridge-lock.js';
 import { validateRegion } from './capture.js';
 import { checkClientBuild } from './client-build.js';
-import { LOCAL_DIR, REPO_ROOT, loadConfig } from './config.js';
+import { CLI_COMMAND, INSTALLED_PACKAGE, LOCAL_DIR, PACKAGE_DIR, WOW_CONFIG_PATH, loadConfig } from './config.js';
 import { assertOwnedChunk, chunkName } from './ring.js';
 
 // All output fields are constructed here. Never include paths, account names, raw exceptions,
@@ -61,27 +61,29 @@ async function dependencies() {
   return { resolveLaunch, readContextFile };
 }
 
-export async function runDoctor({ options = {}, repoRoot = REPO_ROOT, localDir = LOCAL_DIR,
+export async function runDoctor({ options = {}, repoRoot, localDir = LOCAL_DIR, packageDir = PACKAGE_DIR,
+  wowConfigPath = repoRoot ? path.join(repoRoot, 'wow.config.json') : WOW_CONFIG_PATH,
   loadDependencies = dependencies, isAlive = pidAlive, now = Date.now } = {}) {
   const checks = [];
   const add = (id, status, detail, next) => checks.push({ id, status, detail, ...(next && { next }) });
   const result = () => ({ checks, next: checks.find(c => c.status === 'fail')?.next
     ?? checks.find(c => c.status === 'wait')?.next ?? null });
   const versionPattern = /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u;
-  const pkg = await json(path.join(repoRoot, 'tools', 'witchcraft-daemon', 'package.json')).catch(() => null);
+  const pkg = await json(path.join(packageDir, 'package.json')).catch(() => null);
   const version = typeof pkg?.version === 'string' && versionPattern.test(pkg.version) ? pkg.version : null;
   const supported = Number(process.versions.node.split('.')[0]) >= 24;
   add('node', supported ? 'ok' : 'fail', `Node ${process.versions.node}, daemon ${version ?? 'unknown'}.`,
     supported ? null : 'Install Node.js 24 or newer.');
-  if (!version) add('package', 'fail', 'Local daemon package version unavailable.', 'Restore the matching daemon source archive.');
+  if (!version) add('package', 'fail', 'Local daemon package version unavailable.', 'Reinstall the matching daemon version.');
   let modules;
   try { modules = await loadDependencies(); add('dependencies', 'ok', 'Terminal and context modules load.'); }
   catch { add('dependencies', 'fail', 'Daemon dependencies could not load.',
-    'From tools/witchcraft-daemon, run npm ci --ignore-scripts and npm rebuild node-pty --ignore-scripts=false.'); }
+    INSTALLED_PACKAGE ? 'Reinstall witchcraft-daemon with npm lifecycle scripts enabled so node-pty can build.'
+      : 'From tools/witchcraft-daemon, run npm ci --ignore-scripts and npm rebuild node-pty --ignore-scripts=false.'); }
 
   let config;
   try {
-    config = await loadConfig({ repoRoot, configPath: path.join(localDir, 'config.json'),
+    config = await loadConfig({ repoRoot, wowConfigPath, configPath: path.join(localDir, 'config.json'),
       account: options.account, character: options.character });
     if (!(await fs.stat(config.accountDir)).isDirectory()) throw new Error('Account directory missing');
     add('client', 'ok', 'Selected client and account directory found.');
@@ -89,8 +91,8 @@ export async function runDoctor({ options = {}, repoRoot = REPO_ROOT, localDir =
     let next = 'Check wow.config.json and the selected account. Log into this client once to create its account directory.';
     if (error.message.startsWith('Choose the WoW account')) next = 'Select an account with --account NAME and use it for init.';
     if (error.message.startsWith('Choose the character')) next = 'Select the character with --character NAME.';
-    if (error.code === 'ENOENT' && error.path === path.join(repoRoot, 'wow.config.json')) {
-      next = 'Copy wow.config.example.json to wow.config.json and set addonsDir to your Forever client.';
+    if (error.code === 'ENOENT' && error.path === wowConfigPath) {
+      next = `Run ${CLI_COMMAND} configure --addons-dir <absolute Interface/AddOns path> to select your Forever client.`;
     }
     add('client', 'fail', 'Client or account configuration needs attention.', next);
     return result();

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ElectronOverlayMain, OVERLAY_RENDERER_CHANNELS } from '../src/overlay-electron-main.js';
@@ -39,7 +40,7 @@ function fakeElectron({ shortcutRegisters = true } = {}) {
       this.webContents = contents;
       windows.push(this);
     }
-    async loadFile(filename) { this.loaded = filename; }
+    async loadFile(filename, options) { this.loaded = filename; this.assetUrls = options.query; }
     setOpacity() { this.opacityCalls = (this.opacityCalls ?? 0) + 1; }
     setIgnoreMouseEvents(...args) { this.ignore = args; }
     setFocusable(value) { this.focusable = value; }
@@ -71,6 +72,9 @@ test('electron overlay: secure lazy window and strict renderer commands', async 
   assert.equal(f.window.options.webPreferences.nodeIntegration, false);
   assert.equal(f.window.options.webPreferences.contextIsolation, true);
   assert.equal(f.window.options.webPreferences.sandbox, true);
+  for (const asset of ['xterm', 'fit', 'stylesheet']) {
+    await access(new URL(f.window.assetUrls[asset]));
+  }
   await f.invoke(OVERLAY_RENDERER_CHANNELS.sendInput, { tab: 'codex', data: 'hello' });
   await f.invoke(OVERLAY_RENDERER_CHANNELS.resize, { cols: 100, rows: 30 });
   await f.invoke(OVERLAY_RENDERER_CHANNELS.setActiveTab, { tab: 'codex' });

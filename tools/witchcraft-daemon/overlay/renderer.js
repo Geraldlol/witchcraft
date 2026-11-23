@@ -457,9 +457,11 @@ function bufferTerminalInput(id, data) {
 
 async function loadTerminals() {
   try {
+    const assets = new URLSearchParams(window.location.search);
+    document.getElementById('terminal-stylesheet').href = assets.get('stylesheet');
     const [{ Terminal }, { FitAddon }] = await Promise.all([
-      import('../node_modules/@xterm/xterm/lib/xterm.mjs'),
-      import('../node_modules/@xterm/addon-fit/lib/addon-fit.mjs'),
+      import(assets.get('xterm')),
+      import(assets.get('fit')),
     ]);
 
     for (const [id, view] of Object.entries(tabs)) {

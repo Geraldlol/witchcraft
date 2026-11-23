@@ -68,7 +68,9 @@ try {
   const run = (...args) => npm(['exec', '--yes', '--', tarball, ...args], project, env);
 
   // Positional tarball syntax uses npm's own bin inference, just like npx witchcraft-daemon.
-  assert.match(run('help'), /witchcraft init/u);
+  // npm exec normally suppresses native build output. Keep it on the first invocation so a
+  // failed installation reports the compiler error before the daemon has a chance to start.
+  assert.match(npm(['exec', '--foreground-scripts', '--yes', '--', tarball, 'help'], project, env), /witchcraft init/u);
   const defaultHomeEnv = { ...env };
   delete defaultHomeEnv.WITCHCRAFT_HOME;
   npm(['exec', '--yes', '--', tarball, 'configure', '--addons-dir', addons], project, defaultHomeEnv);

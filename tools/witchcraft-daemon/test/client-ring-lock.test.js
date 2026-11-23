@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -312,5 +313,96 @@ test('a dead lock that vanishes before the recovery claim is taken on the retry'
   } finally {
     await taken.handle.close();
     await releaseOwnedLock({ lockPath, identity: taken.identity, tag: 'A' });
+  }
+});
+
+// A recoverer's fs that tracks the handles it opens on the lock and the recovery names, and an isAlive
+// in which, once a link to a name matching `armAt` succeeds, the next dead owner judged exits while a
+// live owner takes `target`. The live owner's file reuses the judged inode (an in-place rewrite) only
+// while the recoverer has no handle open on `target`; while it has one, the new file is a new inode.
+function ownerExitsDuringJudgment({ lockPath, target, live, armAt }) {
+  const handles = new Map();
+  let opened = 0, armed = false, fired = false;
+  const files = { ...fs,
+    async open(file, ...rest) {
+      const handle = await fs.open(file, ...rest), name = String(file);
+      if (name !== lockPath && !name.startsWith(`${lockPath}.recover-`)) return handle;
+      opened++; handles.set(handle, name);
+      const close = handle.close.bind(handle);
+      handle.close = async () => { handles.delete(handle); return close(); };
+      return handle;
+    },
+    async link(from, to) {
+      await fs.link(from, to);
+      if (armAt(String(to))) armed = true;
+    } };
+  const isAlive = pid => {
+    if (pid === process.pid) return true;
+    if (armed && !fired) {
+      fired = true;
+      if ([...handles.values()].includes(target)) unlinkSync(target);
+      writeFileSync(target, live);
+    }
+    return false;
+  };
+  return { files, isAlive, fired: () => fired, opened: () => opened, open: () => [...handles.values()] };
+}
+
+test('an owner that exits during the judgment under the claim never gets its live successor set aside', async t => {
+  const root = await sandbox(t), lockPath = path.join(root, RING_LOCK_NAME), recordType = 'witchcraft-ring-v1';
+  await fs.writeFile(lockPath, JSON.stringify({ type: recordType, pid: process.pid + 1, startedAt: new Date().toISOString() }));
+  const live = JSON.stringify({ type: recordType, pid: process.pid, startedAt: new Date().toISOString(), tag: 'B' });
+  const model = ownerExitsDuringJudgment({ lockPath, target: lockPath, live, armAt: to => to.startsWith(`${lockPath}.recover-`) });
+  await assert.rejects(acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid, tag: 'A' },
+    tag: 'A', fs: model.files, isAlive: model.isAlive }), { code: 'LOCK_HELD' });
+  assert.ok(model.fired());
+  assert.equal(await fs.readFile(lockPath, 'utf8'), live);
+  const names = await fs.readdir(root);
+  for (const name of names.filter(entry => entry.includes('.stale-'))) {
+    assert.notEqual(await fs.readFile(path.join(root, name), 'utf8'), live, name);
+  }
+  assert.deepEqual(names.filter(name => name.includes('.recover-')), []);
+  assert.ok(model.opened() > 0);
+  assert.deepEqual(model.open(), []);
+});
+
+test('a claimer that exits during the judgment under the guard never gets its live successor unlinked', async t => {
+  const { root, lockPath, recordType, dead, claim } = await claimedDeadLock(t);
+  const live = JSON.stringify({ type: recordType, pid: process.pid, startedAt: new Date().toISOString(), tag: 'B' });
+  const model = ownerExitsDuringJudgment({ lockPath, target: claim, live, armAt: to => to.startsWith(`${claim}.recover-`) });
+  await assert.rejects(acquireLock({ lockPath, recordType, record: { type: recordType, pid: process.pid, tag: 'A' },
+    tag: 'A', fs: model.files, isAlive: model.isAlive }), error => {
+    assert.equal(error.code, 'LOCK_HELD');
+    assert.ok(error.message.includes('recovery is already claimed') && error.message.includes(claim), error.message);
+    return true;
+  });
+  assert.ok(model.fired());
+  assert.equal(await fs.readFile(claim, 'utf8'), live);
+  assert.equal(await fs.readFile(lockPath, 'utf8'), dead);
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.recover-')), [path.basename(claim)]);
+  assert.ok(model.opened() > 0);
+  assert.deepEqual(model.open(), []);
+});
+
+test('a recovery of a dead claim and a dead lock holds each judged file open until it has acted on it, then closes every handle', async t => {
+  const { lockPath, dead, claim, take } = await claimedDeadLock(t);
+  const model = ownerExitsDuringJudgment({ lockPath, target: lockPath, live: '', armAt: () => false });
+  // The handles open at the moment of each action on a judged file: closing one earlier would
+  // free its inode for a newer owner's file before the action.
+  const held = {};
+  const files = { ...model.files,
+    async unlink(file) { if (file === claim) held.unlink ??= model.open(); return fs.unlink(file); },
+    async rename(from, to) { if (from === lockPath) held.rename ??= model.open(); return fs.rename(from, to); },
+    async stat(file, ...rest) { if (String(file).includes('.stale-')) held.check ??= model.open(); return fs.stat(file, ...rest); } };
+  const taken = await take(files);
+  try {
+    assert.deepEqual(held, { unlink: [claim], rename: [lockPath], check: [lockPath] });
+    assert.equal(taken.reclaimed.length, 1);
+    assert.equal(await fs.readFile(taken.reclaimed[0].path, 'utf8'), dead);
+    assert.equal(model.opened(), 4);
+    assert.deepEqual(model.open(), []);
+  } finally {
+    await taken.handle.close();
+    await releaseOwnedLock({ lockPath, identity: taken.identity, tag: 'next' });
   }
 });

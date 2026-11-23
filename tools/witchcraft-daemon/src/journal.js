@@ -8,10 +8,22 @@ import { atomicWrite, isTransientWriteError } from './ring.js';
 // documents it persisted, so it costs no wire traffic and needs nothing from the addon. Only the
 // fields listed below are journaled: never errors, terminal text, prompts or other players.
 export const journalPath = cachePath => path.join(path.dirname(cachePath), `${path.basename(cachePath, '.json')}.journal.json`);
-// A clear leaves this marker beside the journal: the newest clear on record, which every append
-// and read honours, so a writer in another process cannot bring cleared history back.
+// A clear leaves an empty marker file `<marker>.<clearedAt>` beside the journal, created exclusively.
+// The newest clear on record is the highest value in that set (a legacy single `<marker>` JSON file
+// still counts, and is never written again); every append and read honours it, so a writer in
+// another process cannot bring cleared history back. A file added late can never lower the maximum,
+// and markers are never removed, so a listing never reads lower than the newest clear it started under.
 const markerOf = file => path.join(path.dirname(file), `${path.basename(file, '.json')}.cleared`);
 export const clearMarkerPath = cachePath => markerOf(journalPath(cachePath));
+/**
+ * The value a numbered marker's name carries, or null when the name is not `<base>.<value>` in
+ * plain decimal. Leading zeros are refused: each value has one name, which the exclusive create relies on.
+ */
+const markerValueOf = (base, name) => {
+  if (!name.startsWith(`${base}.`) || !/^(?:0|[1-9]\d*)$/u.test(name.slice(base.length + 1))) return null;
+  const value = Number(name.slice(base.length + 1));
+  return Number.isSafeInteger(value) ? value : null;
+};
 // Clears take turns on a lock file beside the marker; one older than this was left by a clear that died holding it.
 const LOCK_STALE_MS = 5000;
 
@@ -181,14 +193,20 @@ export class JournalStore {
   #lockPath;
 
   // write and onLoaded are test seams: the file writer, which may ignore the { proceed } fence the
-  // store passes it, and a hook an append awaits right after each read of the file. A clear waits
-  // for another clear's lock at most lockTries times, lockWaitMs apart.
+  // store passes it, and a hook an append awaits right after each read of the file. A write with
+  // { exclusive: true } creates a new file (a clear marker) and fails with EEXIST when it exists.
+  // A clear waits for another clear's lock at most lockTries times, lockWaitMs apart.
   constructor({ file, now = Date.now, onError = () => {}, write = null, onLoaded = async () => {}, lockTries = 60, lockWaitMs = 50 } = {}) {
     if (typeof file !== 'string' || !file) throw new TypeError('A journal file path is required');
     this.file = file;
     this.now = now;
     this.onError = onError;
-    this.write = write ?? ((file, text, options = {}) => atomicWrite(file, text, options));
+    this.write = write ?? (async (file, text, options = {}) => {
+      if (!options.exclusive) return atomicWrite(file, text, options);
+      if (options.proceed && !(await options.proceed())) return false;
+      await fs.writeFile(file, text, { flag: 'wx' });
+      return true;
+    });
     this.onLoaded = onLoaded;
     this.marker = markerOf(file);
     this.#lockPath = `${this.marker}.lock`;
@@ -243,14 +261,36 @@ export class JournalStore {
     try { return stampOf(await fs.stat(this.file)); } catch (error) { return error.code === 'ENOENT' ? null : undefined; }
   }
 
-  /** The newest clear on record: 0 when there is none, null when the marker cannot be read or parsed (reported once). */
+  /** The newest clear on record: 0 when there is none, null when the markers cannot be read (reported once). */
   async #readMarker() {
+    const values = await this.#markerValues();
+    return values === null ? null : Math.max(0, ...values);
+  }
+
+  /**
+   * Every clear marker's value: the legacy file's, when it exists, and each numbered file's. Null,
+   * reported once, when the legacy file cannot be read or parsed or the folder cannot be listed.
+   * Other names beside it are ignored; only names are listed, so a file removed meanwhile is no error.
+   */
+  async #markerValues() {
     try {
-      const parsed = markerSchema.safeParse(JSON.parse(await fs.readFile(this.marker, 'utf8')));
-      if (!parsed.success) throw new Error('clear marker is not valid');
-      return parsed.data.clearedAt;
+      const values = [];
+      try {
+        const parsed = markerSchema.safeParse(JSON.parse(await fs.readFile(this.marker, 'utf8')));
+        if (!parsed.success) throw new Error('clear marker is not valid');
+        values.push(parsed.data.clearedAt);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const names = await fs.readdir(path.dirname(this.marker)).catch(error => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      });
+      const base = path.basename(this.marker);
+      for (const name of names) {
+        const value = markerValueOf(base, name);
+        if (value !== null) values.push(value);
+      }
+      return values;
     } catch (error) {
-      if (error.code === 'ENOENT') return 0;
       if (!this.markerReported) { this.markerReported = true; this.onError(new Error(`Session journal clear marker unreadable: ${error.message}`)); }
       return null;
     }
@@ -281,41 +321,59 @@ export class JournalStore {
   }
 
   /**
-   * Clear the journal: record a marker newer than any clear before it, then delete the file. True
-   * when there was a journal to delete; the marker is written either way. Each clear advances the
-   * store's clearGeneration so older queued or in-flight append batches are discarded instead of
-   * re-applying pre-clear events. Lock ownership is verified before replacing the marker and again
-   * before deleting the journal file.
+   * Clear the journal: add a marker `<marker>.<value>` higher than any clear before it, created
+   * exclusively, then delete the file. True when there was a journal to delete; the marker is
+   * written either way. A value another process created first is retried from a fresh read, three
+   * attempts in all. Each clear advances the store's clearGeneration so older queued or in-flight
+   * append batches are discarded instead of re-applying pre-clear events. Lock ownership is verified
+   * before creating the marker and again before deleting the journal file. A clear that finds a
+   * higher marker after creating its own (another process's clock ran ahead) creates again above
+   * it, within the same three attempts, so a clear that reports success is the newest on record.
+   * Markers are never removed: a removal could hide the newest clear from a listing in progress.
    */
   clear() {
     this.clearGeneration += 1;
     const run = this.chain.then(() => this.#withClearLock(async ownsLock => {
+      const lost = () => { this.onError(new Error('Session journal clear lock lost')); return false; };
       if (this.closed) return false;
-      if (!(await ownsLock())) {
-        this.onError(new Error('Session journal clear lock lost'));
-        return false;
+      if (!(await ownsLock())) return lost();
+      let beforeStamp, value;
+      for (let attempt = 1; ; attempt++) {
+        const previous = await this.#readMarker();
+        // An unreadable marker (already reported) is not written past, and the journal it fences stays.
+        if (previous === null || this.closed) return false;
+        beforeStamp = await this.#stamp();
+        value = Math.max(this.now(), previous + 1);
+        let written;
+        try {
+          written = await this.write(`${this.marker}.${value}`, '', { proceed: ownsLock, exclusive: true });
+        } catch (error) {
+          if (error?.code !== 'EEXIST') throw error;
+          // Another process created this value since the read.
+          if (attempt < 3) continue;
+          return this.closed ? false : lost();
+        }
+        if (written === false) return this.closed ? false : lost();
+        if (this.closed) return false;
+        if (!(await ownsLock())) return lost();
+        const values = await this.#markerValues();
+        // Without this listing the clear cannot know its marker is the newest: the journal stays (already reported).
+        if (values === null) return false;
+        // A higher marker created since the read supersedes this one: create again above it.
+        if (Math.max(...values) > value) {
+          if (attempt < 3) continue;
+          return lost();
+        }
+        // Link from the highest marker below this one as listed now, not from the read before the
+        // write: a marker another process created in between is then not skipped by an append.
+        this.ownClears.push({ previous: Math.max(0, ...values.filter(other => other < value)), value });
+        break;
       }
-      const previous = await this.#readMarker();
-      // An unreadable marker (already reported) is not overwritten, and the journal it fences stays.
-      if (previous === null || this.closed) return false;
-      const beforeStamp = await this.#stamp();
-      const value = Math.max(this.now(), previous + 1);
-      const written = await this.write(this.marker, `${JSON.stringify({ clearedAt: value })}\n`, { proceed: ownsLock });
-      if (written === false) {
-        if (!this.closed) this.onError(new Error('Session journal clear lock lost'));
-        return false;
-      }
-      if (this.closed) return false;
-      if (!(await ownsLock())) {
-        this.onError(new Error('Session journal clear lock lost'));
-        return false;
-      }
-      this.ownClears.push({ previous, value });
-      if (beforeStamp === null || !sameStamp(beforeStamp, await this.#stamp())) return false;
-      const removed = await fs.unlink(this.file).then(() => true, error => {
-        if (error.code === 'ENOENT') return false;
-        throw error;
-      });
+      const removed = beforeStamp !== null && sameStamp(beforeStamp, await this.#stamp())
+        && await fs.unlink(this.file).then(() => true, error => {
+          if (error.code === 'ENOENT') return false;
+          throw error;
+        });
       return removed;
     }));
     this.chain = run.catch(() => {});
@@ -427,6 +485,7 @@ export class JournalStore {
         const proceed = async () => !this.closed && generation === this.clearGeneration && (await this.#readMarker()) === fence;
         if (await this.write(this.file, encoded, { proceed }) === false) return false;
         const after = await this.#readMarker();
+        // The marker is a set's maximum and cannot move back, so a higher value is the only change to check.
         if (after === null || after > fence || generation !== this.clearGeneration) return false;
         return true;
       }

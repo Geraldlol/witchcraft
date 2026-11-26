@@ -14,9 +14,9 @@ function fullyQualified(directory) {
   return typeof directory === 'string' && path.isAbsolute(directory)
     && (process.platform !== 'win32' || path.parse(directory).root.length > 1);
 }
-const stateHome = process.env.WITCHCRAFT_HOME;
+const stateHome = process.env.WITCHCRAFT_STATE_DIR;
 if (stateHome !== undefined && !fullyQualified(stateHome)) {
-  throw new Error('WITCHCRAFT_HOME must be an absolute directory');
+  throw new Error('WITCHCRAFT_STATE_DIR must be an absolute directory');
 }
 const defaultStateDir = inSourceTree ? path.join(PACKAGE_DIR, '.local') : path.join(os.homedir(), '.witchcraft');
 export const LOCAL_DIR = stateHome === undefined ? defaultStateDir : path.normalize(stateHome);
@@ -75,6 +75,7 @@ export async function loadConfig({ repoRoot, account, character, configPath = pa
   return { ...local, repoRoot: repoRoot ?? PROJECT_DIR, addonsDir, account, accountDir, configPath,
     character: characterDir ? path.basename(characterDir) : undefined, characterDir,
     savedVariables: path.join(accountDir, 'SavedVariables', 'Witchcraft.lua'),
+    logFile: path.resolve(addonsDir, '../../Logs/General.log'),
     ...(local.attach === undefined ? {} : { attach: parseAttachConfig(local.attach) }),
     ringSize: boundedInteger(local.ringSize ?? 3000, 3, 9999, 'ring size') };
 }

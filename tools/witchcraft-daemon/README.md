@@ -11,25 +11,25 @@ The WoW MCP bridge adds six read-only game-context tools (context, character, qu
 Use the addon from the matching WITCHCRAFT release. Extract its `Witchcraft/` folder under the game client's `Interface/AddOns` and log in at least once. From the directory where you want your assistant to work, configure the client and initialize its helper addons:
 
 ```sh
-npx witchcraft-daemon@0.5.0 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
-npx witchcraft-daemon@0.5.0 init --ring 3000
-npx witchcraft-daemon@0.5.0 doctor
+npx witchcraft-daemon@0.5.1 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.1 init --ring 3000
+npx witchcraft-daemon@0.5.1 doctor
 ```
 
-Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.0 run --only codex`. On Windows, `npx.cmd` also works. On Linux, the terminal dependency builds from source and needs Python 3, make and a C++ compiler. If its build reports a missing `node_api.h` and your home directory contains spaces, set `XDG_CACHE_HOME` to a private, writable path without spaces for the Node headers before running npm.
+Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.1 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.1 run --only codex`. On Windows, `npx.cmd` also works. On Linux, the terminal dependency builds from source and needs Python 3, make and a C++ compiler. If its build reports a missing `node_api.h` and your home directory contains spaces, set `XDG_CACHE_HOME` to a private, writable path without spaces for the Node headers before running npm.
 
-The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.0`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_HOME` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
+The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.1`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
 
-For the optional desktop overlay, install `witchcraft-daemon@0.5.0` and `electron@44.10.1` together in a local npm project, then use `npx witchcraft run --overlay` there. Source checkouts retain their existing overlay setup.
+For the optional desktop overlay, install `witchcraft-daemon@0.5.1` and `electron@44.10.1` together in a local npm project, then use `npx witchcraft run --overlay` there. Source checkouts retain their existing overlay setup.
 
-To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.0 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
+To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.1 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
 
 ### Try a local package
 
 Before the version reaches npm, run `npm pack` in the source tree’s `tools/witchcraft-daemon` directory. From another directory run:
 
 ```sh
-npm install --no-save "/absolute/path/to/witchcraft-daemon-0.5.0.tgz"
+npm install --no-save "/absolute/path/to/witchcraft-daemon-0.5.1.tgz"
 npx --no-install witchcraft-daemon --help
 ```
 
@@ -39,7 +39,9 @@ Use that same local command for `configure`, `init`, `doctor` and `run`. The rep
 
 Take the addon and the daemon from the same revision; the AGY tab needs addon 0.4.0 or later, and the daemon lists AGY to the addon only once it has been started.
 
-From this repository's `tools/witchcraft-daemon` folder:
+Keep the daemon in the checkout's `tools/witchcraft-daemon` folder to use the source layout. The client pointer lives at the checkout root, and calibration and session state live in `tools/witchcraft-daemon/.local`. The PowerShell management skill uses `WITCHCRAFT_HOME` to locate the checkout. To share a custom profile between the skill and the daemon, set `WITCHCRAFT_STATE_DIR` to its absolute path. If you tested the unpublished 0.5.0 npm tarball with a custom state directory, use that same path for `WITCHCRAFT_STATE_DIR` to keep your calibration.
+
+From the daemon folder:
 
 On Windows (PowerShell):
 
@@ -84,7 +86,7 @@ Calibrate the screen strip before your first run. Once calibration is saved, ord
 node bin/witchcraft.js calibrate
 ```
 
-Return to WoW and run `/witch calibrate off` after calibration. Start the daemon with the `run` command above, then `/reload` in game. Calibration captures the virtual desktop once; ongoing strip capture runs only while `WowB` is the foreground process. It pauses when you switch to another window. `--no-pixels` disables capture, so use it only when a separately configured file carrier can keep the connection moving.
+Return to WoW and run `/witch calibrate off` after calibration. Start the daemon with the `run` command above, then `/reload` in game. Calibration captures the virtual desktop once; ongoing strip capture runs only while the game client (`Wow`, `WowClassic`, `WowB` or `WowT`) is the foreground process. It pauses when you switch to another window. `--no-pixels` disables capture, so use it only when a separately configured file carrier can keep the connection moving.
 
 Use `/witch` in game. Ctrl+] switches the real terminal between agents; the game tabs select independently. Closing all launched CLI sessions stops the daemon. Ordinary Ctrl+C is passed to the selected CLI. A second daemon is rejected by `.local/bridge.lock`, which names the running pid. A lock left by a crash (its process gone, or empty and either over a minute old or written before the last boot) is set aside as `.local/bridge.lock.stale-<written>-<epoch>.json` on the next start. A lock whose pid is alive is always refused; if that pid now belongs to another program, the witchcraft-daemon skill's status action says so and its start action clears the lock. Closing the daemon's console window, or Ctrl+Break, stops it cleanly and releases the lock.
 

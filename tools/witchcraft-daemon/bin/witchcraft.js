@@ -20,6 +20,7 @@ import { createEventLog } from '../src/event-log.js';
 import { acquireLock, acquireRingLock, releaseOwnedLock } from '../src/bridge-lock.js';
 import { hasWoWTools, presenceDir } from '../src/mcp-presence.js';
 import { BindingCarrier, BindingReceiver } from '../src/binding-carrier.js';
+import { LogCarrier } from '../src/log-carrier.js';
 import { CooldownCarrierReader, CooldownCarrierReceiver } from '../src/cooldown-carrier.js';
 import { checkClientBuild } from '../src/client-build.js';
 import { createElectronOverlaySupervisor } from '../src/overlay-launch.js';
@@ -156,13 +157,16 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   const events = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'events.log'));
   const trace = (adapters.createEventLog ?? createEventLog)(path.join(localDir, 'trace.log'));
   const lockPath = path.join(localDir, 'bridge.lock');
-  let epoch, bindingNonce, cooldownNonce;
+  let epoch, bindingNonce, cooldownNonce, logNonce;
   do { epoch = randomBytes(4).toString('hex'); } while (epoch === '00000000');
   do { bindingNonce = randomBytes(4).toString('hex'); } while (bindingNonce === '00000000');
   do { cooldownNonce = randomBytes(4).toString('hex'); } while (cooldownNonce === '00000000');
+  do { logNonce = randomBytes(4).toString('hex'); } while (logNonce === '00000000');
+  // The log lane reads Logs/General.log; its chunk fields are omitted entirely when it is off.
+  const logLane = Boolean(config.logFile) && adapters.logCarrier !== false;
   // Ownership is the identity of the file this run created, not its contents (see bridge-lock.js).
   const { handle: lock, identity: lockIdentity, reclaimed } = await acquireLock({ lockPath, tag: epoch,
-    record: { pid: process.pid, epoch, bindingNonce, cooldownNonce, startedAt: new Date().toISOString() } });
+    record: { pid: process.pid, epoch, bindingNonce, cooldownNonce, logNonce, startedAt: new Date().toISOString() } });
   for (const stale of reclaimed) process.stderr.write(`Witchcraft: set aside a stale lock (${stale.reason}): ${stale.path}\n`);
   const releaseLock = () => releaseOwnedLock({ lockPath, identity: lockIdentity, tag: epoch });
   let writer, decoder, contextDecoder, context, releaseRing;
@@ -181,7 +185,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   let contextAck = 0, contextWarningAt = 0, contentWarningAt = 0, contextGeneration = 0, contextWrites = Promise.resolve();
   let contextWritten = null, journalPrevious = null;
   let contextWant = 0, contextWantMask = 0, wantServedAt = {};
-  let pair, terminal, overlay, capture, bindingCarrier, bindingReceiver, timer, unwatch, sessionInfo;
+  let pair, terminal, overlay, capture, bindingCarrier, bindingReceiver, logCarrier, logReceiver, timer, unwatch, sessionInfo;
   // A joined Claude session loaded its MCP servers when it started, so only its own WoW server can
   // say whether it has the tools (mcp-presence.js). false is published so the game can say so;
   // undefined (not joined, or its process gone) claims nothing.
@@ -367,6 +371,11 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         const persisted = performance.now();
         if (stopped) return;
         const bindingAck = bindingReceiver?.ack ?? 0;
+        // The UI session the acknowledgement belongs to, so a reloaded UI waits for its own probe's.
+        const bindingUi = bindingReceiver?.uiNonce ? { bindingUi: bindingReceiver.uiNonce } : {};
+        const logAck = logReceiver?.ack ?? 0;
+        const logUi = logReceiver?.uiNonce ? { logUi: logReceiver.uiNonce } : {};
+        const log = logLane ? { logProtocol: 1, logNonce, logAck, ...logUi } : {};
         // The carrier extension is omitted entirely when disabled, so the addon reads a nil protocol and stands down.
         const cooldown = startCooldownSession
           ? { cooldownProtocol: 2, cooldownNonce, cooldownAck: cooldownReceiver?.ack ?? 0,
@@ -375,10 +384,10 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         // AGY is left out, so a 0.3.1 addon (at most three sessions) still takes the frame.
         const sessions = addonSessions(pair.snapshot()).map(session => ({ ...session, ...sessionInfo?.get(session.id),
           ...(session.id === 'claude' && claudeTools === false ? { tools: false } : {}) }));
-        const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, cooldown });
+        const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, bindingUi, logAck, logUi, cooldown });
         const published = await writer.publish({ changed: signature !== oldScreen, ack: outbox.ack,
           promptProtocol: 1, promptResults: [...outbox.promptResults],
-          contextProtocol: 4, contextAck, contextWant, contextWantMask, bindingProtocol: 1, bindingNonce, bindingAck, ...cooldown,
+          contextProtocol: 4, contextAck, contextWant, contextWantMask, bindingProtocol: 1, bindingNonce, bindingAck, ...bindingUi, ...log, ...cooldown,
           cols: pair.cols, rows: pair.rows, sessions });
         if (published) oldScreen = signature;
         const finished = performance.now();
@@ -428,7 +437,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       await startupDone;
       await Promise.all(starting.map(([, operation]) => attempt(() => operation)));
       await attempt(() => unwatch?.());
-      for (const resource of new Set([bindingCarrier, cooldownCarrierReader, capture, overlay, ...starting.map(([resource]) => resource)])) {
+      for (const resource of new Set([bindingCarrier, logCarrier, cooldownCarrierReader, capture, overlay, ...starting.map(([resource]) => resource)])) {
         await attempt(() => resource?.stop());
       }
       await attempt(() => terminal?.dispose());
@@ -521,6 +530,34 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       bindingCarrier = new Carrier({ accountDir: config.accountDir, receiver: bindingReceiver,
         onError: error => { events.error('binding', error); process.stderr.write(`\nBinding carrier retained for inspection: ${error.message}\n`); } });
       await startResource(bindingCarrier);
+    }
+    if (stopped) return done;
+    if (logLane) {
+      const Receiver = adapters.LogReceiver ?? BindingReceiver;
+      const Carrier = adapters.LogCarrier ?? LogCarrier;
+      // The binding lane's protocol on its own nonce; only the medium is the game's General.log.
+      logReceiver = new Receiver({ epoch, nonce: logNonce,
+        onCursor: frame => {
+          const accepted = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
+          if (accepted && frame.seq === 0 && !writer.hasPublishedCursor) void publish();
+          return accepted;
+        },
+        onMessage: message => {
+          if (message.kind === 'context') {
+            const result = context.accept(message);
+            if (result.accepted) contextGeneration++;
+            return result;
+          }
+          return deliver('log', message);
+        },
+        onAck: (_seq, frame, result) => {
+          if (result?.probe) trace.note({ what: 'log-probe-ack', epoch, ui: frame.uiNonce });
+          void publish();
+        },
+      });
+      logCarrier = new Carrier({ logFile: config.logFile, receiver: logReceiver,
+        onError: error => { events.error('log', error); process.stderr.write(`\nLog carrier: ${error.message}\n`); } });
+      await startResource(logCarrier);
     }
     if (stopped) return done;
     if (config.cooldownCarrier === true && config.characterDir && adapters.cooldownCarrier !== false) {

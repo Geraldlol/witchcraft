@@ -1,6 +1,6 @@
 {
   "name": "witchcraft-daemon",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Local terminal and WoW context bridge for the WITCHCRAFT addon",
   "license": "MIT",
   "repository": {

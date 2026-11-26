@@ -216,14 +216,19 @@ local function hideTooltip(widget)
 end
 -- The client's red panel button. Its template owns the art, the gold-to-white label and the hover;
 -- an open panel is shown with its locked highlight.
-local function stockButton(parent, caption, action)
+local function stockButton(parent, caption, action, onHover)
     local widget = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     widget.tier = "stock"; widget:SetText(caption); widget:SetScript("OnClick", action)
+    if onHover then
+        widget:SetScript("OnEnter", onHover)
+        widget:SetScript("OnLeave", onHover)
+    end
     return widget
 end
 local function lit(widget, on) if on then widget:LockHighlight() else widget:UnlockHighlight() end end
 local function button(parent, caption, action, tier, options)
     options = options or {}
+    local onHover = options.onHover
     local widget = CreateFrame("Button", nil, parent, "BackdropTemplate")
     backdrop(widget, 1)
     widget.label = text(widget, options.size or 12, nil, { justify = "CENTER", shadow = options.shadow })
@@ -232,16 +237,24 @@ local function button(parent, caption, action, tier, options)
     widget:SetScript("OnEnter", function(self)
         self.hover = true; repaint(self)
         if self.tooltip then tooltip(self, self.tooltip) end
+        if onHover then onHover() end
     end)
-    widget:SetScript("OnLeave", function(self) self.hover = nil; repaint(self); hideTooltip(self) end)
-    widget:SetScript("OnHide", function(self) self.hover = nil; repaint(self); hideTooltip(self) end)
+    widget:SetScript("OnLeave", function(self)
+        self.hover = nil; repaint(self); hideTooltip(self)
+        if onHover then onHover() end
+    end)
+    widget:SetScript("OnHide", function(self)
+        self.hover = nil; repaint(self); hideTooltip(self)
+        if onHover then onHover() end
+    end)
     style(widget, tier, options)
     return widget
 end
 
 function View:Bounds()
-    local width = math.max(260, (UIParent:GetWidth() or 1024) - 24)
-    local height = math.max(220, (UIParent:GetHeight() or 768) - 24)
+    local scale = self.windowScale or 1
+    local width = math.max(260, (UIParent:GetWidth() or 1024) / scale - 24)
+    local height = math.max(220, (UIParent:GetHeight() or 768) / scale - 24)
     return math.min(260, width), math.min(280, height), math.min(1600, width), math.min(1100, height)
 end
 
@@ -366,7 +379,7 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
     -- Appearance: under the header, right edge.
     local panel, panelWidth = self.appearancePanel, math.min(260, width - 2 * PAD)
     local fontRow = width < COLLAPSE.font
-    local panelHeight = fontRow and 224 or 196
+    local panelHeight = fontRow and 249 or 223
     local panelY = math.min(HEADER + ACCENT + 6, math.max(0, height - panelHeight - 6))
     place(panel, content, width - PAD - panelWidth, panelY, panelWidth, panelHeight)
     place(self.appearanceTitle, panel, PAD, 3, panelWidth - 2 * PAD - 22, 16)
@@ -393,7 +406,10 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
     place(self.fontLabel, panel, PAD, 167, panelWidth - 2 * PAD - 62, 22)
     place(self.panelSmaller, panel, panelWidth - PAD - 50, 167, 22, 22)
     place(self.panelLarger, panel, panelWidth - PAD - 22, 167, 22, 22)
-    place(self.allSettings, panel, PAD, fontRow and 193 or 167, panelWidth - 2 * PAD, 22)
+    local actionY = fontRow and 193 or 167
+    place(self.fitColsButton, panel, PAD, actionY, tabHalf, 20)
+    place(self.resetPosButton, panel, PAD + tabHalf + 6, actionY, tabInner - tabHalf - 6, 20)
+    place(self.allSettings, panel, PAD, actionY + 24, panelWidth - 2 * PAD, 22)
     -- Keys: above the composer, right edge.
     local keys, keysWidth = self.keysPanel, math.min(216, width - 2 * PAD)
     local keyHalf = (keysWidth - 2 * PAD - 6) / 2
@@ -583,6 +599,7 @@ function View:Layout()
     show(self.writePanel, not self.minimized and self.openPanel == "write")
     show(self.guidePanel, not self.minimized and self.openPanel == "guide")
     self.layingOut = false
+    self:UpdateFade()
 end
 
 function View:ApplyOpacity(value)
@@ -609,13 +626,38 @@ function View:ApplyOpacity(value)
     self.glass = glass
 end
 
-function View:ToggleMinimized()
+function View:SetMinimized(minimized)
+    minimized = minimized == true
+    if self.minimized == minimized then return end
     self.input:ClearFocus()
     self.frame:StopMovingOrSizing()
     self.openPanel = nil
-    if not self.minimized then self.expandedHeight = self.frame:GetHeight() end
-    self.minimized = not self.minimized
-    self.frame:SetSize(self.frame:GetWidth(), self.minimized and BAR or self.expandedHeight or 650)
+    if minimized then self.expandedHeight = self.frame:GetHeight() end
+    self.minimized = minimized
+    self.frame:SetSize(self.frame:GetWidth(), minimized and BAR or self.expandedHeight or 650)
+    self:Layout()
+end
+
+function View:ResetLayout()
+    self.input:ClearFocus()
+    self.frame:StopMovingOrSizing()
+    self.openPanel = nil
+    self.minimized = false
+    self.docked = false
+    self.locked = false
+    self.windowScale = 1
+    if self.frame.SetScale then self.frame:SetScale(1) end
+    self.expandedHeight = 650
+    self.frame:ClearAllPoints()
+    self.frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    local layingOut = self.layingOut
+    self.layingOut = true
+    self.frame:SetSize(900, 650)
+    self.layingOut = layingOut
+end
+
+function View:ToggleMinimized()
+    self:SetMinimized(not self.minimized)
     self:Save()
     self:Render(self.snapshot)
 end
@@ -825,7 +867,14 @@ function View:Choose(index)
     self:RenderStatus()
 end
 
--- A tab that wants the player while they look elsewhere: a raid-warning line and its sound.
+local ALERT_SOUNDS = {
+    raid = { key = "RAID_WARNING", id = 8959 },
+    ready = { key = "READY_CHECK", id = 8960 },
+    tell = { key = "TELL_MESSAGE", id = 3081 },
+    ping = { key = "MAP_PING", id = 3175 },
+}
+
+-- A tab that wants the player while they look elsewhere: a raid-warning line and a configurable sound.
 function View:Alert(id, kind, want)
     want = want or {}
     local name = TITLES[id] or "Claude"
@@ -836,14 +885,45 @@ function View:Alert(id, kind, want)
         pcall(notice, frame, line, { r = color[1], g = color[2], b = color[3] })
     end
     local sounds = _G.SOUNDKIT
-    if want.sound ~= false and type(_G.PlaySound) == "function" and type(sounds) == "table" and sounds.RAID_WARNING then
-        pcall(_G.PlaySound, sounds.RAID_WARNING)
+    local choice = ALERT_SOUNDS[want.soundStyle or "raid"] or ALERT_SOUNDS.raid
+    local soundID = (type(sounds) == "table" and sounds[choice.key]) or choice.id
+    if want.sound ~= false and type(_G.PlaySound) == "function" and soundID then
+        pcall(_G.PlaySound, soundID)
+    end
+end
+
+function View:HasActiveFocus()
+    if self.openPanel ~= nil then return true end
+    for _, box in ipairs({ self.input, self.writeBox, self.findBox, self.copyBox, self.guideReference }) do
+        if box and box.HasFocus and box:HasFocus() then return true end
+    end
+    return false
+end
+
+function View:IsHovered()
+    if self.frame.IsMouseOver and self.frame:IsMouseOver() then return true end
+    return self.hovered == true
+end
+
+function View:UpdateFade()
+    if not self.frame.SetAlpha then return end
+    local faded = self.settings and self.settings.idleFade == true and not self.minimized
+        and not self:HasActiveFocus() and not self:IsHovered()
+    local alpha = faded and 0.45 or 1
+    if (self.currentAlpha or 1) ~= alpha then
+        self.currentAlpha = alpha
+        self.frame:SetAlpha(alpha)
     end
 end
 
 -- Window settings from the Options page, applied on every render.
 function View:ApplySettings(settings, saved)
     self.settings = settings
+    local scale = clamp(settings.windowScale, 80, 140, 100) / 100
+    if self.windowScale ~= scale then
+        self.windowScale = scale
+        if self.frame.SetScale then self.frame:SetScale(scale) end
+    end
     self.frame:SetFrameStrata(LAYERS[settings.layer] or LAYERS.normal)
     local docked = settings.docked == true
     self.locked = docked or settings.locked == true
@@ -864,6 +944,7 @@ function View:ApplySettings(settings, saved)
         if settings.escapeCloses == true and not found then special[#special + 1] = "WitchcraftTerminalFrame"
         elseif settings.escapeCloses ~= true and found then table.remove(special, found) end
     end
+    self:UpdateFade()
 end
 
 function View:Send()
@@ -1332,15 +1413,24 @@ end
 function View.Create(controller)
     local self = setmetatable({ controller = controller, rows = {}, drafts = {}, tabs = {}, controls = {}, buttons = {}, settings = {},
         history = { claude = {}, codex = {}, copilot = {}, agy = {} } }, View)
+    local function syncFade() self:UpdateFade() end
     local function makeButton(parent, caption, action, tier, options)
+        options = options or {}
+        options.onHover = syncFade
         local widget = button(parent, caption, action, tier, options)
         self.buttons[#self.buttons + 1] = widget; return widget
+    end
+    local function makeStockButton(parent, caption, action)
+        return stockButton(parent, caption, action, syncFade)
     end
     local frame = CreateFrame("Frame", "WitchcraftTerminalFrame", UIParent, "BackdropTemplate")
     self.frame = frame
     frame:Hide(); frame:SetSize(900, 650); frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     frame:SetFrameStrata("DIALOG"); frame:SetMovable(true); frame:SetResizable(true)
     frame:SetClampedToScreen(true); frame:EnableMouse(true)
+    frame:SetScript("OnEnter", function() self.hovered = true; syncFade() end)
+    frame:SetScript("OnLeave", function() self.hovered = false; syncFade() end)
+    frame:SetScript("OnShow", syncFade)
     local level = frame:GetFrameLevel()
     self.chrome = CreateFrame("Frame", nil, frame)
     self.chrome:SetAllPoints(frame); self.chrome:SetFrameLevel(level + 2); self.chrome:EnableMouse(false)
@@ -1363,6 +1453,8 @@ function View.Create(controller)
     self.drag:RegisterForClicks("LeftButtonUp")
     self.drag:SetScript("OnDragStart", function() if not self.locked then frame:StartMoving() end end)
     self.drag:SetScript("OnDragStop", function() frame:StopMovingOrSizing(); self:Save() end)
+    self.drag:SetScript("OnEnter", syncFade)
+    self.drag:SetScript("OnLeave", syncFade)
     self.drag:SetScript("OnDoubleClick", function(_, mouseButton)
         if mouseButton == "LeftButton" then self:ToggleMinimized() end
     end)
@@ -1371,8 +1463,9 @@ function View.Create(controller)
         self.guideHint:SetText("Draft only. Review, then Send.")
         self:TogglePanel("guide")
     end)
-    self.book:SetScript("OnEnter", function(widget) tooltip(widget, "Guides: quests, loot and adventures") end)
-    self.book:SetScript("OnLeave", hideTooltip); self.book:SetScript("OnHide", hideTooltip)
+    self.book:SetScript("OnEnter", function(widget) tooltip(widget, "Guides: quests, loot and adventures"); syncFade() end)
+    self.book:SetScript("OnLeave", function(widget) hideTooltip(widget); syncFade() end)
+    self.book:SetScript("OnHide", hideTooltip)
     -- The title rides above the stock art, which covers the strip; it takes no mouse so the strip still drags.
     self.titleBar = CreateFrame("Frame", nil, header); self.titleBar:SetFrameLevel(level + 4); self.titleBar:EnableMouse(false)
     self.brand = text(self.titleBar, 12, C.ink, { justify = "CENTER" }); self.brand:SetText("Witchcraft")
@@ -1399,12 +1492,14 @@ function View.Create(controller)
     self.smaller = makeButton(header, "A-", function() controller:SetFontSize(math.max(8, self.fontSize - 1)) end, "glyph", glyphOptions)
     self.larger = makeButton(header, "A+", function() controller:SetFontSize(math.min(20, self.fontSize + 1)) end, "glyph", glyphOptions)
     self.appearanceButton = makeButton(header, "...", function() self:TogglePanel("appearance") end, "glyph", glyphOptions)
-    self.appearanceButton.tooltip = "Appearance: opacity, text size and all settings"
+    self.appearanceButton.tooltip = "Appearance: opacity, tabs, layout actions and all settings"
     -- The client's own red window buttons. Close keeps the view's Hide so focus and dragging are released first.
     self.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     self.close:SetScript("OnClick", function() self:Hide() end)
+    self.close:SetScript("OnEnter", syncFade); self.close:SetScript("OnLeave", syncFade)
     self.minimize = CreateFrame("Button", nil, frame)
     self.minimize:SetScript("OnClick", function() self:ToggleMinimized() end)
+    self.minimize:SetScript("OnEnter", syncFade); self.minimize:SetScript("OnLeave", syncFade)
     for _, widget in ipairs({ self.smaller, self.larger, self.appearanceButton }) do widget:SetFrameLevel(level + 3) end
     for _, widget in ipairs({ self.minimize, self.close }) do widget:SetFrameLevel(level + 5) end
     self.accentBar = frame:CreateTexture(nil, "ARTWORK")
@@ -1454,10 +1549,13 @@ function View.Create(controller)
     self.choiceButtons = {}
     for i = 1, MAX_CHOICES do
         local index = i
-        local control = stockButton(self.choiceBar, tostring(i), function() self:Choose(index) end)
+        local control = makeStockButton(self.choiceBar, tostring(i), function() self:Choose(index) end)
         -- Labels are cut to the button; the whole option is on hover.
-        control:SetScript("OnEnter", function(widget) if widget.option then tooltip(widget, index .. ". " .. widget.option) end end)
-        control:SetScript("OnLeave", hideTooltip)
+        control:SetScript("OnEnter", function(widget)
+            if widget.option then tooltip(widget, index .. ". " .. widget.option) end
+            syncFade()
+        end)
+        control:SetScript("OnLeave", function(widget) hideTooltip(widget); syncFade() end)
         self.choiceButtons[i] = control
     end
     self.choiceBar:Hide()
@@ -1473,6 +1571,10 @@ function View.Create(controller)
     self.input:SetScript("OnEnterPressed", function() self:Send() end)
     -- Escape leaves the input and nothing more; the window closes only when asked to.
     self.input:SetScript("OnEscapePressed", function(widget) widget:ClearFocus() end)
+    self.input:SetScript("OnEditFocusGained", syncFade)
+    self.input:SetScript("OnEditFocusLost", syncFade)
+    self.input:SetScript("OnEnter", syncFade)
+    self.input:SetScript("OnLeave", syncFade)
     self.input:SetScript("OnKeyDown", function(_, key)
         -- A focused edit box already owns the keyboard, so only these keys are read
         -- here; everything else stays with the edit box's own handling.
@@ -1490,12 +1592,12 @@ function View.Create(controller)
         if not self.recalling then self.historyIndex, self.historyStash = nil, nil end
     end)
     self.inputRule = fill(self.input, C.brassBright, 1, "OVERLAY")
-    self.send = stockButton(self.content, "Send", function() self:Send() end)
-    self.enterButton = stockButton(self.content, "Enter", function() self:Action("enter") end)
+    self.send = makeStockButton(self.content, "Send", function() self:Send() end)
+    self.enterButton = makeStockButton(self.content, "Enter", function() self:Action("enter") end)
     self.controls[1] = self.enterButton
-    self.keysButton = stockButton(self.content, "Keys", function() self:TogglePanel("keys") end)
-    self.copyButton = stockButton(self.content, "Copy", function() self:TogglePanel("copy") end)
-    self.commandsButton = stockButton(self.content, "/", function(widget) self:OpenCommands(widget) end)
+    self.keysButton = makeStockButton(self.content, "Keys", function() self:TogglePanel("keys") end)
+    self.copyButton = makeStockButton(self.content, "Copy", function() self:TogglePanel("copy") end)
+    self.commandsButton = makeStockButton(self.content, "/", function(widget) self:OpenCommands(widget) end)
     -- Footer
     self.footer = CreateFrame("Frame", nil, self.content)
     self.footerBG = fill(self.footer, C.parchHi, 0)
@@ -1506,8 +1608,8 @@ function View.Create(controller)
     self.footerHint = text(self.footer, 11, C.muted)
     self.feedbackHover = CreateFrame("Frame", nil, self.footer)
     self.feedbackHover:SetAllPoints(self.footerHint); self.feedbackHover:EnableMouse(true)
-    self.feedbackHover:SetScript("OnEnter", function(widget) tooltip(widget, self.footerHint:GetText()) end)
-    self.feedbackHover:SetScript("OnLeave", hideTooltip)
+    self.feedbackHover:SetScript("OnEnter", function(widget) tooltip(widget, self.footerHint:GetText()); syncFade() end)
+    self.feedbackHover:SetScript("OnLeave", function(widget) hideTooltip(widget); syncFade() end)
     self.feedbackHover:SetScript("OnHide", hideTooltip)
     self.status = text(self.footer, 11, C.muted, { justify = "RIGHT" })
     self.resize = makeButton(frame, "", function() end, "glyph")
@@ -1516,7 +1618,17 @@ function View.Create(controller)
         if mouseButton == "LeftButton" then frame:StartSizing("BOTTOMRIGHT") end
     end)
     self.resize:SetScript("OnMouseUp", function(_, mouseButton)
-        if mouseButton == "LeftButton" then frame:StopMovingOrSizing(); self:Render(self.snapshot); self:Save() end
+        if mouseButton == "LeftButton" then
+            frame:StopMovingOrSizing()
+            self:Render(self.snapshot)
+            self:Save()
+            if self.settings and self.settings.autoFitCols == true and self.controller.RequestCols then
+                local fitted = self:FittedCols()
+                if self.snapshot and self.snapshot.connected and fitted ~= self.snapshot.cols then
+                    self.controller:RequestCols("fit")
+                end
+            end
+        end
     end)
     -- Popovers share one pattern: brass frame, 22-point title row, close glyph.
     local function popover(title, close)
@@ -1561,6 +1673,23 @@ function View.Create(controller)
         self.tabToggles[id] = toggle
     end
     self.fontLabel = text(self.appearancePanel, 11, C.muted); self.fontLabel:SetText("Terminal font")
+    self.fitColsButton = makeButton(self.appearancePanel, "FIT COLS", function()
+        if not controller.RequestCols then return end
+        local ok, detail = controller:RequestCols("fit")
+        self.message = ok and ("Terminal width request queued (" .. tostring(detail) .. " columns)")
+            or plain(detail or "Unable to fit columns.")
+        self:RenderStatus()
+    end, "secondary", { size = 10 })
+    self.fitColsButton.tooltip = "Resize the desktop terminal columns to match this window width (/witch cols fit)"
+    self.resetPosButton = makeButton(self.appearancePanel, "RESET POS", function()
+        if controller.ResetPosition then
+            self.openPanel = nil
+            controller:ResetPosition()
+            self.message = "Window position and size reset"
+            self:RenderStatus()
+        end
+    end, "secondary", { size = 10 })
+    self.resetPosButton.tooltip = "Center the window at 900x650, unlock/undock it, and restore 100% scale (/witch resetpos)"
     self.allSettings = makeButton(self.appearancePanel, "ALL SETTINGS...", function()
         self.openPanel = nil; self:Layout(); controller:OpenSettings()
     end, "secondary", { size = 10 })
@@ -1614,6 +1743,8 @@ function View.Create(controller)
     self.guideReference:SetMaxLetters(512); self.guideReference:SetTextInsets(6, 6, 0, 0); self.guideReference:SetText("")
     self.guideReference:SetScript("OnEscapePressed", function() self:TogglePanel("guide") end)
     self.guideReference:SetScript("OnEnterPressed", function() self.guideReference:ClearFocus() end)
+    self.guideReference:SetScript("OnEditFocusGained", syncFade)
+    self.guideReference:SetScript("OnEditFocusLost", syncFade)
     self.guideReference:SetScript("OnTextChanged", function(widget)
         local value = widget:GetText(); local clean = inputText(value)
         if value ~= clean then widget:SetText(clean) end
@@ -1665,10 +1796,12 @@ function View.Create(controller)
     self.writeBox:SetAutoFocus(false); self.writeBox:SetMultiLine(true); self.writeBox:SetMaxLetters(4600)
     self.writeBox:SetFont(MONO, 12, ""); self.writeBox:SetTextColor(rgb(C.text)); self.writeBox:SetText("")
     self.writeBox:SetScript("OnEscapePressed", function() self:TogglePanel("write") end)
+    self.writeBox:SetScript("OnEditFocusGained", syncFade)
+    self.writeBox:SetScript("OnEditFocusLost", syncFade)
     self.writeBox:SetScript("OnTextChanged", function(widget)
         self.writeCount:SetText(#(widget:GetText() or "") .. " / 4600 bytes")
     end)
-    self.writeSend = stockButton(self.writePanel, "Send", function() self:SendWritten() end)
+    self.writeSend = makeStockButton(self.writePanel, "Send", function() self:SendWritten() end)
     self.writeCount = text(self.writePanel, 11, C.muted); self.writeCount:SetText("0 / 4600 bytes")
     self.writePanel:SetScript("OnHide", function() self.writeBox:ClearFocus() end)
     self.findPanel, self.findTitle, self.findClose, self.findRule = popover("FIND", function() self:TogglePanel("find") end)
@@ -1679,6 +1812,8 @@ function View.Create(controller)
     self.findBox:SetTextInsets(6, 6, 0, 0); self.findBox:SetText("")
     self.findBox:SetScript("OnEnterPressed", function() self:Find(1) end)
     self.findBox:SetScript("OnEscapePressed", function() self:TogglePanel("find") end)
+    self.findBox:SetScript("OnEditFocusGained", syncFade)
+    self.findBox:SetScript("OnEditFocusLost", syncFade)
     self.findOlder = makeButton(self.findPanel, "OLDER", function() self:Find(1) end, "secondary", { size = 11 })
     self.findNewer = makeButton(self.findPanel, "NEWER", function() self:Find(-1) end, "secondary", { size = 11 })
     self.findResult = text(self.findPanel, 11, C.muted); self.findResult:SetText("Enter searches older rows")
@@ -1693,6 +1828,8 @@ function View.Create(controller)
     self.copyBox:SetAutoFocus(false); self.copyBox:SetMultiLine(true); self.copyBox:SetMaxLetters(0)
     self.copyBox:SetTextColor(rgb(C.text)); self.copyBox:SetText("")
     self.copyBox:SetScript("OnEscapePressed", function() self:TogglePanel("copy") end)
+    self.copyBox:SetScript("OnEditFocusGained", syncFade)
+    self.copyBox:SetScript("OnEditFocusLost", syncFade)
     self.copyBox:SetScript("OnTextChanged", function(widget)
         if widget:GetText() ~= self.copyText then widget:SetText(self.copyText) end
     end)

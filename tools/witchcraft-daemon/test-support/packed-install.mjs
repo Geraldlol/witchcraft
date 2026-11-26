@@ -61,7 +61,7 @@ try {
     await mkdir(dir, { recursive: true });
   }
   await writeFile(path.join(addon, 'Witchcraft.toc'), `## Version: ${pack.version}\n`);
-  const env = { ...process.env, HOME: home, USERPROFILE: home, WITCHCRAFT_HOME: state,
+  const env = { ...process.env, HOME: home, USERPROFILE: home, WITCHCRAFT_STATE_DIR: state,
     npm_config_cache: npm(['config', 'get', 'cache'], packageDir),
     npm_config_audit: 'false', npm_config_fund: 'false' };
   // On Linux node-gyp's makefile splits Node header paths at spaces. Keep the headers in a
@@ -75,7 +75,7 @@ try {
   // failed installation reports the compiler error before the daemon has a chance to start.
   assert.match(npm(['exec', '--foreground-scripts', '--yes', '--', tarball, 'help'], project, env), /witchcraft init/u);
   const defaultHomeEnv = { ...env };
-  delete defaultHomeEnv.WITCHCRAFT_HOME;
+  delete defaultHomeEnv.WITCHCRAFT_STATE_DIR;
   npm(['exec', '--yes', '--', tarball, 'configure', '--addons-dir', addons], project, defaultHomeEnv);
   assert.equal(JSON.parse(await readFile(path.join(home, '.witchcraft', 'wow.config.json'))).addonsDir, addons);
   run('configure', '--addons-dir', addons);
@@ -103,11 +103,23 @@ try {
   await checkMcp(process.execPath, [npmCli, 'exec', '--yes', '--package', tarball, '--', 'witchcraft-mcp'],
     project, env, pack.version, false);
 
-  // Capture the same registration argv a real --apply would pass to Claude, without starting an assistant.
   const install = path.join(scratch, 'temporary install');
   await mkdir(install);
   npm(['install', '--foreground-scripts', '--prefix', install, '--no-save', '--package-lock=false', tarball], install, env);
-  const module = path.join(install, 'node_modules', pack.name, 'src', 'mcp-launch.js');
+  const installedSrc = path.join(install, 'node_modules', pack.name, 'src');
+  const { loadConfig } = await import(pathToFileURL(path.join(installedSrc, 'config.js')).href);
+  const installedConfig = await loadConfig({ configPath: preferences, wowConfigPath: path.join(state, 'wow.config.json') });
+  assert.equal(installedConfig.logFile, path.join(game, 'Logs', 'General.log'));
+
+  // Run the release's log fixtures against the installed reader. Imports in the tests are
+  // relative to stdin's working directory, so ../src resolves inside this tarball installation.
+  execFileSync(process.execPath, ['--input-type=module'], {
+    input: await readFile(path.join(packageDir, 'test', 'log-carrier.test.js')),
+    cwd: installedSrc, env, stdio: ['pipe', 'inherit', 'inherit'], timeout: 60_000,
+  });
+
+  // Capture the same registration argv a real --apply would pass to Claude, without starting an assistant.
+  const module = path.join(installedSrc, 'mcp-launch.js');
   assert.throws(() => createRequire(module).resolve('electron'), { code: 'MODULE_NOT_FOUND' });
   const { setupClaudeMcp } = await import(pathToFileURL(module).href);
   const calls = [];
@@ -120,7 +132,7 @@ try {
   assert.deepEqual(registrationArgs.slice(0, 6), ['mcp', 'add', '-s', 'local', 'witchcraft_wow', '--']);
   const [command, ...args] = registrationArgs.slice(6);
   const persistentEnv = { ...env, npm_config_offline: 'true' };
-  delete persistentEnv.WITCHCRAFT_HOME;
+  delete persistentEnv.WITCHCRAFT_STATE_DIR;
   // A surviving install already has the dependencies, even if npm's cache is empty.
   await checkMcp(command, args, project, { ...persistentEnv, npm_config_cache: path.join(scratch, 'empty npm cache') },
     pack.version, true);

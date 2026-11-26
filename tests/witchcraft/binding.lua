@@ -26,6 +26,8 @@ local function fixture(options)
             return true
         end,
     }
+    -- The production adapter passes GetTime and no Now.
+    if options.getTime then api.GetTime, api.Now = api.Now, nil end
     binding = ns.Binding.New(api)
     return binding, state
 end
@@ -260,7 +262,7 @@ test("binding heartbeat flags above 3 are refused by the codec and the parser", 
         "CLICK WitchcraftCarrier_V1_1234ABCD_89ABCDEF_ABCDEF01_0002_000000_01_01_JACA_425003FF:LeftButton"), nil)
 end)
 
-test("binding cancel releases the claimed frame of a dropped input, never in combat or for another input", function()
+test("binding cancel of a dropped input keeps its claimed frame until the acknowledgement, and ignores another input", function()
     local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
     local message = { epoch = "1234abcd", id = 9, tab = "copilot", action = "text", text = string.rep("x", 60) }
     assert(carrier:OfferInput(message)); assert(#carrier.active.chunks > 1)
@@ -273,7 +275,9 @@ test("binding cancel releases the claimed frame of a dropped input, never in com
     equal(carrier:Cancel("input:1234abcd:9"), false)
     equal(carrier.outstanding, owned); equal(carrier.active, active); equal(state.actions[owned.key], owned.action)
     state.combat = false
-    equal(carrier:Cancel("input:1234abcd:9"), true)
+    equal(carrier:Cancel("input:1234abcd:9"), false)
+    equal(carrier.outstanding, owned); equal(state.actions[owned.key], owned.action)
+    assert(carrier:AcceptHost(host(2)))
     equal(carrier.outstanding, nil); equal(carrier.active, nil); equal(state.actions[owned.key], nil)
     equal(carrier:Busy(), false); equal(carrier.enabled, true); equal(carrier.quarantined, nil)
 end)
@@ -283,4 +287,258 @@ test("binding self UPDATE_BINDINGS is ignored while an owned write is in progres
     assert(carrier:Probe("abcdef01")); assert(carrier:Pump(1))
     equal(carrier.quarantined, nil); assert(carrier.outstanding)
     assert(carrier:AcceptHost(host(1))); equal(carrier.quarantined, nil)
+end)
+
+test("an accepted acknowledgement or a new probe clears the input mark", function()
+    local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+    assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    state.now = 1; assert(carrier:Pump(6))
+    carrier.inputBlocked = true
+    equal(carrier:AcceptHost(host(1)), false); equal(carrier.inputBlocked, true, "an older acknowledgement leaves the mark")
+    assert(carrier:AcceptHost(host(2))); equal(carrier.inputBlocked, nil, "an accepted acknowledgement clears the mark")
+    -- A proven carrier probes again only for another host session.
+    equal(carrier:AcceptHost(host(2, { bindingNonce = "99999999" })), false)
+    carrier.inputBlocked = true
+    assert(carrier:Probe("abcdef01")); equal(carrier.inputBlocked, nil, "a new probe clears the mark")
+end)
+
+test("a heartbeat asked for inside a carrier write is refused, so one key is bound and Stop clears it", function()
+    local carrier, state = fixture()
+    assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+    -- SetBinding fires UPDATE_BINDINGS synchronously; a handler that asks for a heartbeat runs inside the write.
+    local set, nested = carrier.api.SetBinding, nil
+    carrier.api.SetBinding = function(key, action)
+        local ok = set(key, action)
+        if action and not nested then nested = { carrier:Heartbeat(3, 0) } end
+        return ok
+    end
+    state.now = 1; assert(carrier:Heartbeat(2, 0))
+    equal(nested[1], false); equal(nested[2], "carrier write in progress")
+    local bound = {}
+    for _, key in ipairs(ns.Binding.Keys) do if (state.actions[key] or "") ~= "" then bound[#bound + 1] = key end end
+    equal(#bound, 1, "one carrier key is bound")
+    equal(carrier.heartbeat.key, bound[1], "and the carrier tracks it")
+    equal(carrier:Stop(), true)
+    for _, key in ipairs(ns.Binding.Keys) do equal(state.actions[key] or "", "", "Stop leaves " .. key .. " unbound") end
+end)
+
+test("the binding carrier reads GetTime when its api has no Now, as the production adapter passes", function()
+    local carrier, state = fixture({ getTime = true })
+    equal(carrier.api.Now, nil)
+    state.now = 5; equal(carrier:Now(), 5, "Now follows GetTime")
+    assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+    equal(carrier.lastWriteAt, 5)
+    state.now = 5.5
+    local ok, reason = carrier:Heartbeat(2, 0)
+    equal(ok, false); equal(reason, "carrier rate limit", "a second write inside one second is refused")
+    state.now = 6; assert(carrier:Heartbeat(2, 0), "a second write after one second is accepted")
+    equal(ns.Binding.ParseAction(state.actions[ns.Binding.Keys[1]]).seq, 0)
+    equal(ns.Binding.New({}):Now(), 0, "with neither function the clock stays at zero")
+end)
+
+test("a cancelled data frame keeps its key until its acknowledgement, and nothing else is sent before it", function()
+    local second = { epoch = "1234abcd", id = 10, tab = "codex", action = "text", text = "second" }
+    -- Input A is claimed at sequence 2.
+    local function claimed(text)
+        local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+        assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = text or "first" }))
+        state.now = 1; assert(carrier:Pump(6)); equal(carrier.outstanding.seq, 2)
+        return carrier, state, carrier.outstanding
+    end
+    local carrier, state, owned = claimed()
+    local writes = #state.sets
+    state.now = 2
+    equal(carrier:Cancel("input:1234abcd:9"), false, "nothing is released before the acknowledgement")
+    equal(state.actions[owned.key], owned.action); equal(carrier.outstanding, owned); equal(carrier:Busy(), true)
+    equal(carrier.status, "Carrier waiting for host acknowledgement")
+    equal(carrier:OfferInput(second), false)
+    for _, now in ipairs({ 3, 10, 100 }) do state.now = now; equal(carrier:Pump(7), false, "no frame at " .. now) end
+    equal(#state.sets, writes, "no binding call while A is outstanding")
+    equal(carrier:AcceptHost(host(1)), false); equal(carrier.outstanding, owned, "an older acknowledgement moves nothing")
+    local accepted, kind = carrier:AcceptHost(host(2))
+    equal(accepted, true); equal(kind, "frame")
+    equal(state.actions[owned.key], nil); equal(carrier.active, nil); equal(carrier.nextSeq, 3)
+    equal(carrier.status, "Carrier ready")
+    assert(carrier:OfferInput(second)); state.now = 101; assert(carrier:Pump(7))
+    equal(carrier.outstanding.seq, 3, "B follows the acknowledged sequence")
+    -- A multi-part item abandoned at part 1 sends no part 2.
+    local multi, multiState = claimed(string.rep("x", 60))
+    assert(#multi.active.chunks > 1)
+    equal(multi:Cancel("input:1234abcd:9"), false)
+    assert(multi:AcceptHost(host(2))); equal(multi.active, nil)
+    local cleared = #multiState.sets
+    for _, now in ipairs({ 5, 6, 50 }) do multiState.now = now; equal(multi:Pump(7), false) end
+    equal(#multiState.sets, cleared, "no part 2"); equal(multi.outstanding, nil); equal(multi:Busy(), false)
+    -- In combat the cancel behaves the same and makes no binding call.
+    local fought, foughtState, foughtOwned = claimed()
+    foughtState.combat = true
+    local sets, saves = #foughtState.sets, foughtState.saves
+    equal(fought:Cancel("input:1234abcd:9"), false)
+    equal(#foughtState.sets, sets); equal(foughtState.saves, saves); equal(fought.outstanding, foughtOwned)
+    equal(fought.active.abandoned, true); equal(fought.status, "Carrier waiting for host acknowledgement")
+    foughtState.combat = false
+    assert(fought:AcceptHost(host(2))); equal(fought.active, nil); equal(foughtState.actions[foughtOwned.key], nil)
+end)
+
+test("an acknowledgement repeated after a quarantining cleanup failure only finishes the cleanup", function()
+    local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+    assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    state.now = 1; assert(carrier:Pump(6))
+    local owned = carrier.outstanding
+    state.rejectClear = true
+    equal(carrier:AcceptHost(host(2)), false)
+    equal(carrier.quarantined, "carrier cleanup failed"); equal(carrier.outstanding, owned); equal(carrier.active, nil)
+    state.rejectClear = nil
+    local ok, accepted = pcall(carrier.AcceptHost, carrier, host(2))
+    assert(ok, tostring(accepted)); equal(accepted, false)
+    equal(carrier.outstanding, nil); equal(state.actions[owned.key], nil, "the cleanup finished")
+    equal(carrier.enabled, false); equal(carrier.quarantined, "carrier cleanup failed"); equal(carrier.nextSeq, 2)
+end)
+
+test("a proven carrier refuses a second probe until a host result names another session", function()
+    local refused = "Binding carrier was already probed in this host session; /reload to probe again"
+    local function proven()
+        local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+        return carrier, state
+    end
+    local carrier, state = proven()
+    local sets, saves = #state.sets, state.saves
+    local ok, reason = carrier:Probe("abcdef02")
+    equal(ok, false); equal(reason, refused); equal(#state.sets, sets); equal(state.saves, saves)
+    equal(carrier.enabled, true); equal(carrier.nextSeq, 2); equal(carrier.active, nil)
+    state.now = 5; equal(carrier:Pump(7), false); equal(#state.sets, sets, "nothing is written")
+    equal(carrier:Stop(), true)
+    ok, reason = carrier:Probe("abcdef02")
+    equal(ok, false); equal(reason, refused, "still refused after Stop"); equal(#state.sets, sets)
+    equal(carrier:AcceptHost(host(0)), false)
+    equal(select(2, carrier:Probe("abcdef02")), refused, "the same session leaves it proven")
+    -- Stopped, then a host result with another epoch.
+    equal(carrier:AcceptHost(host(0, { epoch = "22222222" })), false)
+    assert(carrier:Probe("abcdef02"), "another epoch allows a probe")
+    -- Enabled, then a host result with another nonce.
+    local enabled = proven()
+    equal(enabled:AcceptHost(host(1, { bindingNonce = "99999999" })), false)
+    equal(enabled.enabled, false); equal(enabled.status, "Host changed; run /witch bindprobe")
+    assert(enabled:Probe("abcdef02"), "another nonce allows a probe")
+    -- Stopped, then another nonce.
+    local stopped = proven()
+    equal(stopped:Stop(), true)
+    equal(stopped:AcceptHost(host(1, { bindingNonce = "99999999" })), false)
+    assert(stopped:Probe("abcdef02"))
+    -- A host change seen while a data frame is outstanding also allows a probe once it is cleaned.
+    local busy, busyState = proven()
+    assert(busy:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    busyState.now = 1; assert(busy:Pump(6))
+    equal(busy:AcceptHost(host(1, { epoch = "22222222" })), false); equal(busy.outstanding, nil)
+    assert(busy:Probe("abcdef02"))
+end)
+
+test("a probe the host may have read is not repeated after Stop, until the host session changes", function()
+    local carrier, state = fixture()
+    equal(carrier:AcceptHost(host(0)), false)
+    assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5))
+    assert(carrier.outstanding and carrier.outstanding.probe, "the probe frame is on its key")
+    equal(carrier:Stop(), true, "Stop releases the unanswered probe")
+    local sets = #state.sets
+    state.now = 5
+    local ok, reason = carrier:Probe("abcdef01")
+    equal(ok, false); equal(reason, "Binding carrier was already probed in this host session; /reload to probe again")
+    equal(carrier:Pump(6), false); equal(#state.sets, sets, "no second probe frame is written")
+    equal(carrier:AcceptHost(host(1)), false, "the late acknowledgement finds nothing outstanding")
+    equal(select(1, carrier:Probe("abcdef01")), false, "the same host session still refuses")
+    equal(carrier:AcceptHost(host(0, { epoch = "22222222" })), false)
+    assert(carrier:Probe("abcdef01"), "another host session allows a probe")
+    -- A probe still on its key when the host changes can be read by the new host.
+    local waiting = fixture()
+    equal(waiting:AcceptHost(host(0)), false)
+    assert(waiting:Probe("abcdef01")); assert(waiting:Pump(5))
+    equal(waiting:AcceptHost(host(0, { epoch = "22222222" })), false)
+    equal(waiting:Stop(), true)
+    equal(select(1, waiting:Probe("abcdef01")), false, "the new host may have read the probe that was still on the key")
+end)
+
+test("a host result from another epoch without the binding fields ends the carrier proven with the old host", function()
+    local function proven()
+        local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+        return carrier, state
+    end
+    local carrier = proven()
+    equal(carrier:AcceptHost({ epoch = "1234abcd" }), false)
+    equal(carrier.enabled, true, "the same epoch without the fields changes nothing")
+    equal(carrier:AcceptHost({ epoch = "22222222" }), false)
+    equal(carrier.enabled, false); equal(carrier.status, "Host changed; run /witch bindprobe")
+    assert(carrier:Probe("abcdef02"), "the new host session allows a probe")
+    local busy, state = proven()
+    assert(busy:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    state.now = 1; assert(busy:Pump(6))
+    local key = busy.outstanding.key
+    equal(busy:AcceptHost({ epoch = "22222222" }), false)
+    equal(busy.outstanding, nil); equal(busy.enabled, false); equal(state.actions[key], nil, "the old host's frame is cleared")
+end)
+
+test("a host change in combat ends the old carrier at once and clears its frame when combat ends", function()
+    local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+    assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    state.now = 1; assert(carrier:Pump(6))
+    local key = carrier.outstanding.key
+    state.combat = true
+    equal(carrier:AcceptHost(host(0, { epoch = "22222222" })), false)
+    equal(carrier.enabled, false, "the old host's carrier no longer counts as enabled")
+    assert(carrier.outstanding and state.actions[key], "the cleanup waits for combat to end")
+    state.combat = false
+    equal(carrier:AcceptHost(host(0, { epoch = "22222222" })), false)
+    equal(carrier.outstanding, nil); equal(carrier.active, nil); equal(state.actions[key], nil)
+    equal(carrier.status, "Host changed; run /witch bindprobe")
+end)
+
+test("an acknowledgement cleanup whose save failed only saves on the next acknowledgement or Stop", function()
+    local function failing()
+        local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5)); assert(carrier:AcceptHost(host(1)))
+        assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+        state.now = 1; assert(carrier:Pump(6))
+        local owned = carrier.outstanding
+        state.failSaveAt = state.saves + 1
+        equal(carrier:AcceptHost(host(2)), false)
+        equal(carrier.quarantined, "carrier cleanup failed"); equal(carrier.outstanding, owned)
+        equal(state.actions[owned.key], nil, "the live clear landed")
+        return carrier, state
+    end
+    local carrier, state = failing()
+    local sets, saves = #state.sets, state.saves
+    equal(carrier:AcceptHost(host(2)), false)
+    equal(carrier.outstanding, nil, "the repeated acknowledgement finishes the cleanup")
+    equal(#state.sets, sets, "no second SetBinding call"); equal(state.saves, saves + 1)
+    equal(carrier.quarantined, "carrier cleanup failed")
+    local stopped, stoppedState = failing()
+    sets, saves = #stoppedState.sets, stoppedState.saves
+    equal(stopped:Stop(), true)
+    equal(stopped.outstanding, nil, "Stop finishes the cleanup"); equal(#stoppedState.sets, sets); equal(stoppedState.saves, saves + 1)
+end)
+
+test("a result naming another UI session leaves the probe waiting on its key", function()
+    local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5))
+    local owned = carrier.outstanding
+    equal(carrier:AcceptHost(host(7, { bindingUi = "abcdef00" })), false)
+    assert(not carrier.quarantined); equal(carrier.outstanding, owned); equal(state.actions[owned.key], owned.action)
+    equal(carrier:AcceptHost(host(1, { bindingUi = "abcdef00" })), false, "the old session's acknowledgement is not this probe's")
+    assert(not carrier.quarantined); equal(carrier.outstanding, owned); equal(state.actions[owned.key], owned.action)
+    local accepted, kind = carrier:AcceptHost(host(1, { bindingUi = "abcdef01" }))
+    equal(accepted, true); equal(kind, "probe"); equal(carrier.enabled, true); equal(carrier.nextSeq, 2)
+    equal(state.actions[owned.key], nil)
+    local older = fixture(); assert(older:Probe("abcdef01")); assert(older:Pump(5))
+    equal(older:AcceptHost(host(7)), false); equal(older.quarantined, "carrier acknowledgement jumped")
+end)
+
+test("a result naming another UI session ends an enabled carrier as another host does", function()
+    local carrier, state = fixture(); assert(carrier:Probe("abcdef01")); assert(carrier:Pump(5))
+    assert(carrier:AcceptHost(host(1, { bindingUi = "abcdef01" })))
+    assert(carrier:OfferInput({ epoch = "1234abcd", id = 9, tab = "codex", action = "text", text = "hello" }))
+    state.now = 1; assert(carrier:Pump(6))
+    local key = carrier.outstanding.key
+    equal(carrier:AcceptHost(host(2, { bindingUi = "abcdef00" })), false)
+    equal(carrier.enabled, false); equal(carrier.status, "Host changed; run /witch bindprobe")
+    equal(carrier.outstanding, nil); equal(state.actions[key], nil, "the frame is cleared")
+    local idle = fixture(); assert(idle:Probe("abcdef01")); assert(idle:Pump(5)); assert(idle:AcceptHost(host(1)))
+    equal(idle:AcceptHost(host(1, { bindingUi = "abcdef00" })), false)
+    equal(idle.enabled, false); equal(idle.status, "Host changed; run /witch bindprobe")
 end)

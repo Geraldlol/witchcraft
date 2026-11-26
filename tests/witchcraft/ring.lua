@@ -227,3 +227,53 @@ test("session info and the last reply are copied when well formed and dropped ot
     equal(dropped.accepted, true, "bad info never refuses the screen")
     equal(dropped.sessions[1].info, nil); equal(dropped.sessions[1].reply, nil); equal(dropped.sessions[2].info, nil)
 end)
+
+test("ring passes a valid binding UI session through lowercased and rejects an invalid one", function()
+    local r = ring()
+    local binding = { bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 2 }
+    local function with(value)
+        local overrides = { bindingUi = value }
+        for key, child in pairs(binding) do overrides[key] = child end
+        return overrides
+    end
+    local result = r:OnChunk(payload(1, with("ABCDEF02")))
+    equal(result.accepted, true); equal(result.bindingUi, "abcdef02")
+    result = r:OnChunk(payload(2, binding))
+    equal(result.accepted, true, "an older daemon leaves the field out"); equal(result.bindingUi, nil)
+    for _, value in ipairs({ "00000000", "abcdef0", "zzzzzzzz", 12345678 }) do
+        local rejected = ring():OnChunk(payload(1, with(value)))
+        equal(rejected.accepted, false); equal(rejected.reason, "binding extension")
+    end
+    equal(ring():OnChunk(payload(1, { bindingUi = "abcdef02" })).reason, "binding extension")
+end)
+
+test("ring takes a lower binding acknowledgement when it belongs to another UI session", function()
+    local r = ring()
+    local function with(ack, ui) return { bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = ack, bindingUi = ui } end
+    equal(r:OnChunk(payload(1, with(7, "abcdef02"))).accepted, true)
+    -- After a /reload the host restarts its binding sequence for the new UI session.
+    local result = r:OnChunk(payload(2, with(1, "abcdef03")))
+    equal(result.accepted, true, "another UI session's acknowledgement is not a regression"); equal(result.bindingAck, 1)
+    local rejected = r:OnChunk(payload(3, with(0, "abcdef03")))
+    equal(rejected.accepted, false); equal(rejected.reason, "binding acknowledgement regression")
+end)
+
+test("ring validates the log extension as one unit, rejects its regression and leaves it out when absent", function()
+    local r = ring()
+    local result = r:OnChunk(payload(1, { logProtocol = 1, logNonce = "89abcdef", logAck = 2, logUi = "abcdef01" }))
+    equal(result.accepted, true); equal(result.logProtocol, 1); equal(result.logNonce, "89abcdef")
+    equal(result.logAck, 2); equal(result.logUi, "abcdef01"); equal(r:Snapshot().logAck, 2)
+    local rejected = r:OnChunk(payload(2, { logProtocol = 1, logNonce = "89abcdef", logAck = 1, logUi = "abcdef01" }))
+    equal(rejected.accepted, false); equal(rejected.reason, "log acknowledgement regression")
+    result = r:OnChunk(payload(2, { logProtocol = 1, logNonce = "89abcdef", logAck = 0, logUi = "abcdef02" }))
+    equal(result.accepted, true, "another UI session restarts the log sequence")
+    result = r:OnChunk(payload(3))
+    equal(result.accepted, true); equal(result.logProtocol, nil); equal(result.logAck, nil); equal(result.logUi, nil)
+    for _, bad in ipairs({ { logProtocol = 2, logNonce = "89abcdef", logAck = 0 }, { logProtocol = 1, logAck = 0 },
+        { logProtocol = 1, logNonce = "00000000", logAck = 0 }, { logProtocol = 1, logNonce = "89abcdef", logAck = 16777216 },
+        { logProtocol = 1, logNonce = "89abcdef", logAck = -1 }, { logProtocol = 1, logNonce = "89abcdef", logAck = 0, logUi = "xyz" },
+        { logUi = "abcdef02" } }) do
+        local refused = ring():OnChunk(payload(1, bad))
+        equal(refused.accepted, false); equal(refused.reason, "log extension")
+    end
+end)

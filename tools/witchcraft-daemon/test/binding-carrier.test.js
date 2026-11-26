@@ -184,3 +184,47 @@ test('binding receiver consumes a permanently malformed body once instead of ret
   assert.equal(delivered, 0); assert.equal(receiver.quarantined, false);
   assert.ok(acks.some(([ack, reason]) => ack === 2 && /malformed/u.test(reason ?? '')));
 });
+
+const probeOf = (uiNonce, overrides = {}) => parseBindingAction(encodeBindingAction({ epoch: '00000000', nonce: '00000000',
+  uiNonce, slot: 6, seq: 1, part: 1, count: 1, payload: BINDING_PROBE_BODY, ...overrides }));
+const contextBody = text => Buffer.concat([Buffer.from([0x43, 0, 0, 1]), Buffer.from(text)]);
+
+test('a well-formed probe from a new UI session restarts the stop-and-wait state for that session', async () => {
+  const other = 'bbbbcccc', refused = new Set();
+  const receiver = new BindingReceiver({ ...session, onCursor: frame => !refused.has(frame.uiNonce) });
+  assert.equal((await receiver.accept(probeOf(session.uiNonce))).probe, true);
+  const oldTwo = parsed({ seq: 2, payload: contextBody('a2') });
+  assert.equal((await receiver.accept(oldTwo)).ack, 2);
+  assert.equal((await receiver.accept(parsed({ seq: 3, payload: contextBody('a3') }))).ack, 3);
+  const switched = await receiver.accept(probeOf(other));
+  assert.equal(switched.probe, true); assert.equal(switched.ack, 1); assert.equal(switched.uiNonce, other);
+  const newTwo = await receiver.accept(parsed({ uiNonce: other, seq: 2, payload: contextBody('b2') }));
+  assert.equal(newTwo.accepted, true); assert.equal(newTwo.ack, 2); assert.equal(receiver.quarantined, false);
+  // The old session's frames are another session's, never a mutation of this one's sequence.
+  assert.equal((await receiver.accept(oldTwo)).reason, 'session');
+  refused.add(session.uiNonce);
+  assert.equal((await receiver.accept(oldTwo)).reason, 'cursor');
+  assert.equal((await receiver.accept(probeOf(session.uiNonce))).reason, 'cursor');
+  assert.equal(receiver.uiNonce, other); assert.equal(receiver.ack, 2); assert.equal(receiver.quarantined, false);
+});
+
+test('a foreign probe the cursor refuses resets nothing', async () => {
+  let refuse = false;
+  const receiver = new BindingReceiver({ ...session, onCursor: () => !refuse });
+  await receiver.accept(probeOf(session.uiNonce));
+  assert.equal((await receiver.accept(parsed({ seq: 2, payload: contextBody('a2') }))).ack, 2);
+  refuse = true;
+  assert.equal((await receiver.accept(probeOf('bbbbcccc'))).reason, 'cursor');
+  assert.equal(receiver.ack, 2); assert.equal(receiver.uiNonce, session.uiNonce); assert.equal(receiver.quarantined, false);
+  refuse = false;
+  assert.equal((await receiver.accept(parsed({ seq: 3, payload: contextBody('a3') }))).ack, 3);
+});
+
+test('a malformed probe from a new UI session still quarantines', async () => {
+  for (const overrides of [{ payload: Buffer.from('PFAM_BIND_PROBf') }, { seq: 2 }]) {
+    const receiver = new BindingReceiver(session);
+    await receiver.accept(probeOf(session.uiNonce));
+    await assert.rejects(receiver.accept(probeOf('bbbbcccc', overrides)), /invalid bootstrap probe/u);
+    assert.match(receiver.quarantined, /bootstrap/u);
+  }
+});

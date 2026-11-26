@@ -28,14 +28,19 @@ Witchcraft is **free and open source (MIT)**. You bring your own Claude Code, Co
 - **Write proper prompts.** Shift-click items, quests and spells into your message, write multi-line prompts of up to about 4,600 bytes, save the ones you reuse as snippets, search the scrollback, or copy the agent's last reply with one click.
 - **Let your agents see your character.** Local MCP tools give them your character, zone, tracked quests, gold, XP and rested bonus, your group, and a session journal of recent milestones (`wow_get_session_log`). There is also a Lua error log (`wow_get_errors`), so an agent can read a stack trace and check across `/reload`s that its fix held.
 - **Try Guides and Adventures.** Ask for a spoiler-light nudge on a quest, keep a dungeon loot wishlist, rehearse boss fights as tank, healer or DPS, look up detours near your zone, and stamp a personal campaign passport. The built-in catalog is Classic reference material (Defias quests, Deadmines, Wailing Caverns and Shadowfang Keep), so Forever's custom changes are not verified in it.
-- **Make the window yours.** Resize, minimize, dock or lock it. Set the font size, terminal width (`/witch cols fit`), background opacity and frame strata, pause updates during combat, or open the optional Electron overlay on your desktop.
+- **Make the window yours.** Resize, minimize, dock or lock it. Set the font size, overall scale (`/witch scale 80-140`), terminal width (`/witch cols fit`), background opacity and frame strata, fade the window while it is unfocused, choose whether it stays open, minimizes or hides in combat, pause updates during combat, or open the optional Electron overlay on your desktop.
 
 ## How it works under the hood
 
 WoW addons can't open network sockets or start processes, and that is how it should be. So Witchcraft moves data in and out of the game the long way round, all of it on your own machine:
 
 1. **Desktop to game.** `init` generates a ring of tiny load-on-demand helper addons (`Witchcraft_Chunk_*`). When terminal output changes, the desktop daemon writes the latest screen into the next chunk and WoW loads it on the fly, so there is no `/reload` per message. The ring does fill up eventually, and Witchcraft tells you at 90% that a reload will be needed soon.
-2. **Game to desktop.** Out of combat, your prompts, keypresses and context snapshots travel through a temporary WoW keybinding on a key that Witchcraft has verified is empty (`bindings-cache.wtf`), which it restores as soon as the message is acknowledged. A **132 × 12 pixel strip** in the top-left corner is the fallback, and it also works in combat while WoW is focused. An optional Cooldown Viewer carrier is enabled on exact client build `1.60.1.71037` and stays off on every other build.
+2. **Game to desktop.** Your prompts, keypresses and context snapshots have three ways out:
+   - **Pixel strip (the default).** A **132 × 12 pixel strip** in the top-left corner, which the daemon reads off the screen. It works in combat, but only while WoW is the focused, uncovered window.
+   - **Log lane (opt-in, since 0.5.0).** `/witch filelane log`, then `/reload`, sends everything through the client's own log file (`Logs/General.log`). It works in combat and while the game is in the background, and it lets you hide the strip (`/witch strip fallback`) or turn it off (`/witch strip off`). The cost is log volume: about 45 MB an hour while idle and about 5 MB a minute while an agent prints. The client empties the file at each start.
+   - **Keybinding link.** Out of combat, messages travel through a temporary WoW keybinding on a key that Witchcraft has verified is empty (`bindings-cache.wtf`), which it restores as soon as the message is acknowledged. On client build `1.60.1.71037` the client writes that file only at `/reload`, so this link cannot carry prompts there.
+
+   An optional Cooldown Viewer carrier is enabled on exact client build `1.60.1.71037` and stays off on every other build.
 
 ## What's in the repo
 
@@ -46,7 +51,7 @@ WoW addons can't open network sockets or start processes, and that is how it sho
 | **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only WoW tools and 3 optional wishlist/passport tools. |
 | **Claude Code skill** | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Lets you ask Claude to start, stop, restart, or check the daemon for you (Windows + `pwsh`). |
 
-The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Version 0.5.0 also supports installing the daemon from an npm tarball.
+The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Version 0.5.1 also supports installing the daemon from an npm tarball.
 
 ---
 
@@ -69,19 +74,19 @@ The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/w
 
 ## Install
 
-### With npm (0.5.0)
+### With npm (0.5.1)
 
 Install the matching `Witchcraft/` addon in your Forever client’s `Interface/AddOns` directory and log into the client at least once. From the project folder where you want your assistant to work, run these commands with Node 24 or later. Replace the example path with your actual client path.
 
 ```sh
-npx witchcraft-daemon@0.5.0 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
-npx witchcraft-daemon@0.5.0 init --ring 3000
-npx witchcraft-daemon@0.5.0 doctor
+npx witchcraft-daemon@0.5.1 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.1 init --ring 3000
+npx witchcraft-daemon@0.5.1 doctor
 ```
 
-Restart WoW completely after `init`. In game, show the strip with `/witch calibrate`, run `npx witchcraft-daemon@0.5.0 calibrate` in the terminal, then use `/witch calibrate off`. Start your assistant with `npx witchcraft-daemon@0.5.0 run --only codex` (or `--only claude`). On Windows, `npx.cmd` works in PowerShell when its script execution policy blocks `npx`.
+Restart WoW completely after `init`. In game, show the strip with `/witch calibrate`, run `npx witchcraft-daemon@0.5.1 calibrate` in the terminal, then use `/witch calibrate off`. Start your assistant with `npx witchcraft-daemon@0.5.1 run --only codex` (or `--only claude`). On Windows, `npx.cmd` works in PowerShell when its script execution policy blocks `npx`.
 
-The installed daemon keeps configuration, calibration and session state in `~/.witchcraft` across npm upgrades. Set `WITCHCRAFT_HOME` to an absolute directory to use a separate profile. For a prepublication build, a local tarball works with npm as described in the [daemon package instructions](tools/witchcraft-daemon/README.md#try-a-local-package).
+The installed daemon keeps configuration, calibration and session state in `~/.witchcraft` across npm upgrades. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to use a separate profile. For a prepublication build, a local tarball works with npm as described in the [daemon package instructions](tools/witchcraft-daemon/README.md#try-a-local-package).
 
 ### From source
 
@@ -181,7 +186,7 @@ A few flags and keys worth knowing:
 ### 3. Connect in game
 
 1. Back in WoW, run `/reload` out of combat, then type `/witch` or click the book icon on your minimap.
-2. Run `/witch bindprobe` once, out of combat, to qualify the fast keybinding link for the session. Or run `/witch bindprobe auto` once and Witchcraft probes by itself whenever it connects.
+2. Optional, to work without the pixel strip: run `/witch filelane log`, then `/reload`. When `/witch status` shows `lanes: log Carrier ready`, run `/witch strip fallback` to hide the strip. [How it works](#how-it-works-under-the-hood) says what this costs in log volume. On a client where the keybinding link works, `/witch bindprobe` (or `/witch bindprobe auto`) qualifies that link instead; on build `1.60.1.71037` it does not work.
 3. Pick a tab, type a message and press **Enter**.
 
 One thing that trips people up: **Enter** inside the input box sends your message, while the separate **Enter** button sends a raw Enter keypress to the terminal, which is what interactive menus want.
@@ -223,6 +228,9 @@ See [docs/MCP.md](docs/MCP.md) for all 16 tools and the manual MCP setup.
 | `/witch tab <claude\|codex\|copilot\|agy> [on\|off]` | Show, hide, or toggle an agent tab (`/witch tabs` lists all four). |
 | `/witch cols 40-160\|fit` | Resize the daemon's terminal width to 40–160 columns, or `fit` to your current window width. |
 | `/witch bindprobe [auto\|off]` | Qualify the fast keybinding link once, or enable/disable automatic probing on connect. |
+| `/witch filelane [log\|binding]` | Choose the file lane from the game to the daemon, applied at the next `/reload`: `binding` (the default) or `log` (the client log, which works without the strip). |
+| `/witch strip [always\|fallback\|off]` | When the top-left pixel strip is drawn: always, only while no file lane can carry prompts, or never. |
+| `/witch scale 80-140` · `/witch resetpos` | Set the overall window scale, or centre the window and restore its default size and scale. |
 | `/witch context on\|off\|refresh\|clear-journal` | Resume, pause, or refresh WoW context sharing, or wipe the local session journal. |
 | `/witch errors` / `list` / `clear` | Inspect recorded Lua errors, warnings, and blocked actions, or clear the list. |
 | `/witch errors watch <n>` / `checked` / `status` | Follow a specific error across `/reload`s and mark reproduction attempts to verify a fix. |
@@ -253,7 +261,9 @@ If you use Claude Code on Windows with PowerShell 7 (`pwsh`), the bundled [witch
 | `--tab copilot` or `--tab agy names a terminal that is not started` | `--tab` only chooses which tab is focused first. Add `--with-copilot` / `--with-agy`, use `--only`, or add an entry under `commands` in `.local/config.json`. |
 | Copilot or AGY tab isn't showing in game | Make sure both the addon and daemon are updated (`0.4.0+`) and the agent was started, or toggle it on via **... > Agent tabs** or `/witch tab <copilot\|agy> on`. |
 | `No exact Witchcraft calibration strip found` | Type `/witch calibrate` in game, make sure nothing covers the top-left corner of WoW, and run `calibrate` again. On macOS, check that your terminal app has **Screen Recording** permission in System Settings. |
-| Window opens, but replies stop updating | Check `/witch status` and `node bin/witchcraft.js doctor`. Combat pauses terminal updates by default, and if you rely on the pixel strip alone, WoW has to be the active foreground window. After restarting the daemon, `/reload` and run `/witch bindprobe` out of combat. |
+| Window opens, but replies stop updating | Check `/witch status` and `node bin/witchcraft.js doctor`. Combat pauses terminal updates by default, and if you rely on the pixel strip alone, WoW has to be the active foreground window. After restarting the daemon, `/reload` (and run `/witch bindprobe` out of combat if you use the keybinding link). |
+| Log lane does not link after the game was closed and started again | Update the daemon to `0.5.1` or later. If it still does not link, restart the daemon, then type `/witch`. |
+| `Logs/General.log` grows quickly | That is the log lane: about 45 MB an hour while idle and about 5 MB a minute while an agent prints. The client empties the file at each start. To switch the lane off, run `/witch strip always`, `/witch filelane binding` and `/reload`. |
 | Joined Claude tab says `no WoW tools` | Run `node bin/witchcraft.js mcp-setup --apply --cwd '<same-folder>'`, restart that Claude session (`claude --continue`), and restart Witchcraft. |
 | `A Witchcraft bridge owns ... bridge.lock` | Another daemon is already running. Close it cleanly first. Locks left by a crash are cleaned up automatically on startup. |
 | Codex VS Code panel doesn't show my in-game messages | Witchcraft attaches a second CLI client to the same thread. Reload the thread in the VS Code extension to see the new turns. |

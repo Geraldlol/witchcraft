@@ -189,7 +189,9 @@ test('single capture rejects oversized calibration metadata, errors and invalid 
 test('helper source retains foreground checks around capture and a persistent five-Hz loop', async () => {
   const source = await readFile(new URL('../capture/capture-strip.ps1', import.meta.url), 'utf8');
   assert.match(source, /#Requires -Version 5\.1/);
-  assert.match(source, /"WowB", StringComparison\.OrdinalIgnoreCase/);
+  // The live client runs as Wow.exe; the beta ran as WowB.exe. The list matches the macOS helper's.
+  assert.match(source, /GameProcesses = \{ "Wow", "WowClassic", "WowB", "WowT" \}/);
+  assert.match(source, /String\.Equals\(name, game, StringComparison\.OrdinalIgnoreCase\)/);
   assert.match(source, /foregroundBefore -and \$foregroundAfter/);
   assert.match(source, /200 - \[int\]\$cycle\.ElapsedMilliseconds/);
   assert.match(source, /16000000/);

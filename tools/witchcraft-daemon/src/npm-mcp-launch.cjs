@@ -1,4 +1,4 @@
-// mcp-setup retains this dependency-free launcher in WITCHCRAFT_HOME. The MCP client starts it
+// mcp-setup retains this dependency-free launcher in WITCHCRAFT_STATE_DIR. The MCP client starts it
 // directly, so its parent is the client even when npm needs to rebuild its execution cache.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,7 +19,7 @@ async function launch() {
   const runtime = path.join(__dirname, 'mcp-runtime', packageSpec);
   const { sha256, source } = JSON.parse(fs.readFileSync(path.join(runtime, 'current.json'), 'utf8'));
   if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(sha256)) throw new Error('Invalid retained Witchcraft MCP package');
-  process.env.WITCHCRAFT_HOME = __dirname;
+  process.env.WITCHCRAFT_STATE_DIR = __dirname;
   process.env.WITCHCRAFT_MCP_CLIENT_PID = String(process.ppid);
   process.chdir(__dirname);
 

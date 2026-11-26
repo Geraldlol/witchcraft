@@ -39,10 +39,11 @@ and reports what the ring, cache and carrier files say from outside.
 
 It finds the Witchcraft checkout from `-Repo`, then `$env:WITCHCRAFT_HOME`, then the checkout
 this skill sits in (`.claude/skills/witchcraft-daemon` of a clone). A copy installed under
-`~/.claude/skills` needs `-Repo` or `WITCHCRAFT_HOME`. The AddOns folder comes from the
-checkout's `wow.config.json`, and status reads the character folder whose
-`cooldownmanager.txt` is newest (`-AddonsDir` and `-CharacterDir` override them). Locks are
-per-checkout, so a stale lock in one says nothing about another.
+`~/.claude/skills` needs `-Repo` or `WITCHCRAFT_HOME`. By default, it reads the checkout's
+`wow.config.json` for the AddOns folder and the daemon's `.local` directory for status.
+Set `WITCHCRAFT_STATE_DIR` to an absolute directory to read the client pointer and daemon state
+from the same custom profile. Status selects the character folder whose `cooldownmanager.txt`
+is newest. Use `-AddonsDir` and `-CharacterDir` to override those paths.
 
 A mirrored tab is not launched by the daemon and is typed into from its own console window, not
 from the daemon's terminal. Its colour is the sixteen ANSI colours, because that is all the

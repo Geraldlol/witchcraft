@@ -35,7 +35,10 @@ return function(options)
     function methods:SetTextColor(...) self.textColor = { ... } end
     function methods:SetShadowColor(...) self.shadowColor = { ... } end
     function methods:SetShadowOffset(...) self.shadowOffset = { ... } end
-    function methods:SetAlpha() error("opacity must never fade an entire frame or its text") end
+    function methods:SetAlpha(value) self.alpha = value end
+    function methods:SetScale(value) self.frameScale = value end
+    function methods:GetScale() return self.frameScale or 1 end
+    function methods:IsMouseOver() return self.mouseOver == true end
     function methods:SetJustifyH(value) self.justifyH = value end
     function methods:SetJustifyV(value) self.justifyV = value end
     function methods:SetWordWrap(value) self.wordWrap = value end
@@ -88,8 +91,14 @@ return function(options)
         if changed and self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, value) end
     end
     function methods:GetValue() return self.value end
-    function methods:SetFocus() self.focused = true end
-    function methods:ClearFocus() self.focused = false end
+    function methods:SetFocus()
+        self.focused = true
+        if self.scripts.OnEditFocusGained then self.scripts.OnEditFocusGained(self) end
+    end
+    function methods:ClearFocus()
+        self.focused = false
+        if self.scripts.OnEditFocusLost then self.scripts.OnEditFocusLost(self) end
+    end
     function methods:HighlightText(from, to) self.highlighted = { from or 0, to or -1 } end
     function methods:Show()
         local changed = not self.shown; self.shown = true
@@ -677,6 +686,11 @@ return function(options)
         view:Alert("codex", "waiting"); view:Alert("claude", "done")
         assert(notices[1].frame == _G.RaidWarningFrame and notices[1].line == "Codex needs you" and notices[2].line == "Claude finished"
             and #sounds == 2 and sounds[1] == 8959, "alerts use the raid-warning line and sound")
+        view:Alert("codex", "waiting", { text = false, sound = true, soundStyle = "ready" })
+        view:Alert("codex", "waiting", { text = false, sound = true, soundStyle = "tell" })
+        view:Alert("codex", "waiting", { text = false, sound = true, soundStyle = "ping" })
+        assert(sounds[3] == 8960 and sounds[4] == 3081 and sounds[5] == 3175,
+            "configurable alert sound styles resolve Ready Check, Whisper and Map Ping IDs")
         -- Slash command menu: plain commands send at once, argument commands prefill, drafts are kept.
         local function pick(menu, text)
             for _, entry in ipairs(menu.entries) do if entry.kind == "button" and entry.text == text then return entry end end
@@ -760,6 +774,7 @@ return function(options)
         local opacityCalls = #calls.opacity
         view:Render(snapshot); assert(#calls.opacity == opacityCalls, "slider render does not loop into persistence")
         view.opacitySlider:SetValue(0); layout()
+        assert(view.frame.alpha == 1, "opacity must never fade an entire frame or its text")
         assert(view.frame.backdropColor[4] == 0 and view.terminal.backdropColor[4] == 0 and view.input.backdropColor[4] == 0)
         assert(view.appearancePanel.backdropColor[4] == .96, "temporary settings remain readable over transparent terminal")
         assert(view.rowBacking.color[4] >= .35, "row backing ignores the slider")
@@ -774,6 +789,48 @@ return function(options)
         assert(view.opacity == 45 and #calls.opacity == opacityCalls + 2, "user slider updates persist once each")
         assert(view.sliderFill.width > 0 and view.sliderFill.width < view.sliderTrack.width, "slider fill is proportional")
         click(view.appearanceClose); assert(not view.appearancePanel.shown)
+        -- Window scale, unfocused idle fade, autoFitCols, and Appearance quick layout buttons.
+        local fittedRequests, resetPositions = 0, 0
+        controller.RequestCols = function(_, arg)
+            assert(arg == "fit"); fittedRequests = fittedRequests + 1
+            return true, view:FittedCols()
+        end
+        controller.ResetPosition = function()
+            resetPositions = resetPositions + 1
+            snapshot.settings.windowScale = 100
+            view:ResetLayout()
+            view:Render(snapshot)
+            return true
+        end
+        snapshot.settings = { windowScale = 125, idleFade = true, autoFitCols = true }
+        view:Render(snapshot); layout()
+        assert(math.abs((view.frame.frameScale or 1) - 1.25) < .001, "windowScale scales the terminal frame")
+        assert(math.abs(view.frame.alpha - 0.45) < .001, "idleFade dims the window when unfocused and unhovered")
+        view.frame.mouseOver = true; view.frame.scripts.OnEnter(view.frame)
+        assert(view.frame.alpha == 1, "hovering restores full alpha immediately")
+        view.frame.mouseOver = false; view.frame.scripts.OnLeave(view.frame)
+        assert(math.abs(view.frame.alpha - 0.45) < .001, "leaving without focus fades again")
+        view.input:SetFocus()
+        assert(view.frame.alpha == 1, "focusing the input restores full alpha")
+        view.input:ClearFocus()
+        assert(math.abs(view.frame.alpha - 0.45) < .001, "clearing focus fades again")
+        click(view.appearanceButton); layout()
+        assert(view.frame.alpha == 1, "an open popover keeps the window at full alpha")
+        click(view.fitColsButton)
+        assert(fittedRequests == 1 and view.footerHint.text:find("Terminal width request queued", 1, true),
+            "FIT COLS queues a fitted column width from Appearance")
+        click(view.resetPosButton); layout()
+        assert(resetPositions == 1 and not view.appearancePanel.shown and view.frame.width == 900 and view.frame.height == 650
+            and math.abs((view.frame.frameScale or 1) - 1) < .001,
+            "RESET POS centers and restores default dimensions and scale")
+        view.frame:SetSize(760, 600)
+        view.resize.scripts.OnMouseUp(view.resize, "LeftButton")
+        assert(fittedRequests == 2, "releasing the resize handle with autoFitCols requests fitted columns")
+        for i = #calls.saved, 1, -1 do calls.saved[i] = nil end
+        view.frame:SetSize(900, 720)
+        snapshot.settings = {}; view:Render(snapshot); layout()
+        assert(view.frame.alpha == 1 and math.abs((view.frame.frameScale or 1) - 1) < .001,
+            "turning idleFade and windowScale back to defaults restores 100% alpha and scale")
         click(view.keysButton); layout()
         assert(view.keysPanel.shown and view.controls[5].label.text == "INTERRUPT", "interrupt is deliberately inside the keys menu")
         assert(view.controls[5].backdropColor[4] == 1
@@ -1187,6 +1244,20 @@ return function(options)
             end, debug.traceback)
             scaled.restore(); assert(scaledOK, scaledError)
         end
+        -- RESET POS from 140% on a 1366x768 parent lays out with the reset values, not the old snapshot's scale.
+        local reset = assert(loadfile("tests/witchcraft/view.lua"))()({ fixture = true })
+        local resetOK, resetError = xpcall(function()
+            reset.snapshot.settings = { windowScale = 140 }
+            reset.view:Render(reset.snapshot)
+            assert(math.abs(reset.view.frame:GetScale() - 1.4) < .001, "the window starts at 140%")
+            reset.view:ResetLayout()
+            reset.snapshot.settings = { windowScale = 100 }
+            reset.snapshot.view = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 900, height = 650 }
+            reset.view:Render(reset.snapshot)
+            assert(reset.view.frame.width == 900 and reset.view.frame.height == 650, "reset lays out 900x650, not "
+                .. tostring(reset.view.frame.width) .. "x" .. tostring(reset.view.frame.height))
+        end, debug.traceback)
+        reset.restore(); assert(resetOK, resetError)
         -- Small and large layouts, both font paths, all link states and every popover.
         -- This exercises complete control bounds independently of the visual preview.
         for _, failedFont in ipairs({ false, true }) do

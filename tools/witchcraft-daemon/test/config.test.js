@@ -8,6 +8,52 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { configureClient, loadConfig } from '../src/config.js';
 
+test('the checkout selector preserves legacy source paths and can coexist with a state override', async () => {
+  const checkout = fileURLToPath(new URL('../../..', import.meta.url));
+  const module = new URL('../src/config.js', import.meta.url).href;
+  const query = `import { LOCAL_DIR, WOW_CONFIG_PATH } from ${JSON.stringify(module)};
+    console.log(JSON.stringify([LOCAL_DIR, WOW_CONFIG_PATH]));`;
+  const env = { ...process.env, WITCHCRAFT_HOME: checkout };
+  delete env.WITCHCRAFT_STATE_DIR;
+  const inspect = async () => JSON.parse((await promisify(execFile)(process.execPath, ['--input-type=module', '-e', query], { env })).stdout);
+  assert.deepEqual(await inspect(), [path.join(checkout, 'tools', 'witchcraft-daemon', '.local'), path.join(checkout, 'wow.config.json')]);
+  const state = path.join(os.tmpdir(), 'witchcraft state');
+  env.WITCHCRAFT_STATE_DIR = state;
+  assert.deepEqual(await inspect(), [state, path.join(state, 'wow.config.json')]);
+});
+
+test('the Windows management skill uses the selected checkout and resolves the same state as the daemon',
+  { skip: process.platform !== 'win32' }, async t => {
+    const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'witchcraft-skill-'));
+    t.after(() => fs.rm(checkout, { recursive: true, force: true }));
+    const daemon = path.join(checkout, 'tools', 'witchcraft-daemon');
+    await fs.mkdir(path.join(daemon, 'bin'), { recursive: true });
+    await fs.writeFile(path.join(daemon, 'bin', 'witchcraft.js'), '');
+    const profile = path.join(checkout, 'custom [profile]');
+    const env = { ...process.env, WITCHCRAFT_HOME: checkout };
+    delete env.WITCHCRAFT_STATE_DIR;
+    const script = fileURLToPath(new URL('../../../.claude/skills/witchcraft-daemon/witchcraft-daemon.ps1', import.meta.url));
+    for (const [state, name] of [[path.join(daemon, '.local'), 'legacy'], [profile, 'custom']]) {
+      const pointerDir = state === profile ? profile : checkout;
+      if (state === profile) env.WITCHCRAFT_STATE_DIR = profile;
+      const addons = path.join(checkout, name, 'Interface', 'AddOns');
+      const chunk = `Witchcraft_Chunk_${name}`;
+      await fs.mkdir(path.join(addons, chunk), { recursive: true });
+      await fs.writeFile(path.join(addons, chunk, 'Chunk.lua'), '{}');
+      await fs.mkdir(state);
+      await fs.writeFile(path.join(pointerDir, 'wow.config.json'), JSON.stringify({ addonsDir: addons }));
+      await fs.writeFile(path.join(state, 'bridge.lock'), '{');
+      await fs.writeFile(path.join(state, 'wow-context.json'), JSON.stringify({ status: name }));
+      await fs.writeFile(path.join(state, `wow-context.want.${name}.json`), '{"requestedAt":1}');
+      const { stdout } = await promisify(execFile)('pwsh', ['-NoProfile', '-NonInteractive', '-File', script, '-Action', 'status'], { env });
+      assert.ok(stdout.includes(`daemon dir: ${daemon}`), stdout);
+      assert.ok(stdout.includes(`unreadable lock at ${path.join(state, 'bridge.lock')}`), stdout);
+      assert.ok(stdout.includes(`context: status ${name}`), stdout);
+      assert.ok(stdout.includes(`want (wow-context.want.${name}.json)`), stdout);
+      assert.ok(stdout.includes(`ring: ${chunk}`), stdout);
+    }
+  });
+
 test('source configure honors an absolute state override when run from a different project', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'witchcraft-configure-cli-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -17,8 +63,8 @@ test('source configure honors an absolute state override when run from a differe
   await Promise.all([cwd, addonsDir].map(directory => fs.mkdir(directory, { recursive: true })));
   const entry = fileURLToPath(new URL('../bin/witchcraft.js', import.meta.url));
   const configure = stateHome => promisify(execFile)(process.execPath, [entry, 'configure', '--addons-dir', addonsDir],
-    { cwd, env: { ...process.env, WITCHCRAFT_HOME: stateHome } });
-  await assert.rejects(configure('settings'), /WITCHCRAFT_HOME must be an absolute directory/u);
+    { cwd, env: { ...process.env, WITCHCRAFT_STATE_DIR: stateHome } });
+  await assert.rejects(configure('settings'), /WITCHCRAFT_STATE_DIR must be an absolute directory/u);
   await configure(state);
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(state, 'wow.config.json'), 'utf8')), { addonsDir });
   assert.deepEqual(await fs.readdir(cwd), []);

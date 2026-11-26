@@ -107,13 +107,13 @@ test('installed mcp-setup registers a pinned launcher that survives npx cache ev
   const packageDir = path.join(root, 'temporary npx install');
   const scriptPath = path.join(packageDir, 'bin', 'witchcraft-mcp.js');
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(scriptPath, "console.log(JSON.stringify({ direct: true, home: process.env.WITCHCRAFT_HOME }));");
+  await fs.writeFile(scriptPath, "console.log(JSON.stringify({ direct: true, home: process.env.WITCHCRAFT_STATE_DIR }));");
   const npmCli = path.join(root, 'npm-cli.cjs');
   const archiveName = `${manifest.name}-${manifest.version}.tgz`;
   const packStub = `require('node:fs').writeFileSync(require('node:path').join(process.cwd(), ${JSON.stringify(archiveName)}), 'candidate');
     console.log(JSON.stringify([{ files: [{path: 'bin/witchcraft-mcp.js'}] }]));`;
   await fs.writeFile(npmCli, `if (process.argv[2] === 'pack') { ${packStub} } else {
-    console.log(JSON.stringify({args: process.argv.slice(2), home: process.env.WITCHCRAFT_HOME,
+    console.log(JSON.stringify({args: process.argv.slice(2), home: process.env.WITCHCRAFT_STATE_DIR,
       parent: Number(process.env.WITCHCRAFT_MCP_CLIENT_PID), cwd: process.cwd()}));
   }`);
   const options = { repoRoot: root, cachePath: path.join(state, 'wow-context.json'), scriptPath,

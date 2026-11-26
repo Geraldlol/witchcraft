@@ -25,7 +25,7 @@ for (let index = 0; index < 256; index++) {
   CRC_TABLE[index] = value >>> 0;
 }
 
-function crc32Ascii(value) {
+export function crc32Ascii(value) {
   let crc = 0xffffffff;
   for (const byte of Buffer.from(value, 'ascii')) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   return ((crc ^ 0xffffffff) >>> 0).toString(16).toUpperCase().padStart(8, '0');
@@ -64,18 +64,18 @@ export function decodeBase32(value) {
   return Buffer.from(bytes);
 }
 
-const hex = (value, width, label) => {
+export const hex = (value, width, label) => {
   if (!Number.isInteger(value) || value < 0 || value >= 16 ** width) throw new TypeError(`Invalid carrier ${label}`);
   return value.toString(16).toUpperCase().padStart(width, '0');
 };
-const fixedHex = (value, label, zero = false) => {
+export const fixedHex = (value, label, zero = false) => {
   if (typeof value !== 'string' || !/^[0-9a-f]{8}$/u.test(value) || (!zero && value === ZERO)) throw new TypeError(`Invalid carrier ${label}`);
   return value.toUpperCase();
 };
 
 // The one sequence-0 frame is a heartbeat: a single part on a session's ids whose body is H and a flags
 // byte of 0..3.
-const heartbeatShape = ({ epoch, seq, part, count, payload }) => seq === 0 && part === 1 && count === 1
+export const heartbeatShape = ({ epoch, seq, part, count, payload }) => seq === 0 && part === 1 && count === 1
   && epoch !== ZERO && payload.length === 2 && payload[0] === 0x48 && payload[1] <= 3;
 
 export function encodeBindingAction({ epoch, nonce, uiNonce, slot, seq, part, count, payload }) {
@@ -219,7 +219,9 @@ export class BindingReceiver {
     if (this.quarantined) return { accepted: false, reason: this.quarantined, ack: this.ack };
     if (frame.seq === 0) return this.acceptHeartbeat(frame);
     const fingerprint = frame.action;
-    if (this.seen.has(frame.seq)) {
+    // Another UI session's frame (after a /reload) is never a duplicate or mutation of this session's sequence.
+    const foreign = this.uiNonce !== null && frame.uiNonce !== this.uiNonce;
+    if (!foreign && this.seen.has(frame.seq)) {
       if (this.seen.get(frame.seq) !== fingerprint) return this.quarantine('sequence mutation');
       if (!(await this.offer(frame))) return { accepted: false, reason: 'cursor', ack: this.ack };
       await this.onAck(this.ack, frame, { duplicate: true });
@@ -228,9 +230,12 @@ export class BindingReceiver {
     if (!(await this.offer(frame))) return { accepted: false, reason: 'cursor', ack: this.ack };
     const probe = frame.epoch === ZERO && frame.nonce === ZERO;
     if (probe) {
-      if (this.ack !== 0 || frame.seq !== 1 || frame.part !== 1 || frame.count !== 1 || !frame.payload.equals(PROBE_BODY)) {
+      if ((this.ack !== 0 && !foreign) || frame.seq !== 1 || frame.part !== 1 || frame.count !== 1
+        || !frame.payload.equals(PROBE_BODY)) {
         return this.quarantine('invalid bootstrap probe');
       }
+      // A well-formed probe from a new UI session the cursor took restarts stop-and-wait for that session.
+      if (foreign) { this.ack = 0; this.pending = null; this.seen.clear(); }
       this.uiNonce = frame.uiNonce; this.ack = 1; this.seen.set(1, fingerprint);
       await this.onAck(this.ack, frame, { probe: true });
       return { accepted: true, probe: true, ack: this.ack, uiNonce: this.uiNonce };

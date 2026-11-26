@@ -37,7 +37,7 @@ param(
     [string]$Repo = '',
     # The folder the agents work in and whose sessions are joined. Defaults to the current folder.
     [string]$Cwd = '',
-    # Defaults to addonsDir in the checkout's wow.config.json.
+    # Defaults to addonsDir in the active profile's or checkout's wow.config.json.
     [string]$AddonsDir = '',
     # Only read for status. Defaults to the character folder whose cooldownmanager.txt is newest.
     [string]$CharacterDir = ''
@@ -53,8 +53,13 @@ if (-not $Repo) {
     if (Test-Path (Join-Path $here 'tools\witchcraft-daemon\bin\witchcraft.js')) { $Repo = (Resolve-Path $here).Path }
 }
 if (-not $Cwd) { $Cwd = (Get-Location).Path }
-if (-not $AddonsDir -and $Repo) {
-    try { $AddonsDir = (Get-Content (Join-Path $Repo 'wow.config.json') -Raw | ConvertFrom-Json).addonsDir } catch { }
+$stateDir = $env:WITCHCRAFT_STATE_DIR
+if ($null -ne $stateDir -and -not [IO.Path]::IsPathFullyQualified($stateDir)) {
+    throw 'WITCHCRAFT_STATE_DIR must be an absolute directory'
+}
+$configDir = if ($stateDir) { $stateDir } else { $Repo }
+if (-not $AddonsDir -and $configDir) {
+    try { $AddonsDir = (Get-Content -LiteralPath (Join-Path $configDir 'wow.config.json') -Raw | ConvertFrom-Json).addonsDir } catch { }
 }
 if (-not $CharacterDir -and $AddonsDir) {
     $newest = Get-ChildItem (Join-Path $AddonsDir '..\..\WTF\Account\*\*\*\cooldownmanager.txt') -ErrorAction SilentlyContinue |
@@ -71,10 +76,10 @@ function Resolve-DaemonDir {
     throw 'No witchcraft-daemon checkout found; pass -Repo, set WITCHCRAFT_HOME, or pass -DaemonDir.'
 }
 
-function Read-Lock([string]$dir) {
-    $path = Join-Path $dir '.local\bridge.lock'
-    if (-not (Test-Path $path)) { return $null }
-    try { $lock = Get-Content $path -Raw | ConvertFrom-Json } catch { return @{ path = $path; invalid = $true } }
+function Read-Lock {
+    $path = Join-Path $stateDir 'bridge.lock'
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { $lock = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { return @{ path = $path; invalid = $true } }
     # A crash before the record reached the disk leaves an empty lock, which parses to nothing.
     $lockPid = if ($lock) { $lock.pid -as [int] } else { $null }
     if (-not $lockPid -or $lockPid -le 0) { return @{ path = $path; invalid = $true } }
@@ -148,22 +153,22 @@ function Get-DescendantIds([int]$processId) {
 }
 
 function Stop-Daemon([string]$dir) {
-    $lock = Read-Lock $dir
+    $lock = Read-Lock
     if (-not $lock) { Write-Output 'stopped: no lock file, nothing running'; return }
-    if ($lock.invalid) { Remove-Item $lock.path; Write-Output "stopped: removed unreadable lock $($lock.path)"; return }
-    if (-not $lock.alive) { Remove-Item $lock.path; Write-Output "stopped: no bridge was running ($(Stale-Reason $lock)); removed stale lock"; return }
+    if ($lock.invalid) { Remove-Item -LiteralPath $lock.path; Write-Output "stopped: removed unreadable lock $($lock.path)"; return }
+    if (-not $lock.alive) { Remove-Item -LiteralPath $lock.path; Write-Output "stopped: no bridge was running ($(Stale-Reason $lock)); removed stale lock"; return }
     $descendants = Get-DescendantIds $lock.pid
     $code = Send-CtrlC $lock.pid
     if ($code -ne 0) { Write-Output "warning: Ctrl+C delivery helper exited $code (2 = could not attach to console)" }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $proc = Get-Process -Id $lock.pid -ErrorAction SilentlyContinue
-        if (-not $proc -and -not (Test-Path $lock.path)) { Write-Output "stopped: pid $($lock.pid) exited cleanly and released its lock"; return }
+        if (-not $proc -and -not (Test-Path -LiteralPath $lock.path)) { Write-Output "stopped: pid $($lock.pid) exited cleanly and released its lock"; return }
         Start-Sleep -Milliseconds 250
     }
     $proc = Get-Process -Id $lock.pid -ErrorAction SilentlyContinue
     if (-not $proc) {
-        if (Test-Path $lock.path) { Remove-Item $lock.path; Write-Output "stopped: pid $($lock.pid) exited but left its lock; removed it" }
+        if (Test-Path -LiteralPath $lock.path) { Remove-Item -LiteralPath $lock.path; Write-Output "stopped: pid $($lock.pid) exited but left its lock; removed it" }
         return
     }
     if (-not $Force) {
@@ -172,17 +177,17 @@ function Stop-Daemon([string]$dir) {
     }
     foreach ($id in ($descendants + $lock.pid)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
-    if (Test-Path $lock.path) { Remove-Item $lock.path }
+    if (Test-Path -LiteralPath $lock.path) { Remove-Item -LiteralPath $lock.path }
     Write-Output "killed: pid $($lock.pid) and $($descendants.Count) descendants; lock removed. Check the game for a stale field 127 and rerun init if chunks look wrong."
 }
 
 function Start-Daemon([string]$dir) {
-    $lock = Read-Lock $dir
+    $lock = Read-Lock
     if ($lock -and $lock.alive) {
         Write-Output "already running: pid $($lock.pid) since $($lock.startedAt); use -Action restart"
         exit 1
     }
-    if ($lock) { Remove-Item $lock.path; Write-Output "removed stale lock ($(if ($lock.invalid) { 'unreadable' } else { Stale-Reason $lock }))" }
+    if ($lock) { Remove-Item -LiteralPath $lock.path; Write-Output "removed stale lock ($(if ($lock.invalid) { 'unreadable' } else { Stale-Reason $lock }))" }
     # Start-Process splits unquoted arguments on spaces, and the path may have one.
     $args = @('bin/witchcraft.js', 'run', '--cwd', ('"' + $Cwd + '"'))
     if ($Mode -ne 'pixels') { $args += '--no-pixels' }
@@ -208,7 +213,7 @@ function Start-Daemon([string]$dir) {
     if ($picking) { Write-Output "choose a console in the new window: up/down, enter to take it, escape to cancel" }
     $deadline = (Get-Date).AddSeconds($(if ($picking) { 120 } else { 10 }))
     while ((Get-Date) -lt $deadline) {
-        $lock = Read-Lock $dir
+        $lock = Read-Lock
         if ($lock -and $lock.alive) {
             Write-Output "started: pid $($lock.pid), mode $Mode$(if ($Only) { ", only $Only" })$(if ($Attach) { ", mirroring $($Attach -join ' ')" }), epoch $($lock.epoch), in a new console window"
             if (-not $Fresh) { Write-Output "joins current sessions: tabs not named by -Attach mirror the running Claude console and resume the newest Codex thread in the repo; the daemon window names them. -Fresh starts new ones." }
@@ -224,7 +229,7 @@ function Start-Daemon([string]$dir) {
 }
 
 function Show-Status([string]$dir) {
-    $lock = Read-Lock $dir
+    $lock = Read-Lock
     Write-Output "daemon dir: $dir"
     if (-not $lock) { Write-Output 'daemon: not running (no lock)' }
     elseif ($lock.invalid) { Write-Output "daemon: unreadable lock at $($lock.path)" }
@@ -252,20 +257,20 @@ function Show-Status([string]$dir) {
             Write-Output "tabs: $($tabs -join ', ')"
         }
     }
-    $cache = Join-Path $dir '.local\wow-context.json'
-    if (Test-Path $cache) {
+    $cache = Join-Path $stateDir 'wow-context.json'
+    if (Test-Path -LiteralPath $cache) {
         try {
-            $c = Get-Content $cache -Raw | ConvertFrom-Json
+            $c = Get-Content -LiteralPath $cache -Raw | ConvertFrom-Json
             $hb = if ($c.lastHeartbeatAt) { [int](([DateTimeOffset]::Now.ToUnixTimeMilliseconds() - $c.lastHeartbeatAt) / 1000) } else { $null }
             $player = if ($c.player) { "$($c.player.data.name) L$($c.player.data.level) $($c.player.data.location.zone)" } else { 'none' }
             $quests = if ($c.quests) { "$($c.quests.data.trackedCount) tracked" } else { 'none' }
             Write-Output "context: status $($c.status), heartbeat $(if ($null -ne $hb) { "${hb}s ago" } else { 'never' }), player $player, quests $quests"
         } catch { Write-Output 'context: cache unreadable' }
     }
-    $wants = Get-ChildItem (Join-Path $dir '.local\wow-context.want*.json') -ErrorAction SilentlyContinue
+    $wants = Get-ChildItem -LiteralPath $stateDir -Filter 'wow-context.want*.json' -File -ErrorAction SilentlyContinue
     foreach ($wantFile in $wants) {
         try {
-            $w = Get-Content $wantFile.FullName -Raw | ConvertFrom-Json
+            $w = Get-Content -LiteralPath $wantFile.FullName -Raw | ConvertFrom-Json
             $wa = [int](([DateTimeOffset]::Now.ToUnixTimeMilliseconds() - $w.requestedAt) / 1000)
             Write-Output "want ($($wantFile.Name)): requested ${wa}s ago"
         } catch { }
@@ -279,6 +284,7 @@ function Show-Status([string]$dir) {
 }
 
 $dir = Resolve-DaemonDir
+if (-not $stateDir) { $stateDir = Join-Path $dir '.local' }
 switch ($Action) {
     'status'  { Show-Status $dir }
     'start'   { Start-Daemon $dir }

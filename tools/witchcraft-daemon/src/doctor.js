@@ -13,7 +13,7 @@ async function json(file) {
   return JSON.parse(await fs.readFile(file, 'utf8'));
 }
 
-async function probeRecord(file, epoch, uiNonce, startedAt, now) {
+async function probeRecord(file, epoch, uiNonce, startedAt, now, what = 'binding-probe-ack') {
   let handle;
   try {
     handle = await fs.open(file, 'r');
@@ -24,7 +24,7 @@ async function probeRecord(file, epoch, uiNonce, startedAt, now) {
     for (const line of tail.toString('utf8', 0, bytesRead).trim().split('\n').reverse()) {
       let record;
       try { record = JSON.parse(line); } catch { continue; }
-      if (record?.what === 'binding-probe-ack' && record.epoch === epoch && record.ui === uiNonce) {
+      if (record?.what === what && record.epoch === epoch && record.ui === uiNonce) {
         const at = Date.parse(record.at);
         if (at >= startedAt && at <= now) return at;
       }
@@ -165,6 +165,10 @@ export async function runDoctor({ options = {}, repoRoot, localDir = LOCAL_DIR, 
   if (ack !== null) add('binding', 'ok', `Host acknowledged the binding probe ${Math.max(0, Math.floor((now() - ack) / 1000))}s ago. Confirm cleanup in /witch status.`);
   else add('binding', 'wait', 'No binding-probe acknowledgement observed for this UI session.',
     'Run /witch bindprobe outside combat and wait for the in-game acknowledgement and cleanup.');
+  const logAck = await probeRecord(trace, lock.epoch, context.session.uiNonce, startedAt, at, 'log-probe-ack')
+    ?? await probeRecord(trace + '.1', lock.epoch, context.session.uiNonce, startedAt, at, 'log-probe-ack');
+  if (logAck !== null) add('log lane', 'ok', `Host acknowledged the log probe ${Math.max(0, Math.floor((now() - logAck) / 1000))}s ago.`);
+  else add('log lane', 'wait', 'No log-probe acknowledgement observed for this UI session.');
   return result();
 }
 

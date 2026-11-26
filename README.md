@@ -88,6 +88,8 @@ Restart WoW completely after `init`. In game, show the strip with `/witch calibr
 
 The installed daemon keeps configuration, calibration and session state in `~/.witchcraft` across npm upgrades. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to use a separate profile. For a prepublication build, a local tarball works with npm as described in the [daemon package instructions](tools/witchcraft-daemon/README.md#try-a-local-package).
 
+To install the scoped package from GitHub’s registry, follow the [GitHub Packages instructions](tools/witchcraft-daemon/README.md#with-github-packages).
+
 ### From source
 
 1. **Clone or download the repository** somewhere permanent:

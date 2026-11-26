@@ -78,7 +78,7 @@ export async function runDoctor({ options = {}, repoRoot, localDir = LOCAL_DIR, 
   let modules;
   try { modules = await loadDependencies(); add('dependencies', 'ok', 'Terminal and context modules load.'); }
   catch { add('dependencies', 'fail', 'Daemon dependencies could not load.',
-    INSTALLED_PACKAGE ? 'Reinstall witchcraft-daemon with npm lifecycle scripts enabled so node-pty can build.'
+    INSTALLED_PACKAGE ? 'Reinstall the daemon with npm lifecycle scripts enabled so node-pty can build.'
       : 'From tools/witchcraft-daemon, run npm ci --ignore-scripts and npm rebuild node-pty --ignore-scripts=false.'); }
 
   let config;

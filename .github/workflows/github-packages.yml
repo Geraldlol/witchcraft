@@ -1,0 +1,90 @@
+name: GitHub Packages
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/github-packages.yml'
+      - 'tools/witchcraft-daemon/package*.json'
+      - 'tools/witchcraft-daemon/src/mcp-launch.js'
+      - 'tools/witchcraft-daemon/test-support/packed-install.mjs'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Daemon version to publish from main
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/witchcraft-daemon
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/witchcraft-daemon/package-lock.json
+      - name: Build and test the scoped tarball
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
+          fi
+          npm ci --ignore-scripts
+          npm pkg set 'name=@geraldlol/witchcraft-daemon' 'publishConfig.registry=https://npm.pkg.github.com/'
+          npm run test:package -- --pack-destination "$RUNNER_TEMP/scoped-package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: github-packages-daemon
+          path: ${{ runner.temp }}/scoped-package/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: github-packages-daemon
+          path: candidate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://npm.pkg.github.com/
+          scope: '@geraldlol'
+      - name: Publish the tested package and verify the registry copy
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          package="@geraldlol/witchcraft-daemon@$RELEASE_VERSION"
+          tarball="candidate/geraldlol-witchcraft-daemon-$RELEASE_VERSION.tgz"
+          digest="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+          current=$(npm view "$package" dist.integrity --prefer-online 2>/dev/null) || current=''
+          if [[ -z "$current" ]]; then
+            npm publish "$tarball" --registry=https://npm.pkg.github.com/ --access public --ignore-scripts
+          fi
+          test "$(npm view "$package" dist.integrity --prefer-online)" = "$digest"
+          echo "Verified $package ($digest)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the GitHub repository link and report visibility
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "users/$GITHUB_REPOSITORY_OWNER/packages/npm/witchcraft-daemon" > package.json
+          jq '{name, visibility, html_url, repository: .repository.full_name}' package.json
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.repository.full_name == $repo' package.json

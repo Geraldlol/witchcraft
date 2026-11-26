@@ -109,9 +109,10 @@ test('installed mcp-setup registers a pinned launcher that survives npx cache ev
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   await fs.writeFile(scriptPath, "console.log(JSON.stringify({ direct: true, home: process.env.WITCHCRAFT_STATE_DIR }));");
   const npmCli = path.join(root, 'npm-cli.cjs');
-  const archiveName = `${manifest.name}-${manifest.version}.tgz`;
+  // npm flattens scoped names in its archive filename. Only the pack report is authoritative.
+  const archiveName = 'example-witchcraft-daemon-0.5.1.tgz';
   const packStub = `require('node:fs').writeFileSync(require('node:path').join(process.cwd(), ${JSON.stringify(archiveName)}), 'candidate');
-    console.log(JSON.stringify([{ files: [{path: 'bin/witchcraft-mcp.js'}] }]));`;
+    console.log(JSON.stringify([{ filename: ${JSON.stringify(archiveName)}, files: [{path: 'bin/witchcraft-mcp.js'}] }]));`;
   await fs.writeFile(npmCli, `if (process.argv[2] === 'pack') { ${packStub} } else {
     console.log(JSON.stringify({args: process.argv.slice(2), home: process.env.WITCHCRAFT_STATE_DIR,
       parent: Number(process.env.WITCHCRAFT_MCP_CLIENT_PID), cwd: process.cwd()}));

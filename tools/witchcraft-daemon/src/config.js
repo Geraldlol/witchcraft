@@ -2,13 +2,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import manifest from '../package.json' with { type: 'json' };
 import { parseAttachConfig } from './console-match.js';
 import { atomicWrite } from './ring.js';
 
 export const PACKAGE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const inSourceTree = path.basename(PACKAGE_DIR) === 'witchcraft-daemon' && path.basename(path.dirname(PACKAGE_DIR)) === 'tools';
 export const INSTALLED_PACKAGE = !inSourceTree;
-export const CLI_COMMAND = INSTALLED_PACKAGE ? 'npx witchcraft-daemon' : 'node bin/witchcraft.js';
+export const CLI_COMMAND = INSTALLED_PACKAGE ? `npx ${manifest.name}` : 'node bin/witchcraft.js';
 export const PROJECT_DIR = inSourceTree ? path.resolve(PACKAGE_DIR, '../..') : process.cwd();
 function fullyQualified(directory) {
   return typeof directory === 'string' && path.isAbsolute(directory)

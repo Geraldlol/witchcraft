@@ -78,7 +78,7 @@ try {
   delete defaultHomeEnv.WITCHCRAFT_STATE_DIR;
   npm(['exec', '--yes', '--', tarball, 'configure', '--addons-dir', addons], project, defaultHomeEnv);
   assert.equal(JSON.parse(await readFile(path.join(home, '.witchcraft', 'wow.config.json'))).addonsDir, addons);
-  run('configure', '--addons-dir', addons);
+  assert.ok(run('configure', '--addons-dir', addons).includes(`npx ${pack.name} doctor`));
   assert.equal(JSON.parse(await readFile(path.join(state, 'wow.config.json'))).addonsDir, addons);
   run('init', '--ring', '3');
 
@@ -93,7 +93,7 @@ try {
   const registration = run('mcp-setup');
   assert.ok(registration.includes(project), 'MCP registration must use the consumer project by default');
   assert.ok(registration.includes(state), 'Persistent registration must use the shared state directory');
-  assert.ok(registration.includes(`witchcraft-daemon@${pack.version}`), 'MCP registration must pin the installed version');
+  assert.ok(registration.includes(`npx ${pack.name}@${pack.version} mcp-setup --apply`), 'MCP registration must pin the installed package');
   assert.ok(!registration.includes('_npx'), 'Persistent registration must survive npm cache eviction');
 
   const context = new ContextCache();

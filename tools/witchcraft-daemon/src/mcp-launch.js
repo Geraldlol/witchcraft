@@ -63,7 +63,7 @@ async function findNpmCli(nodePath) {
     const resolved = await fs.realpath(candidate).catch(() => null);
     if (resolved && path.basename(resolved) === 'npm-cli.js' && !isNpxCachePath(resolved)) return resolved;
   }
-  throw new Error('Cannot locate npm for MCP registration. Run npx witchcraft-daemon mcp-setup with an installation of Node that includes npm.');
+  throw new Error(`Cannot locate npm for MCP registration. Run npx ${manifest.name} mcp-setup with an installation of Node that includes npm.`);
 }
 
 const isNpxCachePath = file => path.resolve(file).split(path.sep).includes('_npx');
@@ -78,9 +78,10 @@ async function retainMcpRuntime([nodePath, launcher, npmCli, packageSpec], packa
   try {
     const { stdout } = await promisify(execFile)(nodePath, [npmCli, 'pack', '--json', '--offline', '--ignore-scripts', '--cache',
       path.join(staging, 'cache'), '--pack-destination', staging, packageDir], { cwd: staging, windowsHide: true });
-    const files = JSON.parse(stdout)[0].files.map(entry => entry.path).sort();
+    const [packed] = JSON.parse(stdout);
+    const files = packed.files.map(entry => entry.path).sort();
     const source = { root: packageDir, files, fingerprint: runtimeTools.packageFingerprint(packageDir, files) };
-    const archive = await fs.readFile(path.join(staging, `${manifest.name}-${manifest.version}.tgz`));
+    const archive = await fs.readFile(path.join(staging, packed.filename));
     const sha256 = createHash('sha256').update(archive).digest('hex');
     await atomicWrite(path.join(runtime, `${sha256}.tgz`), archive);
     await atomicWrite(launcher, await fs.readFile(new URL('./npm-mcp-launch.cjs', import.meta.url)));

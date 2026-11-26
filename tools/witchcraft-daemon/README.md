@@ -24,6 +24,16 @@ For the optional desktop overlay, install `witchcraft-daemon@0.5.1` and `electro
 
 To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.1 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
 
+### With GitHub Packages
+
+GitHub Packages distributes the daemon as `@geraldlol/witchcraft-daemon`. To use this registry, map the scope in your project’s `.npmrc`:
+
+```ini
+@geraldlol:registry=https://npm.pkg.github.com
+```
+
+Run `npm login --scope=@geraldlol --auth-type=legacy --registry=https://npm.pkg.github.com`. Enter your GitHub username and a classic personal access token with `read:packages` when prompted. Then run `npx @geraldlol/witchcraft-daemon@0.5.1 --help`. The same commands and client configuration apply to both registries.
+
 ### Try a local package
 
 Before the version reaches npm, run `npm pack` in the source tree’s `tools/witchcraft-daemon` directory. From another directory run:

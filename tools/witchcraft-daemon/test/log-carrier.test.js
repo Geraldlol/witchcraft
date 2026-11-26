@@ -458,6 +458,90 @@ test('a file truncated under a running writer: the park ends only after 256 KiB 
   }
 });
 
+// Found in game 2026-11-26: while Windows zero-fills the gap of the old client's far write, the file size
+// shows in steps. The reader parks at a step, takes the rest for growth and moves over the hole to the file's
+// end; the new client then writes from the hole's start without changing the size.
+test('a far write whose size shows in steps: the reader moves over the hole and returns to its start once that is filled', async t => {
+  const chat = '11/23 19:41:30.500  [N][Chat] someone says: ';
+  for (const [early, expected] of [['', [1, 2]], [`${frameLine(7)}\n`, [1, 2]], [chat, [2]]]) {
+    const logFile = await tempLog(t), { receiver, seen } = recorder(), errors = [];
+    await fs.writeFile(logFile, oldLines(12000));
+    const carrier = new LogCarrier({ logFile, receiver, onError: error => errors.push(error) });
+    await carrier.scan();
+    const { size: oldSize } = await fs.stat(logFile);
+    await fs.truncate(logFile, 0);
+    await carrier.scan();
+    // The new client's first lines (none, whole lines, or a line it has not ended yet), then the stepped size.
+    if (early) await writeAt(logFile, early, 0);
+    await carrier.scan();
+    await fs.truncate(logFile, 300 * 1024);
+    await carrier.scan();
+    assert.equal(carrier.offset, early.length, 'parked at the hole on the first step');
+    await writeAt(logFile, `${frameLine(9)}\n${oldExit}`, oldSize);
+    const { size } = await fs.stat(logFile);
+    assert.ok(size - 300 * 1024 > 256 * 1024, 'the last step is more than the slack');
+    await carrier.scan();
+    const before = early.endsWith('\n') ? [7] : [];
+    assert.deepEqual(seen, [...before, 9], 'the old run\'s last lines are read once');
+    assert.equal(carrier.offset, size, 'the cursor moved over the hole to the end');
+    await carrier.scan();
+    assert.equal(carrier.offset, size, 'and stays there while the hole\'s start is NUL');
+    // The new client fills the hole from its start; the size does not change. After a line the cursor never
+    // kept, the first bytes written end that line and are not a line of their own.
+    let at = early.length;
+    const write = async text => { await writeAt(logFile, text, at); at += text.length; };
+    await write(`${frameLine(1)}\n`);
+    assert.equal((await fs.stat(logFile)).size, size, 'the size did not change');
+    await carrier.scan();
+    await write(`${frameLine(2)}\n`);
+    await carrier.scan();
+    assert.deepEqual(seen, [...before, 9, ...expected], 'frames written into the hole arrive, in order');
+    assert.equal(carrier.offset, at, 'parked at the hole\'s next NUL byte');
+    assert.equal(carrier.skipped, null);
+    assert.deepEqual(errors, []);
+  }
+});
+
+// Review round 9: after the cursor went back, the fill reaches the old run's last lines, which were read once
+// already. Their frames are not delivered a second time; a frame the new client wrote over them is.
+test('after going back to a hole, the reader does not deliver the old run\'s last frames again', async t => {
+  const oldFrame = seq => encodeLogLine({ epoch: EPOCH, nonce: NONCE, uiNonce: 'abcdef00', slot: 1, seq, payload: inputBody(`body ${seq}`) });
+  for (const [over, expected] of [[false, [8, 9, 1]], [true, [8, 9, 1, 2]]]) {
+    const logFile = await tempLog(t), { receiver, seen } = recorder(), errors = [];
+    await fs.writeFile(logFile, oldLines(12000));
+    const carrier = new LogCarrier({ logFile, receiver, onError: error => errors.push(error) });
+    await carrier.scan();
+    const { size: oldSize } = await fs.stat(logFile);
+    await fs.truncate(logFile, 0);
+    await carrier.scan();
+    await fs.truncate(logFile, 300 * 1024);
+    await carrier.scan();
+    await writeAt(logFile, `${oldFrame(8)}\n${oldFrame(9)}\n${oldExit}`, oldSize);
+    const { size } = await fs.stat(logFile);
+    await carrier.scan();
+    assert.deepEqual(seen, [8, 9], 'the old run\'s last frames are read once');
+    assert.equal(carrier.offset, size);
+    const first = `${frameLine(1)}\n`;
+    await writeAt(logFile, first, 0);
+    await carrier.scan();
+    assert.deepEqual(seen, [8, 9, 1]);
+    assert.equal(carrier.offset, first.length, 'back in the hole');
+    // The new client fills the rest of the hole in one write, which ends at the old run's lines or lies over
+    // the first of them (frame 2 takes the place of old frame 8; old frame 9 is left whole).
+    assert.equal(frameLine(2).length, oldFrame(8).length);
+    await writeAt(logFile, `${padding(oldSize - first.length)}${over ? `${frameLine(2)}\n` : ''}`, first.length);
+    assert.equal((await fs.stat(logFile)).size, size, 'the size did not change');
+    await carrier.scan();
+    assert.deepEqual(seen, expected, 'no old frame arrives twice');
+    assert.equal(carrier.offset, size, 'the cursor read on to the end');
+    // Past the span read before, the same UI session is read as ever.
+    await fs.appendFile(logFile, `${oldFrame(10)}\n${frameLine(3)}\n`);
+    await carrier.scan();
+    assert.deepEqual(seen, [...expected, 10, 3]);
+    assert.deepEqual(errors, []);
+  }
+});
+
 test('a reader that starts on a file with a hole parks at its first NUL byte', async t => {
   // The second file is longer than 256 KiB before its hole: the search runs outside the end window.
   for (const [before, hole] of [[2000, 5000], [300 * 1024, 300 * 1024]]) {

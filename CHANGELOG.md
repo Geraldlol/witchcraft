@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 - 2026-11-26
+
+- Daemon, log lane: fix for the known issue of 0.5.0. When the client is closed and started again within a few seconds, the old client writes its last log lines far into the file the new client has just emptied, and Windows reports the file's size in steps while it fills the gap. The reader took such a step for new log text, moved to the end of the file and never read what the new client wrote from the start, so the log lane did not link until the daemon was restarted. The reader now remembers where the gap it moved over begins, goes back when the new client writes there, and does not deliver a second time the old client's frames it had already read. Checked by tests and by replaying the log bytes of the failed run of 2026-11-26 through the reader; not yet repeated in the live client.
+- No addon change apart from the version.
+
 ## 0.5.0 - 2026-11-26
 
 - Add an opt-in log lane for traffic from the game to the daemon. `/witch filelane log`, then `/reload`, sends prompts, context and the ring cursor through the client log (`C_Log.LogMessage`, which the client writes to `Logs/General.log`), and the daemon reads them there. `/witch filelane binding`, then `/reload`, returns to the default. With the log lane linked, prompts no longer need the pixel strip: `/witch strip fallback` hides it while the lane carries them and `/witch strip off` never draws it, prompts go out in combat, and the link holds while the game is not the foreground window. Confirmed in game on Forever `1.60.1.71037` on 2026-11-26.

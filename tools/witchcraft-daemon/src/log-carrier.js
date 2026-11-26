@@ -18,6 +18,8 @@ const MAX_FRAME_LINE_BYTES = 1100;
 const HOLE_SLACK_BYTES = 256 * 1024;
 // The head mark: the file's first bytes, which tell a rewritten file from the one being read.
 const HEAD_MARK_BYTES = 64;
+// UI sessions remembered for the bytes read past a hole.
+const TAIL_UI_LIMIT = 32;
 
 // A read that comes back short is read on; fewer bytes than asked for means the file ends there.
 async function readAt(handle, length, position) {
@@ -116,12 +118,17 @@ export class LogCarrier {
     // offset is null until the first scan places it; size is the last stat's; carry holds an unterminated tail.
     // parkSize is the file size seen when the cursor stopped at a NUL byte (null when not parked); head is the mark.
     this.offset = null; this.birth = null; this.size = null; this.carry = []; this.carryBytes = 0; this.overflow = false;
-    this.parkSize = null; this.head = Buffer.alloc(0);
+    // skipped is where a hole the cursor moved over begins (null when it moved over none). tailFrom is where
+    // the bytes after that hole begin and tailUis the UI sessions of the frames read from them. reread is that
+    // span and those sessions once the cursor went back: { from, to, uis }.
+    this.parkSize = null; this.head = Buffer.alloc(0); this.skipped = null;
+    this.tailFrom = null; this.tailUis = new Set(); this.reread = null;
   }
 
   restart() {
     this.offset = 0; this.size = null; this.carry = []; this.carryBytes = 0; this.overflow = false;
-    this.parkSize = null; this.head = Buffer.alloc(0);
+    this.parkSize = null; this.head = Buffer.alloc(0); this.skipped = null;
+    this.tailFrom = null; this.tailUis = new Set(); this.reread = null;
   }
 
   async scan() {
@@ -155,7 +162,8 @@ export class LogCarrier {
       // A file that shrank is a new file, wherever the offset is.
       if ((this.size !== null && stat.size < this.size) || (this.birth !== null && stat.birthtimeMs !== this.birth)) this.restart();
       this.birth = stat.birthtimeMs; this.size = stat.size;
-      if (stat.size <= this.offset) return;
+      // A hole the cursor moved over is looked at on every pass, also when nothing follows the cursor.
+      if (stat.size <= this.offset && this.skipped === null) return;
     }
     let handle;
     try { handle = await fs.open(this.logFile, 'r'); }
@@ -209,6 +217,28 @@ export class LogCarrier {
       this.restart(); this.size = stat.size;
     }
     this.head = Buffer.from(first);
+    // The cursor moved over a hole because the file grew past it. A byte written at the hole's start means a
+    // writer is filling it from there after all (the size of a far write can show in steps, which looks like
+    // growth): the cursor goes back to that byte. What lies before it was not kept, so a line cut there is
+    // skipped to its end.
+    if (this.skipped !== null) {
+      const [byte] = await readAt(handle, 1, this.skipped);
+      if (byte !== undefined && byte !== 0) {
+        let before = 0x0a;
+        if (this.skipped > 0) {
+          [before] = await readAt(handle, 1, this.skipped - 1);
+          if (before === undefined) return;
+        }
+        // The bytes from tailFrom to the cursor were read once already; the cursor will reach them again.
+        if (this.tailFrom !== null) {
+          this.reread = { from: Math.min(this.tailFrom, this.reread?.from ?? this.tailFrom),
+            to: Math.max(this.offset, this.reread?.to ?? 0), uis: new Set([...(this.reread?.uis ?? []), ...this.tailUis]) };
+        }
+        Object.assign(this, { offset: this.skipped, skipped: null, parkSize: null, carry: [], carryBytes: 0,
+          overflow: before !== 0x0a, tailFrom: null, tailUis: new Set() });
+      }
+    }
+    if (stat.size <= this.offset) return;
     // Parked at a NUL byte: a filled byte lets reading go on. While the byte is NUL and the file grew no more
     // than the slack, the one-byte look is all this pass does.
     if (this.parkSize !== null && stat.size - this.parkSize <= HOLE_SLACK_BYTES) {
@@ -223,23 +253,30 @@ export class LogCarrier {
     if (this.parkSize !== null) {
       // Nothing is filling the hole: move over its NUL bytes; the byte after it starts a line.
       while (at < chunk.length && chunk[at] === 0) at += 1;
-      this.offset += at;
       // The line state goes with the first NUL passed, so a later pass that begins after the hole starts clean.
-      if (at > 0) { this.carry = []; this.carryBytes = 0; this.overflow = false; }
+      if (at > 0) {
+        if (this.skipped === null) this.skipped = this.offset;
+        this.carry = []; this.carryBytes = 0; this.overflow = false;
+      }
+      this.offset += at;
       if (at === chunk.length) { if (this.offset < stat.size) this.queued = true; return; }
       this.parkSize = null;
+      if (this.skipped !== null && this.tailFrom === null) this.tailFrom = this.offset;
     }
     // A read never consumes a NUL byte: the cursor parks at the first one.
     const rest = chunk.subarray(at), nul = rest.indexOf(0);
     const live = nul === -1 ? rest : rest.subarray(0, nul);
+    const base = this.offset;
     this.offset += live.length;
-    await this.consume(live);
+    await this.consume(live, base);
     if (nul !== -1) this.parkSize = stat.size;
     else if (this.offset < stat.size) this.queued = true;
   }
 
-  // A line that is not a frame is never stored, logged, traced or passed on.
-  async consume(chunk) {
+  // A line that is not a frame is never stored, logged, traced or passed on. base is the chunk's place in the
+  // file. A frame line inside the span read before the cursor went back, from a UI session read there, was
+  // delivered then and is not delivered again.
+  async consume(chunk, base) {
     let start = 0;
     for (let end = chunk.indexOf(0x0a, start); end !== -1 && !this.stopped; end = chunk.indexOf(0x0a, start)) {
       const piece = chunk.subarray(start, end);
@@ -249,6 +286,12 @@ export class LogCarrier {
       this.carry = []; this.carryBytes = 0; this.overflow = false;
       const frame = bytes && parseLogLine(bytes.toString('latin1'));
       if (!frame) continue;
+      const lineStart = base + end - bytes.length;
+      if (this.reread && lineStart >= this.reread.from && base + end < this.reread.to && this.reread.uis.has(frame.uiNonce)) continue;
+      if (this.skipped !== null) {
+        this.tailUis.delete(frame.uiNonce); this.tailUis.add(frame.uiNonce);
+        if (this.tailUis.size > TAIL_UI_LIMIT) this.tailUis.delete(this.tailUis.values().next().value);
+      }
       try { await this.receiver.accept(frame); } catch (error) { if (!this.stopped) this.onError(error); }
     }
     const tail = chunk.subarray(start);

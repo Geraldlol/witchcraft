@@ -11,18 +11,18 @@ The WoW MCP bridge adds six read-only game-context tools (context, character, qu
 Use the addon from the matching WITCHCRAFT release. Extract its `Witchcraft/` folder under the game client's `Interface/AddOns` and log in at least once. From the directory where you want your assistant to work, configure the client and initialize its helper addons:
 
 ```sh
-npx witchcraft-daemon@0.5.1 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
-npx witchcraft-daemon@0.5.1 init --ring 3000
-npx witchcraft-daemon@0.5.1 doctor
+npx witchcraft-daemon@0.5.2 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.2 init --ring 3000
+npx witchcraft-daemon@0.5.2 doctor
 ```
 
-Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.1 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.1 run --only codex`. On Windows, `npx.cmd` also works. On Linux, the terminal dependency builds from source and needs Python 3, make and a C++ compiler. If its build reports a missing `node_api.h` and your home directory contains spaces, set `XDG_CACHE_HOME` to a private, writable path without spaces for the Node headers before running npm.
+Use your actual absolute path. If the client has multiple accounts, add `--account NAME` to `init`. Restart WoW, show `/witch calibrate`, run `npx witchcraft-daemon@0.5.2 calibrate`, then hide the strip with `/witch calibrate off`. Start a terminal with `npx witchcraft-daemon@0.5.2 run --only codex`. On Windows, `npx.cmd` also works. On Linux, the terminal dependency builds from source and needs Python 3, make and a C++ compiler. If its build reports a missing `node_api.h` and your home directory contains spaces, set `XDG_CACHE_HOME` to a private, writable path without spaces for the Node headers before running npm.
 
-The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.1`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
+The package also installs the `witchcraft` and `witchcraft-mcp` commands. To use them on your PATH, run `npm install --global witchcraft-daemon@0.5.2`. Both install methods share the same state directory, `~/.witchcraft`. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to select a separate profile. The client pointer is `wow.config.json` in that directory. The working directory for assistant sessions and project-scoped Claude MCP registration defaults to the calling directory. Supply `--cwd PATH` to select another project.
 
-For the optional desktop overlay, install `witchcraft-daemon@0.5.1` and `electron@44.10.1` together in a local npm project, then use `npx witchcraft run --overlay` there. Source checkouts retain their existing overlay setup.
+For the optional desktop overlay, install `witchcraft-daemon@0.5.2` and `electron@44.10.1` together in a local npm project, then use `npx witchcraft run --overlay` there. Source checkouts retain their existing overlay setup.
 
-To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.1 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
+To give an existing Claude session the WoW tools, run `npx witchcraft-daemon@0.5.2 mcp-setup` from the project you use with Claude to preview the registration. Add `--apply` to register it and keep a copy of the installed MCP runtime in your Witchcraft state directory. Restart the Claude session. Its registration can then survive removal of the original npm execution cache. The npm launcher can reuse cached dependencies or download missing ones.
 
 ### With GitHub Packages
 
@@ -32,14 +32,14 @@ GitHub Packages distributes the daemon as `@geraldlol/witchcraft-daemon`. To use
 @geraldlol:registry=https://npm.pkg.github.com
 ```
 
-Run `npm login --scope=@geraldlol --auth-type=legacy --registry=https://npm.pkg.github.com`. Enter your GitHub username and a classic personal access token with `read:packages` when prompted. Then run `npx @geraldlol/witchcraft-daemon@0.5.1 --help`. The same commands and client configuration apply to both registries.
+Run `npm login --scope=@geraldlol --auth-type=legacy --registry=https://npm.pkg.github.com`. Enter your GitHub username and a classic personal access token with `read:packages` when prompted. Then run `npx @geraldlol/witchcraft-daemon@0.5.2 --help`. The same commands and client configuration apply to both registries.
 
 ### Try a local package
 
 Before the version reaches npm, run `npm pack` in the source tree’s `tools/witchcraft-daemon` directory. From another directory run:
 
 ```sh
-npm install --no-save "/absolute/path/to/witchcraft-daemon-0.5.1.tgz"
+npm install --no-save "/absolute/path/to/witchcraft-daemon-0.5.2.tgz"
 npx --no-install witchcraft-daemon --help
 ```
 

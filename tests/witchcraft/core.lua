@@ -2308,3 +2308,109 @@ test("/witch bindprobe on the log lane names the log carrier probe", function()
     c:HandleSlash("bindprobe")
     equal(s.printed[#s.printed], "Log carrier probe started; waiting for host ACK")
 end)
+
+-- The log lane on a clock the controller and the carrier share, linked and ready at 100 s.
+local function readyLogLane(settings, overrides, hostFields)
+    local clock, lines = { now = 100 }, {}
+    local api = { GetTime = function() return clock.now end,
+        LogAPI = { LogMessage = function(text) lines[#lines + 1] = text end, Now = function() return clock.now end } }
+    for key, value in pairs(overrides or {}) do api[key] = value end
+    local c, s = fixture({ settings = settings }, api)
+    s:Accept()
+    if c.timers.binding then c.timers.binding.handle:Fire() end
+    local fields = { logProtocol = 1, logNonce = "89abcdef", logAck = 1 }
+    for key, value in pairs(hostFields or {}) do fields[key] = value end
+    s:Accept(fields)
+    equal(c.binding.enabled, true, "the log carrier is ready")
+    return c, s, lines, clock
+end
+
+-- Combat with terminal updates off: one prompt's frame is logged at 102 s, then 30 s pass with no chunk loaded.
+local function pausedCombatPrompt(mode)
+    local c, s, lines, clock = readyLogLane({ fileLane = "log", stripMode = mode })
+    clock.now = 102
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c:InboundPaused(), true)
+    local before = #lines
+    assert(c:Send("codex", "first"))
+    c:BindingTick()
+    equal(#lines, before + 26, mode .. ": one frame line and its padding")
+    assert(c.binding.outstanding and not c.binding.outstanding.probe, mode .. ": the input frame waits for its acknowledgement")
+    for now = 103, 132 do
+        clock.now = now; c:BindingTick()
+        equal(c:BindingCarries(), true, mode .. ": the carrier still carries at " .. now)
+        if mode == "off" then assert(c:Snapshot().status ~= STRIP_OFF, "no strip-off notice at " .. now) end
+        if mode == "fallback" then equal(c:StripActive(), false, "the strip stays hidden at " .. now) end
+    end
+    equal(#lines, before + 26, mode .. ": the frame is not logged again while no acknowledgement can come")
+    assert(c:Send("codex", "second"), mode .. ": a second prompt is accepted")
+    return c, s, lines, clock
+end
+
+test("in combat with terminal updates paused the log lane in mode off keeps carrying and logs no frame again", function()
+    pausedCombatPrompt("off")
+end)
+
+test("in combat with terminal updates paused the log lane in mode fallback keeps the strip hidden", function()
+    pausedCombatPrompt("fallback")
+end)
+
+test("after combat the acknowledgement clock and the re-log start from the end of combat", function()
+    -- The acknowledgement comes inside 5 s: no mark, no re-log, and the second prompt's frame goes next.
+    local c, s, lines, clock = pausedCombatPrompt("off")
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    local before = #lines
+    for now = 133, 136 do clock.now = now; c:BindingTick() end
+    equal(c.binding.inputBlocked, nil, "no mark"); equal(#lines, before, "no re-log")
+    s:Accept({ ack = 1, logProtocol = 1, logNonce = "89abcdef", logAck = 2 })
+    equal(c.binding.outstanding, nil, "the first frame is acknowledged")
+    -- The idle carrier may log a heartbeat on the accepted chunk; count from after it.
+    before = #lines
+    clock.now = 137; c:BindingTick()
+    equal(#lines, before + 26, "the second prompt's frame is logged next")
+    assert(lines[before + 1]:find("_000003_", 1, true), lines[before + 1])
+    equal(c:BindingCarries(), true)
+    -- No acknowledgement for 5 s after combat ended: the carrier is marked as before and logs the frame again.
+    c, s, lines, clock = pausedCombatPrompt("off")
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    before = #lines
+    for now = 133, 136 do
+        clock.now = now; c:BindingTick()
+        equal(c:BindingCarries(), true, "no mark at " .. now); equal(#lines, before, "no re-log at " .. now)
+    end
+    clock.now = 137; c:BindingTick()
+    equal(c.binding.inputBlocked, true, "the carrier is marked 5 s after combat ended")
+    equal(c:Snapshot().status, STRIP_OFF)
+    local ok, reason = c:Send("codex", "third")
+    equal(ok, false); equal(reason, STRIP_OFF)
+    equal(#lines, before + 26, "the frame is logged again")
+end)
+
+test("with terminal updates on in combat an unanswered log frame marks the carrier at 5 s as before", function()
+    local c, s, lines, clock = readyLogLane({ fileLane = "log", stripMode = "off", combatUpdates = true })
+    clock.now = 102
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c:InboundPaused(), false)
+    assert(c:Send("codex", "first")); c:BindingTick()
+    local before = #lines
+    for now = 103, 106 do clock.now = now; c:BindingTick(); equal(c.binding.inputBlocked, nil, "no mark at " .. now) end
+    clock.now = 107; c:BindingTick()
+    equal(c.binding.inputBlocked, true, "marked at 5 s"); equal(#lines, before + 26, "and logged again at 5 s")
+end)
+
+test("a context row in combat with terminal updates paused stays with the log carrier past its budget", function()
+    local c, s, _, clock = readyLogLane({ fileLane = "log", stripMode = "fallback" },
+        { Context = { Capture = function() return { { true } } end } },
+        { contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    c:ContextTick()
+    local pending = assert(c.contextPending, "a context row is pending")
+    clock.now = 101
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    c:BindingTick()
+    assert(c.binding.active and c.binding.active.kind == "context" and c.binding.outstanding, "the row's frame is logged")
+    for now = 102, 131 do
+        clock.now = now; c:BindingTick()
+        equal(pending.viaStrip, nil, "not handed to the strip at " .. now)
+        equal(c.binding.contextBlocked, nil, "no context mark at " .. now)
+    end
+end)

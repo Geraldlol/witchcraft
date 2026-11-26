@@ -162,12 +162,15 @@ export async function runDoctor({ options = {}, repoRoot, localDir = LOCAL_DIR, 
   const trace = path.join(localDir, 'trace.log'), at = now();
   const ack = await probeRecord(trace, lock.epoch, context.session.uiNonce, startedAt, at)
     ?? await probeRecord(trace + '.1', lock.epoch, context.session.uiNonce, startedAt, at);
-  if (ack !== null) add('binding', 'ok', `Host acknowledged the binding probe ${Math.max(0, Math.floor((now() - ack) / 1000))}s ago. Confirm cleanup in /witch status.`);
-  else add('binding', 'wait', 'No binding-probe acknowledgement observed for this UI session.',
-    'Run /witch bindprobe outside combat and wait for the in-game acknowledgement and cleanup.');
   const logAck = await probeRecord(trace, lock.epoch, context.session.uiNonce, startedAt, at, 'log-probe-ack')
     ?? await probeRecord(trace + '.1', lock.epoch, context.session.uiNonce, startedAt, at, 'log-probe-ack');
+  // A UI session runs one file lane, the binding carrier or the log carrier; either acknowledged is enough.
+  if (ack !== null) add('binding', 'ok', `Host acknowledged the binding probe ${Math.max(0, Math.floor((now() - ack) / 1000))}s ago. Confirm cleanup in /witch status.`);
+  else if (logAck !== null) add('binding', 'info', 'Not in use: the log lane carries this UI session.');
+  else add('binding', 'wait', 'No binding-probe acknowledgement observed for this UI session.',
+    'Run /witch bindprobe outside combat, or with /witch filelane log run /reload, and wait for the in-game acknowledgement.');
   if (logAck !== null) add('log lane', 'ok', `Host acknowledged the log probe ${Math.max(0, Math.floor((now() - logAck) / 1000))}s ago.`);
+  else if (ack !== null) add('log lane', 'info', 'Not in use: the binding lane carries this UI session.');
   else add('log lane', 'wait', 'No log-probe acknowledgement observed for this UI session.');
   return result();
 }

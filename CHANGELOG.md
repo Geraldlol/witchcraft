@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 - 2026-11-26
 
-- Package the 0.5.1 daemon for npm. Installed copies keep their settings and MCP state in `~/.witchcraft`. Use `configure --addons-dir` to select the client.
+- Log lane in combat: with **Keep updating in combat** off (the default) the addon loads no terminal updates during a fight, so the daemon's acknowledgement of a message cannot arrive until combat ends. The addon took the missing acknowledgement for a failed link after five seconds: strip mode `off` then refused the next prompt, `fallback` drew the strip, and the message was logged again several times at about 100 KB each. The acknowledgement timeout and the repeat logging now wait while updates are paused. With updates paused, one message still goes out per fight and the next is sent when combat ends. Checked by tests; not yet run in the live client.
+- Add **File lane to the daemon** to the options page. It is the same setting as `/witch filelane` and applies at the next `/reload`.
+- Daemon: `witchcraft doctor` accepts either file lane. With the log lane acknowledged it reports the binding lane as not in use and prints `Ready.` instead of asking for `/witch bindprobe`.
+- Daemon, log lane: a daemon started on a log file that begins with a gap (the client was just restarted and has not written yet) now waits at the gap instead of at the end of the file.
+- The addon README named build `release-0.4.0`; it now names the current build.
+- The daemon is on npm as `witchcraft-daemon`, first published as 0.5.1. Installed copies keep their settings and MCP state in `~/.witchcraft`. Use `configure --addons-dir` to select the client.
 
 ## 0.5.1 - 2026-11-26
 

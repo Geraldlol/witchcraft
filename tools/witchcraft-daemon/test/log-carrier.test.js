@@ -560,6 +560,55 @@ test('a reader that starts on a file with a hole parks at its first NUL byte', a
   }
 });
 
+// Review of 0.5.1: a file whose start is a hole and whose last 256 KiB hold no NUL byte (a new client truncated
+// it, the old one wrote 256 KiB or more at its old offset). The first NUL byte lies inside the head mark.
+const oldUiFrame = seq => encodeLogLine({ epoch: EPOCH, nonce: NONCE, uiNonce: 'abcdef00', slot: 1, seq, payload: inputBody(`body ${seq}`) });
+async function holeAtStart(t, head = '') {
+  const logFile = await tempLog(t), { receiver, seen } = recorder(), errors = [];
+  await fs.writeFile(logFile, Buffer.concat([Buffer.from(head, 'latin1'), Buffer.alloc(5000),
+    Buffer.from(`${oldUiFrame(8)}\n${padding(300 * 1024)}`, 'latin1')]));
+  const carrier = new LogCarrier({ logFile, receiver, onError: error => errors.push(error) });
+  await carrier.scan();
+  assert.deepEqual(seen, [], 'nothing is delivered at the start');
+  assert.equal(carrier.offset, head.length, 'parked at the first NUL byte, inside the head mark');
+  assert.equal(carrier.parkSize, (await fs.stat(logFile)).size);
+  assert.equal(carrier.overflow, false);
+  return { logFile, seen, errors, carrier };
+}
+
+test('a reader that starts on a file beginning with a hole parks at offset 0 and reads what is written there', async t => {
+  const { logFile, seen, errors, carrier } = await holeAtStart(t);
+  await writeAt(logFile, `${frameLine(1)}\n`, 0);
+  await carrier.scan();
+  assert.deepEqual(seen, [1]);
+  await writeAt(logFile, `${frameLine(2)}\n`, frameLine(1).length + 1);
+  await carrier.scan();
+  assert.deepEqual(seen, [1, 2]);
+  assert.deepEqual(errors, []);
+});
+
+test('a start on a hole at offset 0: growth moves over the hole, and a write at its start is read', async t => {
+  const { logFile, seen, errors, carrier } = await holeAtStart(t);
+  await fs.appendFile(logFile, `${frameLine(3)}\n${padding(256 * 1024)}${frameLine(4)}\n`);
+  await carrier.scan();
+  assert.deepEqual(seen, [8, 3, 4], 'the old frame after the hole, then the appended frames');
+  assert.equal(carrier.skipped, 0, 'moved over the hole from offset 0');
+  await writeAt(logFile, `${frameLine(1)}\n`, 0);
+  await carrier.scan();
+  assert.deepEqual(seen, [8, 3, 4, 1], 'the return to the hole');
+  assert.deepEqual(errors, []);
+});
+
+test('a start on a file whose short first line is followed by a hole parks after that line', async t => {
+  const head = `${'s'.repeat(19)}\n`;
+  const { logFile, seen, errors, carrier } = await holeAtStart(t, head);
+  assert.equal(carrier.offset, 20);
+  await writeAt(logFile, `${frameLine(1)}\n`, head.length);
+  await carrier.scan();
+  assert.deepEqual(seen, [1]);
+  assert.deepEqual(errors, []);
+});
+
 // While run goes, fs.open hands out handles whose read goes through wrap: to cut a read short or to fail it.
 async function wrapReads(wrap, run) {
   const open = fs.open;

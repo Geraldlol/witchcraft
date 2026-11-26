@@ -190,6 +190,15 @@ function methods:Pump(slot)
     return true
 end
 
+-- While the controller loads no chunk no acknowledgement can come, so the outstanding frame (data or
+-- probe) is not logged again before RESEND_FIRST seconds from now. resendDelay keeps its value.
+function methods:HoldResend()
+    local sent = self.outstanding
+    if not sent then return false end
+    sent.resendAt = math.max(sent.resendAt, self:Now() + RESEND_FIRST)
+    return true
+end
+
 -- Remembers the host session the last result named. A new one forgets the logged probe, unless that
 -- probe is still waiting, where the new host can read it.
 function methods:TrackHost(epoch, nonce)

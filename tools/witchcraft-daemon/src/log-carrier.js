@@ -179,8 +179,9 @@ export class LogCarrier {
     } finally { await handle.close(); }
   }
 
-  // The first scan: the cursor goes to the live end, which is the file's end unless its last 256 KiB hold a
-  // NUL byte. Then the live end is the smallest position holding a NUL (bytes before a hole are not NUL).
+  // The first scan: the cursor goes to the live end, which is the file's end unless its first 64 bytes or its
+  // last 256 KiB hold a NUL byte. Then the live end is the smallest position holding a NUL (bytes before a hole
+  // are not NUL).
   // Every read here must be complete: a file that ended short of its stat places nothing, and the next
   // scan starts again.
   async place(handle, stat) {
@@ -190,8 +191,12 @@ export class LogCarrier {
     // A file that does not end with a line end there: what is appended next ends a line whose start was
     // never read, so the reader skips to that line's end.
     let offset = stat.size, parkSize = null, overflow = window[window.length - 1] !== 0x0a;
-    const nul = window.indexOf(0);
-    if (nul !== -1) {
+    // A NUL byte in the head mark is the live end: the bytes before it are not NUL. A file that starts with a
+    // hole parks there even when its last 256 KiB hold no NUL byte.
+    const markNul = mark.indexOf(0), nul = markNul === -1 ? window.indexOf(0) : -1;
+    if (markNul !== -1) {
+      offset = markNul; parkSize = stat.size; overflow = markNul > 0 && mark[markNul - 1] !== 0x0a;
+    } else if (nul !== -1) {
       let low = 0, high = from + nul;
       while (low < high) {
         const middle = Math.floor((low + high) / 2);

@@ -288,3 +288,19 @@ test("a frame line logged before its padding failed keeps its sequence until its
     state.padFails, state.now = false, 141
     equal(carrier:Heartbeat(2, 0), true, "the same heartbeat is offered again")
 end)
+
+test("HoldResend defers the re-log of the outstanding frame and leaves its back-off alone", function()
+    local carrier, state = ready()
+    equal(carrier:HoldResend(), false, "nothing outstanding, nothing to hold")
+    equal(carrier.outstanding, nil)
+    assert(carrier:OfferInput(input(1)))
+    state.now = 102; equal(carrier:Pump(3), true)
+    local sent = carrier.outstanding
+    equal(sent.resendAt, 107); equal(sent.resendDelay, 5)
+    state.now = 106; equal(carrier:HoldResend(), true)
+    equal(sent.resendAt, 111); equal(sent.resendDelay, 5, "the back-off keeps its value")
+    state.now = 110; carrier:Pump(3); equal(#frames(state), 2, "the probe and the first frame only")
+    state.now = 111; carrier:Pump(3); equal(#frames(state), 3, "logged again once the hold has passed")
+    sent.resendAt = 200; state.now = 120; carrier:HoldResend()
+    equal(sent.resendAt, 200, "a later re-log time is never brought forward")
+end)

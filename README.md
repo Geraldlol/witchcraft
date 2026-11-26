@@ -51,7 +51,7 @@ WoW addons can't open network sockets or start processes, and that is how it sho
 | **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only WoW tools and 3 optional wishlist/passport tools. |
 | **Claude Code skill** | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Lets you ask Claude to start, stop, restart, or check the daemon for you (Windows + `pwsh`). |
 
-The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Version 0.5.1 also supports installing the daemon from an npm tarball.
+The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Versions 0.5.1 and later also support installing the daemon from an npm tarball.
 
 ---
 
@@ -74,17 +74,17 @@ The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/w
 
 ## Install
 
-### With npm (0.5.1)
+### With npm (0.5.2)
 
 Install the matching `Witchcraft/` addon in your Forever client’s `Interface/AddOns` directory and log into the client at least once. From the project folder where you want your assistant to work, run these commands with Node 24 or later. Replace the example path with your actual client path.
 
 ```sh
-npx witchcraft-daemon@0.5.1 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
-npx witchcraft-daemon@0.5.1 init --ring 3000
-npx witchcraft-daemon@0.5.1 doctor
+npx witchcraft-daemon@0.5.2 configure --addons-dir "/path/to/World of Warcraft/_forever_/Interface/AddOns"
+npx witchcraft-daemon@0.5.2 init --ring 3000
+npx witchcraft-daemon@0.5.2 doctor
 ```
 
-Restart WoW completely after `init`. In game, show the strip with `/witch calibrate`, run `npx witchcraft-daemon@0.5.1 calibrate` in the terminal, then use `/witch calibrate off`. Start your assistant with `npx witchcraft-daemon@0.5.1 run --only codex` (or `--only claude`). On Windows, `npx.cmd` works in PowerShell when its script execution policy blocks `npx`.
+Restart WoW completely after `init`. In game, show the strip with `/witch calibrate`, run `npx witchcraft-daemon@0.5.2 calibrate` in the terminal, then use `/witch calibrate off`. Start your assistant with `npx witchcraft-daemon@0.5.2 run --only codex` (or `--only claude`). On Windows, `npx.cmd` works in PowerShell when its script execution policy blocks `npx`.
 
 The installed daemon keeps configuration, calibration and session state in `~/.witchcraft` across npm upgrades. Set `WITCHCRAFT_STATE_DIR` to an absolute directory to use a separate profile. For a prepublication build, a local tarball works with npm as described in the [daemon package instructions](tools/witchcraft-daemon/README.md#try-a-local-package).
 

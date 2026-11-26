@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runDoctor } from '../src/doctor.js';
+import { formatDoctor, runDoctor } from '../src/doctor.js';
 import { initializeRing } from '../src/init.js';
 import { ContextCache } from '../src/context-cache.js';
 
@@ -112,29 +112,51 @@ test('heartbeat and probe acknowledgements must belong to the live daemon and cu
   };
   const trace = path.join(f.localDir, 'trace.log');
   const probe = (at, overrides = {}) => JSON.stringify({ what: 'binding-probe-ack', epoch, ui, at: new Date(at).toISOString(), ...overrides });
+  const logProbe = (at, overrides = {}) => probe(at, { what: 'log-probe-ack', ...overrides });
   await store(now - 31000);
   assert.equal(check(await diagnose(), 'heartbeat').status, 'wait');
   await store(now);
   await fs.writeFile(trace, [probe(now, { epoch: 'dddddddd' }), probe(now, { ui: 'eeeeeeee' }),
-    probe(now - 70000), probe(now + 60000), 'null'].join('\n'));
+    probe(now - 70000), probe(now + 60000), logProbe(now, { epoch: 'dddddddd' }), logProbe(now, { ui: 'eeeeeeee' }),
+    'null'].join('\n'));
   const current = await diagnose();
   assert.equal(check(current, 'heartbeat').status, 'ok');
+  // An acknowledgement for another epoch or UI session counts for neither lane.
   assert.equal(check(current, 'binding').status, 'wait');
+  assert.equal(check(current, 'binding').detail, 'No binding-probe acknowledgement observed for this UI session.');
+  assert.equal(check(current, 'log lane').status, 'wait');
+  assert.equal(check(current, 'log lane').detail, 'No log-probe acknowledgement observed for this UI session.');
+  assert.equal(check(current, 'log lane').next, undefined);
+  assert.equal(current.next, 'Run /witch bindprobe outside combat, or with /witch filelane log run /reload, and wait for the in-game acknowledgement.');
   await fs.writeFile(trace + '.1', probe(now - 1500));
   const report = await diagnose();
   assert.equal(check(report, 'binding').status, 'ok');
   assert.match(check(report, 'binding').detail, /1s ago/u);
-  assert.equal(check(report, 'log lane').status, 'wait');
-  assert.equal(check(report, 'log lane').detail, 'No log-probe acknowledgement observed for this UI session.');
-  await fs.appendFile(trace + '.1', '\n' + probe(now - 2500, { what: 'log-probe-ack', ui: 'eeeeeeee' }));
-  assert.equal(check(await diagnose(), 'log lane').status, 'wait', 'another UI session');
-  await fs.appendFile(trace, '\n' + probe(now - 2500, { what: 'log-probe-ack' }));
+  assert.equal(check(report, 'log lane').status, 'info');
+  assert.equal(check(report, 'log lane').detail, 'Not in use: the binding lane carries this UI session.');
+  assert.equal(check(report, 'log lane').next, undefined);
+  assert.equal(report.next, null);
+  assert.match(formatDoctor(report), /\nReady\.$/u);
+  await fs.appendFile(trace + '.1', '\n' + logProbe(now - 2500, { ui: 'eeeeeeee' }));
+  assert.equal(check(await diagnose(), 'log lane').status, 'info', 'another UI session');
+  await fs.appendFile(trace, '\n' + logProbe(now - 2500));
   const logged = await diagnose();
   assert.equal(check(logged, 'log lane').status, 'ok');
   assert.equal(check(logged, 'log lane').detail, 'Host acknowledged the log probe 2s ago.');
   assert.equal(check(logged, 'binding').status, 'ok');
-  assert.ok(!JSON.stringify(logged).includes(epoch) && !JSON.stringify(logged).includes(ui));
-  assert.ok(!JSON.stringify(report).includes(epoch) && !JSON.stringify(report).includes(ui));
+  // The log lane alone: the binding lane is not in use, and the doctor is ready.
+  await fs.writeFile(trace + '.1', logProbe(now - 2500, { ui: 'eeeeeeee' }));
+  const logOnly = await diagnose();
+  assert.equal(check(logOnly, 'log lane').status, 'ok');
+  assert.equal(check(logOnly, 'binding').status, 'info');
+  assert.equal(check(logOnly, 'binding').detail, 'Not in use: the log lane carries this UI session.');
+  assert.equal(check(logOnly, 'binding').next, undefined);
+  assert.equal(logOnly.next, null);
+  assert.match(formatDoctor(logOnly), /\nReady\.$/u);
+  assert.deepEqual(logOnly.checks.slice(-2).map(row => row.id), ['binding', 'log lane']);
+  for (const shown of [logged, report, logOnly]) {
+    assert.ok(!JSON.stringify(shown).includes(epoch) && !JSON.stringify(shown).includes(ui));
+  }
 });
 
 test('a live holder of the client ring lock gets wait advice instead of a start', async t => {

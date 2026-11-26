@@ -47,9 +47,13 @@ local PAGE = {
       tooltip = "Keep loading terminal updates during combat. Loading can cause brief frame hitches in a fight. Prompts you send always go out." },
     { key = "autoBindProbe", label = "Probe binding carrier on connect",
       tooltip = "Automatically run /witch bindprobe outside combat once per host session." },
+    { key = "fileLane", label = "File lane to the daemon", kind = "choice",
+      tooltip = "How prompts leave the game when the strip does not carry them. A change applies at the next /reload."
+          .. " The client log grows by about 45 MB an hour while idle.",
+      choices = { { "binding", "Key binding (default)" }, { "log", "Client log (works in combat and in the background)" } } },
     { key = "stripMode", label = "Top-left pixel strip", kind = "choice",
-      tooltip = "When to draw the 132x12 optical strip in the top-left corner. Fallback hides it only while the key-binding"
-          .. " file link can carry prompts. Off never draws it and refuses prompts while that link is not ready."
+      tooltip = "When to draw the 132x12 optical strip in the top-left corner. Fallback hides it only while the file lane"
+          .. " (log or key binding) can carry prompts. Off never draws it and refuses prompts while that link is not ready."
           .. " Calibration always shows it.",
       choices = { { "always", "Always visible" }, { "fallback", "Fallback (hide while the file link carries prompts)" },
           { "off", "Off (refuse prompts while the file link is not ready)" } } },

@@ -65,3 +65,30 @@ test("the Options page registers every setting as a proxy through the controller
     api.proxies.WITCHCRAFT_CONTEXTENABLED.set(false); equal(c.global.contextEnabled, false)
     equal(ns.Options.Register(c, {}), nil, "a client without the Settings API gets no page and no error")
 end)
+
+test("the Options page offers the file lane before the strip mode, saved for the next reload", function()
+    local c = ns.TestControllerFixture()
+    local api = settingsApi()
+    ns.Options.Register(c, api)
+    local lane = api.proxies.WITCHCRAFT_FILELANE
+    assert(lane, "a fileLane row")
+    equal(lane.varType, "string"); equal(lane.default, "binding"); equal(lane.label, "File lane to the daemon")
+    local control
+    for _, entry in ipairs(api.controls) do if entry.setting == lane then control = entry end end
+    equal(control.kind, "dropdown")
+    local choices = control.options()
+    equal(#choices, 2)
+    equal(choices[1].value, "binding"); equal(choices[1].label, "Key binding (default)")
+    equal(choices[2].value, "log"); equal(choices[2].label, "Client log (works in combat and in the background)")
+    assert(control.tooltip:find("/reload", 1, true), "the tooltip names /reload")
+    local terminal, at, strip
+    for index, row in ipairs(ns.Options.PAGE) do
+        if row.section == "Terminal" then terminal = index end
+        if row.key == "fileLane" then at = index end
+        if row.key == "stripMode" then strip = index end
+    end
+    assert(terminal < at and at < strip, "in the Terminal section, before the strip mode")
+    lane.set("log"); equal(c:Setting("fileLane"), "log", "a change goes through the controller")
+    equal(c.binding.combatSafe, nil, "the carrier is not swapped before /reload")
+    lane.set("pigeon"); equal(c:Setting("fileLane"), "log", "an invalid lane is refused by the controller")
+end)

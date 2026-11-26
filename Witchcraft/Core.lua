@@ -5,7 +5,7 @@ local Core, Persistence = {}, {}
 ns.Core, ns.Persistence = Core, Persistence
 local methods = {}
 methods.__index = methods
-local BUILD = "release-0.5.1"
+local BUILD = "release-0.5.2"
 local Ring, Prompts = ns.Ring, ns.Prompts
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
@@ -387,7 +387,7 @@ function methods:BindingContextActive()
         return false
     end
     if carrier.outstanding then
-        return (self:ContextNow() - (carrier.outstanding.sentAt or 0)) < BINDING_ACK_TIMEOUT
+        return self:AnswerWait(carrier.outstanding.sentAt) < BINDING_ACK_TIMEOUT
     end
     return not carrier.HasKey or carrier:HasKey()
 end
@@ -822,6 +822,21 @@ function methods:InboundPaused()
     return self:Combat() and self.global.settings.combatUpdates ~= true
 end
 
+-- Seconds the host has had to answer something sent or created at `since`. No chunk loads while inbound
+-- is paused, so no answer can come then: the wait is 0, and after the pause it counts from the pause's end.
+-- Only the log carrier sends in combat; the binding carrier keeps its plain timeout.
+function methods:AnswerWait(since)
+    if not (self.binding and self.binding.combatSafe == true) then return self:ContextNow() - (since or 0) end
+    if self:InboundPaused() then return 0 end
+    return self:ContextNow() - math.max(since or 0, self.inboundResumedAt or 0)
+end
+
+-- Inbound stops being paused: answers can come again from now, and the log carrier's next re-log waits for them.
+function methods:InboundResumed()
+    self.inboundResumedAt = self:ContextNow()
+    if self.binding and self.binding.HoldResend then self.binding:HoldResend() end
+end
+
 function methods:Print(message)
     if self.api.Print then self.api.Print(message) end
 end
@@ -1108,11 +1123,13 @@ function methods:SetSetting(key, value)
         end
         if others == 0 then return false, "At least one tab stays visible" end
     end
+    local wasPaused = self:InboundPaused()
     self.global.settings[key] = value
     if tabSetting and value == false and TAB_SETTING[self.global.activeTab] == key then
         self.global.activeTab = self:FirstPresentTab()
     end
     if key == "minimap" and self.api.SetMinimapShown then self.api.SetMinimapShown(value) end
+    if wasPaused and not self:InboundPaused() then self:InboundResumed() end
     if key == "combatUpdates" and value and self.active and self:Combat() then self:Schedule("load", 0.2, self.LoadTick) end
     if key == "stripMode" and self.active then self:SyncStrip(); self:MaybeAutoBindProbe() end
     if key == "autoBindProbe" then
@@ -1800,15 +1817,15 @@ function methods:BindingTick()
         if not queued(self.global.outbox, activeEpoch, tonumber(activeId)) then self.binding:Cancel(active.identity) end
         -- An unanswered input frame marks the carrier, so fallback draws the strip to carry the message too.
         local outstanding = self.binding.outstanding
-        if outstanding and (self:ContextNow() - (outstanding.sentAt or 0)) >= BINDING_ACK_TIMEOUT then
+        if outstanding and self:AnswerWait(outstanding.sentAt) >= BINDING_ACK_TIMEOUT then
             self:BlockBinding()
         end
     elseif active and active.kind == "context" then
         local outstanding = self.binding.outstanding
-        local late = outstanding and (self:ContextNow() - (outstanding.sentAt or 0)) >= BINDING_ACK_TIMEOUT
+        local late = outstanding and self:AnswerWait(outstanding.sentAt) >= BINDING_ACK_TIMEOUT
         -- A long row can be acknowledged frame by frame and still miss its deadline; mode off has no strip to take it.
         local pending = self.contextPending
-        local slow = pending and (self:ContextNow() - pending.createdAt) >= BINDING_CONTEXT_BUDGET
+        local slow = pending and self:AnswerWait(pending.createdAt) >= BINDING_CONTEXT_BUDGET
             and (self.global.settings.stripMode or "always") ~= "off"
         if not active.abandoned and (late or slow) then
             self:BlockContext()
@@ -1833,6 +1850,8 @@ function methods:BindingTick()
     local canTry = not self:CarrierPaused() and (now - (self.binding.lastWriteAt or 0) >= 1)
     -- Pump can quarantine the carrier, which drops its active item; the identity is read before it.
     local attempted = self.binding.active and self.binding.active.identity
+    -- No acknowledgement can come while inbound is paused, so the log carrier does not log its frame again.
+    if self:InboundPaused() and self.binding.HoldResend then self.binding:HoldResend() end
     -- A marked carrier keeps its buffered input and makes no claim attempt before the retry time.
     local pumped = not (hadInput and self.binding.inputBlocked) and self.binding:Pump(self.ring.nextSeq)
     if hadContext and canTry and not pumped and not self.binding.outstanding then
@@ -1907,6 +1926,7 @@ function methods:OnEvent(event)
             self:Schedule("pixel", 0.2, self.PixelTick)
         end
     elseif event == "PLAYER_REGEN_ENABLED" then
+        if self.global.settings.combatUpdates ~= true then self:InboundResumed() end
         if self.resetRequested then self:Reset(); return end
         if self.combatHidden then
             self.combatHidden = nil

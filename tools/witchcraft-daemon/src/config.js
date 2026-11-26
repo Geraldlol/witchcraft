@@ -37,6 +37,7 @@ export async function loadConfig({ repoRoot = REPO_ROOT, account, character, con
   return { ...local, repoRoot, addonsDir, account, accountDir, configPath,
     character: characterDir ? path.basename(characterDir) : undefined, characterDir,
     savedVariables: path.join(accountDir, 'SavedVariables', 'Witchcraft.lua'),
+    logFile: path.resolve(addonsDir, '../../Logs/General.log'),
     ...(local.attach === undefined ? {} : { attach: parseAttachConfig(local.attach) }),
     ringSize: boundedInteger(local.ringSize ?? 3000, 3, 9999, 'ring size') };
 }

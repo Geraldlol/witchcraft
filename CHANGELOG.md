@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 - 2026-11-26
+
+- Add an opt-in log lane for traffic from the game to the daemon. `/witch filelane log`, then `/reload`, sends prompts, context and the ring cursor through the client log (`C_Log.LogMessage`, which the client writes to `Logs/General.log`), and the daemon reads them there. `/witch filelane binding`, then `/reload`, returns to the default. With the log lane linked, prompts no longer need the pixel strip: `/witch strip fallback` hides it while the lane carries them and `/witch strip off` never draws it, prompts go out in combat, and the link holds while the game is not the foreground window. Confirmed in game on Forever `1.60.1.71037` on 2026-11-26.
+- The log lane's cost is log volume. The client buffers its log, so each frame is followed by about 100 KB of padding lines to have it written out at once. Measured on 2026-11-26: about 45 MB an hour while idle and about 5 MB a minute while an agent prints. The client empties `General.log` at each start. A rate limit is planned.
+- Known issue with the log lane: after the client is closed and started again within a few seconds, the daemon may not link until it is restarted. A fix follows in 0.5.1.
+- Add `/witch strip [always|fallback|off]` and the **Top-left pixel strip** setting: `fallback` hides the strip only while a file lane can carry prompts, and `off` never draws it and refuses prompts while no file lane is ready.
+- Add window settings: overall scale from 80% to 140% (`/witch scale 80-140`), fade when unfocused, and the window in combat (keep open, minimize or hide, restored afterwards). `/witch resetpos` and the **RESET POS** button centre the window at 900x650, unlock and undock it and restore 100% scale; **FIT COLS** fits the terminal's columns to the window, and **Auto-fit columns when resizing** does so after each resize.
+- The minimap button can be dragged around the minimap rim. Alerts can go to the raid-warning banner or the chat window, with a choice of sound (raid warning, ready check, whisper or map ping). The terminal update rate is a setting (0.25 to 2 Hz).
+- Binding carrier: it now reads the game clock, probes once per host session and again for a new UI session, ends at once on a host change, and no longer repeats a published probe or breaks its tick when quarantined inside a context write. On Forever `1.60.1.71037` the client writes the bindings file only at `/reload`, so this carrier cannot carry prompts there; use the strip or the log lane.
+- Daemon: the Windows capture helper follows the game client under the process names `Wow`, `WowClassic` and `WowT` as well as `WowB`, so the strip is read on the live client.
+- Daemon: the session journal's newer-marker check no longer fails on a very long marker list.
+
 ## 0.4.0 - 2026-11-23
 
 - Add experimental macOS (`darwin`) support: `capture/capture-strip.py` now includes a Quartz/CoreGraphics window reader (`CGWindowListCopyWindowInfo` / `CGWindowListCreateImage`), `resolveProgram` checks POSIX `~/.local/bin/claude` and macOS Antigravity paths, default `run` on macOS/Linux launches Claude in its PTY instead of invoking Windows console mirroring, and CI runs the portable daemon and capture suite on `macos-latest` and `ubuntu-latest` alongside `windows-latest`.

@@ -144,7 +144,7 @@ function Binding.New(api)
 end
 
 function methods:Now()
-    local ok, value = pcall(self.api.Now or function() return 0 end)
+    local ok, value = pcall(self.api.Now or self.api.GetTime or function() return 0 end)
     return ok and type(value) == "number" and value == value and value or 0
 end
 
@@ -188,13 +188,26 @@ end
 function methods:ClearExact(key, action)
     if self:Combat() then return false, "cleanup waits for combat to end" end
     if self.bindingSet ~= nil and self:CurrentSet() ~= self.bindingSet then return self:Quarantine("binding set changed") end
+    -- A clear that landed live but whose save failed only saves again, while the key is still empty.
+    if self.unsavedClear == key and self:GetAction(key) == "" then
+        self.mutating = true
+        local saved = self:Save()
+        self.mutating = nil
+        if not saved then return self:Quarantine("carrier cleanup failed") end
+        self.unsavedClear, self.lastWriteAt = nil, self:Now()
+        return true
+    end
     if self:GetAction(key) ~= action then return self:Quarantine("reserved key ownership changed") end
     self.mutating = true
     local ok, cleared = pcall(self.api.SetBinding or function() return false end, key, nil)
     local empty = ok and cleared and self:GetAction(key) == ""
     local saved = empty and self:Save()
     self.mutating = nil
-    if not empty or not saved then return self:Quarantine("carrier cleanup failed") end
+    if not empty or not saved then
+        -- The heartbeat keeps its own unsaved record (ClearHeartbeat).
+        if empty and not self.clearingHeartbeat then self.unsavedClear = key end
+        return self:Quarantine("carrier cleanup failed")
+    end
     self.lastWriteAt = self:Now()
     return true
 end
@@ -280,6 +293,8 @@ function methods:Claim(frame)
     if not key then return false, action end
     self.outstanding = { key = key, action = action, seq = frame.seq, probe = self.active.probe == true, sentAt = self:Now() }
     self.status = self.outstanding.probe and "Probe persisted; waiting for host" or "Carrier frame persisted"
+    -- From here the host may read the probe, whether or not its acknowledgement is ever processed.
+    if self.outstanding.probe then self.probed = true end
     return true
 end
 
@@ -288,6 +303,7 @@ end
 -- takes the key or Stop, Cancel or Quarantine clears it.
 function methods:Heartbeat(slot, flags)
     if self.quarantined then return false, self.status end
+    if self.mutating then return false, "carrier write in progress" end
     if not self.enabled or not self.epoch or not self.nonce then return false, "carrier has no host session" end
     if self.outstanding then return false, "waiting for host acknowledgement" end
     if self.active then return false, "carrier has data to send" end
@@ -298,7 +314,8 @@ function methods:Heartbeat(slot, flags)
     if beat and beat.slot == slot and beat.flags == flags then return false, "heartbeat unchanged" end
     local key, action = self:Write({ epoch = self.epoch, nonce = self.nonce, uiNonce = self.uiNonce, slot = slot,
         seq = 0, part = 1, count = 1, payload = "H" .. string.char(flags) })
-    if not key then return false, action end
+    -- A third value tells the controller the write itself failed, unlike the refusals above.
+    if not key then return false, action, true end
     self.heartbeat = { key = key, action = action, slot = slot, flags = flags }
     return true
 end
@@ -346,9 +363,12 @@ end
 function methods:Probe(uiNonce)
     if not hex8(uiNonce) then return false, "Invalid UI probe nonce" end
     if self.outstanding or self.active then return false, "Carrier busy" end
+    -- The host takes one probe per session; a second would restart the sequence it has already consumed.
+    if self.probed then return false, "Binding carrier was already probed in this host session; /reload to probe again" end
     local ok, reason = self:StartupScrub()
     if not ok then return false, reason end
-    self.enabled, self.epoch, self.nonce, self.uiNonce, self.nextSeq, self.contextBlocked = false, nil, nil, uiNonce, 1, nil
+    self.enabled, self.epoch, self.nonce, self.uiNonce, self.nextSeq = false, nil, nil, uiNonce, 1
+    self.contextBlocked, self.inputBlocked = nil, nil
     return self:Begin("probe", PROBE, "probe:" .. uiNonce), reason
 end
 
@@ -369,10 +389,15 @@ function methods:OfferContext(message)
         "context:" .. message.epoch .. ":" .. message.id)
 end
 
--- Drops a buffered input whose message the controller no longer queues. A claimed frame still awaiting
--- the host is released first; in combat that waits for a later tick.
+-- Drops a buffered item whose message the controller no longer queues. A claimed data frame is never
+-- released before its acknowledgement, since the host may already have consumed its sequence: the item
+-- is marked and AcceptHost ends it. A claimed probe is released first; in combat that waits for a later tick.
 function methods:Cancel(identity)
     if not self.active or self.active.identity ~= identity then return false end
+    if self.outstanding and not self.outstanding.probe then
+        self.active.abandoned, self.status = true, "Carrier waiting for host acknowledgement"
+        return false
+    end
     if self.outstanding then
         if self:Combat() then self.status = "Carrier cleanup deferred"; return false end
         if not self:ClearExact(self.outstanding.key, self.outstanding.action) then return false end
@@ -397,35 +422,54 @@ function methods:Pump(slot)
     return claimed, reason
 end
 
+-- Remembers the host session the last result named. A new one forgets the published probe, unless its
+-- frame is still on a key, where the new host can read it.
+function methods:TrackHost(epoch, nonce)
+    local changed = (self.hostEpoch ~= nil and epoch ~= self.hostEpoch)
+        or (nonce ~= nil and self.hostNonce ~= nil and nonce ~= self.hostNonce)
+    self.hostEpoch, self.hostNonce = epoch, nonce or (not changed and self.hostNonce or nil)
+    if changed and not (self.outstanding and self.outstanding.probe) then self.probed = nil end
+end
+
 function methods:AcceptHost(result)
-    if type(result) ~= "table" or result.bindingProtocol ~= 1 or not hex8(result.bindingNonce)
-        or not integer(result.bindingAck, 0, MAX_SEQ) or not hex8(result.epoch) then return false end
+    if type(result) ~= "table" or not hex8(result.epoch) then return false end
+    -- A host that leaves the binding fields out still names its epoch, which is enough to see it change.
+    local speaks = result.bindingProtocol == 1 and hex8(result.bindingNonce) and integer(result.bindingAck, 0, MAX_SEQ)
+    -- A result naming another UI session carries that session's acknowledgement, not this one's.
+    local mine = result.bindingUi == nil or result.bindingUi == self.uiNonce
+    self:TrackHost(result.epoch, speaks and result.bindingNonce or nil)
+    local other = result.epoch ~= self.epoch or (speaks and (result.bindingNonce ~= self.nonce or not mine))
     local outstanding = self.outstanding
     if not outstanding then
-        if self.enabled and (result.epoch ~= self.epoch or result.bindingNonce ~= self.nonce) then
+        if self.enabled and other then
             self.enabled, self.active, self.status = false, nil, "Host changed; run /witch bindprobe"
         end
         return false
     end
-    if not outstanding.probe and (result.epoch ~= self.epoch or result.bindingNonce ~= self.nonce) then
-        local cleaned = self:ClearExact(outstanding.key, outstanding.action)
-        if cleaned then
-            self.outstanding, self.active, self.enabled = nil, nil, false
-            self.status = "Host changed; run /witch bindprobe"
-        end
+    if not outstanding.probe and other then
+        -- The old host's carrier ends at once; clearing its frame can wait for combat to end.
+        self.enabled, self.status = false, "Host changed; run /witch bindprobe"
+        if self:ClearExact(outstanding.key, outstanding.action) then self.outstanding, self.active = nil, nil end
         return false
     end
+    if not speaks then return false end
+    -- Only a probe gets here with another UI session named: the host has not taken it yet, so it waits on its key.
+    if not mine then return false end
     if result.bindingAck < outstanding.seq then return false end
     if result.bindingAck > outstanding.seq then return self:Quarantine("carrier acknowledgement jumped") end
     local cleaned = self:ClearExact(outstanding.key, outstanding.action)
     if not cleaned then return false end
-    self.outstanding, self.contextBlocked = nil, nil
+    self.outstanding, self.contextBlocked, self.inputBlocked = nil, nil, nil
+    -- A carrier quarantined while this frame was outstanding only finishes its cleanup.
+    if self.quarantined or not self.active then return false end
     if outstanding.probe then
         self.epoch, self.nonce, self.enabled = result.epoch, result.bindingNonce, true
         self.nextSeq, self.active, self.status = result.bindingAck + 1, nil, "Carrier ready"
         return true, "probe"
     end
     self.nextSeq = outstanding.seq + 1
+    -- A cancelled item ends with the frame the host acknowledged; no further part is sent.
+    if self.active.abandoned then self.active, self.status = nil, "Carrier ready"; return true, "frame" end
     self.active.part = self.active.part + 1
     if self.active.part > #self.active.chunks then self.active, self.status = nil, "Carrier ready" end
     return true, "frame"
@@ -462,3 +506,5 @@ function methods:Snapshot()
 end
 
 Binding.Keys, Binding.ActionFor, Binding.ParseAction = KEYS, actionFor, parseAction
+Binding.Crc32, Binding.Base32, Binding.Integer, Binding.Hex8, Binding.U24 = crc32, base32, integer, hex8, u24
+Binding.TabCodes, Binding.ActionCodes, Binding.ZERO, Binding.PROBE, Binding.MAX_SEQ = tabCodes, actionCodes, ZERO, PROBE, MAX_SEQ

@@ -11,11 +11,18 @@ local PAGE = {
     { section = "Window" },
     { key = "layer", label = "Window layer", kind = "choice", tooltip = "Where Witchcraft draws among other windows.",
       choices = { { "top", "Above everything" }, { "normal", "Normal" }, { "back", "Behind other windows" } } },
+    { key = "windowScale", label = "Window scale (%)", kind = "slider", min = 80, max = 140, step = 5,
+      tooltip = "Scale the entire Witchcraft window from 80% to 140% without changing the top-left calibration strip." },
+    { key = "idleFade", label = "Fade when unfocused",
+      tooltip = "Dim the window while your mouse is outside and no text box or panel is open." },
+    { key = "combatWindow", label = "Window in combat", kind = "choice",
+      tooltip = "Keep the window as it is, collapse it to its title bar, or hide it automatically during combat and restore it after.",
+      choices = { { "keep", "Keep open" }, { "minimize", "Minimize in combat" }, { "hide", "Hide in combat" } } },
     { key = "locked", label = "Lock position", tooltip = "No dragging or resizing." },
     { key = "docked", label = "Dock at top of screen", tooltip = "Keep the window at the top centre of the screen; it stays locked while docked." },
     { key = "escapeCloses", label = "Escape closes Witchcraft", tooltip = "Off by default: any Escape in the game world would otherwise close the window." },
     { key = "openOnLoad", label = "Open on login and reload", tooltip = "Show the window when the interface loads." },
-    { key = "minimap", label = "Minimap button", tooltip = "Show the book button at the edge of the minimap." },
+    { key = "minimap", label = "Minimap button", tooltip = "Show the book button at the edge of the minimap; drag it around the rim to reposition." },
     { section = "Tabs" },
     { key = "tabClaude", label = "Claude tab", tooltip = "Show the Claude tab. A hidden tab is skipped when cycling; at least one tab stays visible." },
     { key = "tabCodex", label = "Codex tab", tooltip = "Show the Codex tab. A hidden tab is skipped when cycling; at least one tab stays visible." },
@@ -26,14 +33,30 @@ local PAGE = {
       tooltip = "Show the AGY (Antigravity CLI) tab. Off until the daemon starts AGY, which switches it on;"
           .. " a hidden tab is skipped when cycling and at least one tab stays visible." },
     { section = "Alerts" },
-    { key = "alertText", label = "Raid warning text", tooltip = "Say which agent needs you or finished, while you look elsewhere." },
-    { key = "alertSound", label = "Alert sound", tooltip = "Play the raid warning sound with an alert." },
+    { key = "alertText", label = "Alert message", tooltip = "Say which agent needs you or finished, while you look elsewhere." },
+    { key = "alertChannel", label = "Alert message style", kind = "choice",
+      tooltip = "Where alert messages appear when an agent needs you or finishes.",
+      choices = { { "raid", "Raid warning banner" }, { "chat", "Chat window" } } },
+    { key = "alertSound", label = "Alert sound", tooltip = "Play a sound with an alert." },
+    { key = "alertSoundStyle", label = "Alert sound effect", kind = "choice",
+      tooltip = "Which client sound plays when an alert fires.",
+      choices = { { "raid", "Raid warning" }, { "ready", "Ready check" }, { "tell", "Whisper" }, { "ping", "Map ping" } } },
     { key = "alertFinished", label = "Alert when an agent finishes", tooltip = "Off: alert only when an agent needs you." },
     { section = "Terminal" },
     { key = "combatUpdates", label = "Keep updating in combat",
       tooltip = "Keep loading terminal updates during combat. Loading can cause brief frame hitches in a fight. Prompts you send always go out." },
     { key = "autoBindProbe", label = "Probe binding carrier on connect",
       tooltip = "Automatically run /witch bindprobe outside combat once per host session." },
+    { key = "stripMode", label = "Top-left pixel strip", kind = "choice",
+      tooltip = "When to draw the 132x12 optical strip in the top-left corner. Fallback hides it only while the key-binding"
+          .. " file link can carry prompts. Off never draws it and refuses prompts while that link is not ready."
+          .. " Calibration always shows it.",
+      choices = { { "always", "Always visible" }, { "fallback", "Fallback (hide while the file link carries prompts)" },
+          { "off", "Off (refuse prompts while the file link is not ready)" } } },
+    { key = "hz", label = "Terminal update rate (Hz)", kind = "slider", min = 0.25, max = 2, step = 0.25,
+      tooltip = "How many times per second Witchcraft checks for new terminal output while active. Lower rates save chunk slots." },
+    { key = "autoFitCols", label = "Auto-fit columns when resizing",
+      tooltip = "Automatically resize the desktop terminal's column width to match the window when you finish dragging the resize corner." },
     { key = "showChoices", label = "Choice buttons", tooltip = "Numbered buttons that answer permission prompts and pickers." },
     { key = "showStatus", label = "Model and context in the footer", tooltip = "Show the model and how much context the conversation uses." },
     { key = "historySize", label = "Prompt history", kind = "choice", tooltip = "How many sent prompts Up and Down recall per tab.",
@@ -52,6 +75,8 @@ local function accessors(controller, key)
         return function() return controller.global.fontSize end, function(value) controller:SetFontSize(value) end
     elseif key == "opacity" then
         return function() return controller.global.opacity end, function(value) controller:SetOpacity(value) end
+    elseif key == "hz" then
+        return function() return controller.global.hz end, function(value) controller:SetHz(value) end
     elseif key == "contextEnabled" then
         return function() return controller.global.contextEnabled == true end, function(value) controller:SetContextEnabled(value) end
     end
@@ -71,8 +96,8 @@ function Options.Register(controller, api)
             if layout and layout.AddInitializer and header then layout:AddInitializer(header(row.section)) end
         else
             local get, set = accessors(controller, row.key)
-            local default = row.key == "fontSize" and 10 or row.key == "opacity" and 80 or row.key == "contextEnabled" and true
-                or ns.Settings[row.key].default
+            local default = row.key == "fontSize" and 10 or row.key == "opacity" and 80 or row.key == "hz" and 1
+                or row.key == "contextEnabled" and true or ns.Settings[row.key].default
             local varType = type(default) == "number" and types.Number or type(default) == "string" and types.String or types.Boolean
             local setting = settings.RegisterProxySetting(category, "WITCHCRAFT_" .. row.key:upper(), varType, row.label, default, get, set)
             if row.kind == "slider" then

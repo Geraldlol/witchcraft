@@ -2,9 +2,9 @@
 ## Title: WITCHCRAFT
 ## Notes: Warcraft's In-game Terminal for Claude's Hunches & Codex's Reckless Attempts at Fixing Things. /witch
 ## Author: Geraldlol
-## Version: 0.4.0
+## Version: 0.5.0
 ## SavedVariables: WitchcraftDB
-## X-Witchcraft-Build: release-0.4.0
+## X-Witchcraft-Build: release-0.5.0
 
 embeds.xml
 Evidence.lua
@@ -13,6 +13,7 @@ Pixel.lua
 Prompts.lua
 Ring.lua
 Binding.lua
+LogCarrier.lua
 CooldownCarrier.lua
 Context.lua
 View.lua

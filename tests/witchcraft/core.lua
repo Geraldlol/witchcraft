@@ -35,6 +35,8 @@ local function fixture(global, apiOverrides)
                     state.draft = prompt; state.draftTab = state.snapshot.activeTab; return true
                 end,
                 TogglePanel = function(view, panel) view.openPanel = panel; state.panel = panel end,
+                SetMinimized = function(_, minimized) state.minimized = minimized end,
+                ResetLayout = function() state.resetLayouts = (state.resetLayouts or 0) + 1; state.minimized = false end,
                 RenderStrip = function(_, top, heartbeat) state.top, state.heartbeat = top, heartbeat end,
                 RenderBurst = function(_, rows)
                     state.burst = rows
@@ -1264,8 +1266,8 @@ test("the pixel strip stands aside for context while the binding carrier is acti
     c:BindingTick()
     equal(c.binding.contextBlocked, true, "ACK timeout blocks the binding context lane until the host answers")
     assert(s.top ~= nil, "PixelTick immediately transmits context after binding ACK timeout")
-    -- Resetting contextBlocked and occupying all keys also lets the strip take over.
-    c.binding.contextBlocked = nil
+    -- For a row the strip has not taken (mark and row flag reset), occupying all keys also lets the strip take over.
+    c.binding.contextBlocked, c.contextPending.viaStrip = nil, nil
     hasKey = false
     s.top = nil
     c:PixelTick()
@@ -1355,4 +1357,954 @@ test("/witch cols and /witch context clear-journal route as control actions to a
     assert(c:Resend())
     equal(#c.global.outbox, 1)
     equal(c.global.outbox[1].text, "keep this prompt")
+end)
+
+test("combatWindow hides or minimizes during combat and restores cleanly afterward without overriding manual changes", function()
+    local c, s = fixture({ settings = { combatWindow = "hide" } })
+    s:Accept()
+    equal(c.visible, true)
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c.visible, false); equal(s.shown, false)
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    equal(c.visible, true); equal(s.shown, true, "auto-hidden window reopens after combat")
+    -- If the window was already closed before combat, leaving combat leaves it closed.
+    c:Hide()
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    equal(c.visible, false, "already-closed window stays closed after combat")
+    -- Minimize mode collapses only an expanded visible window and restores it after combat.
+    c:SetVisible(true)
+    assert(c:SetSetting("combatWindow", "minimize"))
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c.global.view.minimized, true); equal(s.minimized, true)
+    -- Unread output arrives while collapsed in combat.
+    c:SetSetting("combatUpdates", true)
+    s:Accept({ sessions = screens({ "combat reply" }, { "three" }) })
+    equal(c:Snapshot().unread.claude, true, "collapsed combat bar tracks unread output")
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    equal(c.global.view.minimized, false); equal(s.minimized, false)
+    equal(c:Snapshot().unread.claude, false, "restoring expanded view marks active tab read")
+end)
+
+-- A binding carrier double: healthy and enabled unless told otherwise.
+local function carrierMock(fields)
+    local carrier = { enabled = true, quarantined = false, lastWriteAt = 0, beats = 0,
+        HasKey = function(self) return self.hasKey ~= false end,
+        Busy = function(self) return self.active ~= nil or self.outstanding ~= nil end,
+        AcceptHost = function() return false end,
+        Pump = function() return false end,
+        OfferInput = function(self, message)
+            self.active = { kind = "input", identity = "input:" .. message.epoch .. ":" .. message.id }
+            return true
+        end,
+        OfferContext = function() return false end,
+        Snapshot = function(self) return { status = "fake", enabled = self.enabled == true } end,
+        Stop = function() return true end,
+        Cancel = function(self) self.active, self.outstanding = nil, nil; return true end,
+        Heartbeat = function(self) self.beats = self.beats + 1; return true end,
+        OnBindingsChanged = function() return true end }
+    for key, value in pairs(fields or {}) do carrier[key] = value end
+    return carrier
+end
+
+local STRIP_OFF = "Pixel strip is off and the file link is not ready; /witch strip fallback"
+
+test("stripMode fallback hides the strip only while the binding carrier carries everything, and off never draws it", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock()
+    -- Before connecting, fallback still shows the strip so bootstrap can proceed.
+    c:PixelTick()
+    assert(s.heartbeat ~= nil, "strip stays visible before host connection")
+    -- Connected, with a binding carrier that can carry input, context and the heartbeat: the strip hides.
+    s:Accept({ cursorLane = "strip" })
+    equal(c:StripActive(), false)
+    equal(s.top, nil); equal(s.heartbeat, nil)
+    assert(c.binding.beats >= 1, "binding carrier advertises the ring slot when the strip is hidden")
+    -- The binding carrier writes nothing in combat, so fallback brings the strip back.
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    c:PixelTick()
+    assert(s.heartbeat ~= nil, "fallback strip reappears during combat")
+    s.combat = false; c:OnEvent("PLAYER_REGEN_ENABLED")
+    equal(s.heartbeat, nil, "fallback strip hides again when combat ends")
+    -- A disabled carrier brings the strip back in fallback.
+    c.binding.enabled = false
+    equal(c:StripActive(), true, "fallback never hides the strip without a carrier")
+    -- Off never draws the strip outside calibration, and says so while nothing else can deliver.
+    c:HandleSlash("strip off")
+    equal(c:Setting("stripMode"), "off")
+    c:PixelTick()
+    equal(s.heartbeat, nil)
+    equal(c:Snapshot().status, STRIP_OFF)
+    c:HandleSlash("calibrate")
+    c:PixelTick()
+    assert(s.top ~= nil and s.heartbeat ~= nil, "calibration always overrides stripMode off")
+    c:HandleSlash("calibrate off")
+    c:PixelTick()
+    equal(s.top, nil); equal(s.heartbeat, nil)
+end)
+
+test("fallback draws queued input while only the cooldown carrier is active", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock({ enabled = false })
+    s:Accept()
+    c.CooldownActive = function() return true end
+    equal(c:StripActive(), true, "the cooldown carrier never carries input, so it never hides the strip")
+    assert(c:Send("codex", "hello"))
+    s.top = nil; c:PixelTick()
+    assert(s.top ~= nil, "the queued prompt is drawn on the strip")
+end)
+
+test("fallback shows the strip whenever the binding carrier cannot carry input", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock()
+    s:Accept()
+    equal(c:StripActive(), false, "a carrier that can carry everything hides the strip")
+    c.binding.hasKey = false
+    equal(c:StripActive(), true, "every reserved key occupied")
+    c.binding.hasKey = nil; c.binding.inputBlocked = true
+    equal(c:StripActive(), true, "an input frame refused or unanswered")
+    c.binding.inputBlocked = nil; c.binding.contextBlocked = true
+    equal(c:StripActive(), true, "a context frame refused or unanswered")
+    c.binding.contextBlocked = nil; c.binding.quarantined = true
+    equal(c:StripActive(), true, "a quarantined carrier")
+end)
+
+test("BindingTick marks the carrier on an unanswered or refused input claim and keeps the input", function()
+    local clock = { now = 10 }
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, { GetTime = function() return clock.now end })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        Pump = function(self)
+            if self.active and not self.outstanding then self.outstanding = { seq = 1, sentAt = clock.now }; return true end
+            return false
+        end })
+    s:Accept()
+    assert(c:Send("codex", "hello"))
+    c:BindingTick()
+    local identity = c.binding.active.identity
+    equal(c.binding.inputBlocked, nil, "a fresh claim is not marked")
+    equal(c.timers.pixel, nil, "the strip stays hidden while the carrier carries the prompt")
+    clock.now = 15
+    c:BindingTick()
+    equal(c.binding.inputBlocked, true, "an input acknowledgement older than the timeout marks the carrier")
+    equal(c.binding.active.identity, identity, "the input stays with the carrier")
+    equal(#c.global.outbox, 1)
+    equal(c:StripActive(), true)
+    assert(c.timers.pixel ~= nil, "the strip is scheduled to carry the prompt as well")
+    -- A refused claim: the carrier keeps the input and is marked.
+    c.binding.inputBlocked, c.binding.outstanding = nil, nil
+    c.binding.Pump = function() return false, "SetBinding rejected the carrier frame" end
+    c:BindingTick()
+    equal(c.binding.inputBlocked, true, "a refused input claim marks the carrier")
+    equal(c.binding.active.identity, identity)
+end)
+
+test("stripMode off refuses prompts and says so while the binding carrier cannot deliver them", function()
+    local c, s = fixture({ settings = { stripMode = "off" } })
+    c.binding = carrierMock({ enabled = false })
+    equal(c:Snapshot().status, STRIP_OFF, "a cold start in off says why nothing will send")
+    local ok, reason = c:Send("codex", "hello")
+    equal(ok, false); equal(reason, STRIP_OFF, "a cold start in off names the remedy; waiting for the host would not help")
+    ok, reason = c:Send("codex", "line one\nline two")
+    equal(ok, false); equal(reason, STRIP_OFF, "a multi-line draft gets the same sentence")
+    s:Accept()
+    local nextId = c.global.nextId
+    ok, reason = c:Send("codex", "hello")
+    equal(ok, false); equal(reason, STRIP_OFF)
+    equal(#c.global.outbox, 0); equal(c.global.nextId, nextId)
+    equal(c:Snapshot().status, STRIP_OFF)
+    c.binding.enabled = true
+    assert(c:Send("codex", "hello"), "a ready carrier takes the prompt")
+    equal(#c.global.outbox, 1)
+    assert(c:Snapshot().status ~= STRIP_OFF)
+    -- A prompt already queued when the carrier stops is reported too.
+    c.binding.quarantined = true
+    equal(c:Snapshot().status, STRIP_OFF)
+end)
+
+test("fallback restarts the strip tick when the binding carrier stops carrying", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock({ OnBindingsChanged = function(self) self.quarantined = true; return false end })
+    s:Accept()
+    equal(c.timers.pixel, nil, "the strip is hidden behind a carrier that carries everything")
+    c:OnEvent("UPDATE_BINDINGS")
+    equal(c:StripActive(), true)
+    assert(c.timers.pixel ~= nil, "a quarantine through UPDATE_BINDINGS restarts the strip")
+    -- A host change seen in BindingTick.
+    c.binding.quarantined = false; c:SyncStrip()
+    equal(c.timers.pixel, nil)
+    c.binding.enabled = false
+    c:BindingTick()
+    assert(c.timers.pixel ~= nil, "a carrier disabled by a host change restarts the strip in BindingTick")
+    -- And one seen in LoadTick, through an accepted host result.
+    c.binding.enabled = true; c:SyncStrip()
+    equal(c.timers.pixel, nil)
+    c.binding.AcceptHost = function(self) self.enabled = false; return false end
+    s:Accept()
+    assert(c.timers.pixel ~= nil, "a host change in an accepted result restarts the strip")
+end)
+
+test("in mode always the strip helper schedules and cancels nothing", function()
+    local c, s = fixture()
+    c.binding = carrierMock({ OnBindingsChanged = function(self) self.quarantined = true; return false end })
+    s:Accept()
+    local pixel, created, cancelled = c.timers.pixel, #s.timers, 0
+    s.onCancel = function() cancelled = cancelled + 1 end
+    c:SyncStrip()
+    c:OnEvent("UPDATE_BINDINGS")
+    c.binding.quarantined, c.binding.enabled = false, false
+    c:SyncStrip()
+    equal(c.timers.pixel, pixel); equal(#s.timers, created); equal(cancelled, 0)
+    equal(c.stripHidden, nil)
+end)
+
+test("a combat minimize never reaches the saved layout through logout, reload or stop", function()
+    local c, s = fixture({ settings = { combatWindow = "minimize" } })
+    s:Accept()
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c.global.view.minimized, true); equal(s.minimized, true)
+    c:OnEvent("PLAYER_LOGOUT")
+    equal(c.global.view.minimized, false, "logout and /reload save the layout the player chose")
+    local c2, s2 = fixture({ settings = { combatWindow = "minimize" } })
+    s2:Accept()
+    s2.combat = true; c2:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(c2.global.view.minimized, true)
+    c2:Stop()
+    equal(c2.global.view.minimized, false, "stop restores it too")
+    -- A window the player minimized before combat stays minimized.
+    local c3, s3 = fixture({ settings = { combatWindow = "minimize" } })
+    s3:Accept()
+    assert(c3:SaveView({ point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 900, height = 650, minimized = true }))
+    s3.combat = true; c3:OnEvent("PLAYER_REGEN_DISABLED")
+    c3:OnEvent("PLAYER_LOGOUT")
+    equal(c3.global.view.minimized, true, "a hand minimize survives logout")
+    c3:Stop()
+    equal(c3.global.view.minimized, true, "a hand minimize survives stop")
+end)
+
+test("windowScale checks the range before rounding, through SetSetting and /witch scale", function()
+    local c, s = fixture()
+    for _, value in ipairs({ 79.5, 140.49, 79, 141 }) do
+        local ok, reason = c:SetSetting("windowScale", value)
+        equal(ok, false, "refused " .. value); equal(reason, "Window scale must be 80 to 140 percent")
+        equal(c:Setting("windowScale"), 100)
+    end
+    for _, case in ipairs({ { 80, 80 }, { 100.4, 100 }, { 140, 140 } }) do
+        assert(c:SetSetting("windowScale", case[1])); equal(c:Setting("windowScale"), case[2])
+    end
+    assert(c:SetSetting("windowScale", 100))
+    for _, value in ipairs({ "79.5", "140.49", "79", "141" }) do
+        c:HandleSlash("scale " .. value)
+        equal(c:Setting("windowScale"), 100, "/witch scale " .. value)
+        equal(s.printed[#s.printed], "Window scale must be 80 to 140 percent")
+    end
+    for _, case in ipairs({ { "80", 80 }, { "100.4", 100 }, { "140", 140 } }) do
+        c:HandleSlash("scale " .. case[1]); equal(c:Setting("windowScale"), case[2], "/witch scale " .. case[1])
+    end
+end)
+
+test("alertChannel chat, alertSoundStyle, SetHz, scale and resetpos route through the controller", function()
+    local c, s = fixture({ settings = { alertChannel = "chat", alertSoundStyle = "ping" } })
+    local alerts = {}
+    c.view.Alert = function(_, id, kind, want) alerts[#alerts + 1] = { id = id, kind = kind, want = want } end
+    local sessions = screens({ "one" }, { "two" })
+    sessions[2].state = "working"; s:Accept({ sessions = sessions })
+    sessions[2].state = "idle"; s:Accept({ sessions = sessions })
+    equal(s.printed[#s.printed], "Codex finished", "chat channel prints alert text to chat")
+    equal(#alerts, 1); equal(alerts[1].want.text, false, "chat channel suppresses center-screen raid text")
+    equal(alerts[1].want.sound, true); equal(alerts[1].want.soundStyle, "ping")
+
+    c:HandleSlash("hz 0.5")
+    equal(c.global.hz, 0.5); equal(c.ring.baseDelay, 2)
+    c:HandleSlash("scale 120")
+    equal(c:Setting("windowScale"), 120)
+    c:HandleSlash("scale 300")
+    equal(c:Setting("windowScale"), 120)
+    assert(s.printed[#s.printed]:find("80 to 140", 1, true))
+
+    assert(c:SetSetting("docked", true))
+    assert(c:SetSetting("locked", true))
+    c:SaveView({ point = "TOPLEFT", relativePoint = "TOPLEFT", x = 300, y = -200, width = 500, height = 400, minimized = true })
+    c:Hide()
+    c:HandleSlash("resetpos")
+    equal(c.visible, true)
+    equal(c:Setting("docked"), false); equal(c:Setting("locked"), false); equal(c:Setting("windowScale"), 100)
+    equal(c.global.view.point, "CENTER"); equal(c.global.view.width, 900); equal(c.global.view.height, 650)
+    equal(c.global.view.minimized, false); equal(s.resetLayouts, 1)
+    assert(c:SetMinimapAngle(-45)); equal(c.global.minimapAngle, 315)
+end)
+
+test("UPDATE_BINDINGS inside a carrier write leaves the strip, its timer and the heartbeat alone", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    local changed = 0
+    c.binding = carrierMock({ hasKey = false, OnBindingsChanged = function() changed = changed + 1; return true end })
+    s:Accept()
+    local pixel = c.timers.pixel
+    assert(pixel ~= nil, "the strip draws while every reserved key is occupied")
+    -- The write in progress frees a key: outside a write this event would hide the strip and offer a heartbeat.
+    c.binding.hasKey, c.binding.mutating = nil, true
+    local beats, created, cancelled = c.binding.beats, #s.timers, 0
+    s.onCancel = function() cancelled = cancelled + 1 end
+    c:OnEvent("UPDATE_BINDINGS")
+    equal(c.binding.beats, beats, "no heartbeat inside the write")
+    equal(c.timers.pixel, pixel); equal(#s.timers, created); equal(cancelled, 0)
+    equal(changed, 0, "the carrier's own write is not checked from inside it")
+    c.binding.mutating = nil
+    c:OnEvent("UPDATE_BINDINGS")
+    equal(changed, 1); equal(c.timers.pixel, nil); equal(c.binding.beats, beats + 1)
+end)
+
+test("an input mark expires after its window, doubles on the next failure, resets on an acknowledgement and is capped", function()
+    local clock = { now = 100 }
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, { GetTime = function() return clock.now end })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        Pump = function() return false, "SetBinding rejected the carrier frame" end })
+    s:Accept()
+    equal(c:StripActive(), false)
+    assert(c:Send("codex", "hello"))
+    c:BindingTick()
+    equal(c.binding.inputBlocked, true, "a refused input claim marks the carrier")
+    equal(c.bindingRetryAt, 130, "for 30 seconds")
+    clock.now = 110; c:BindingTick()
+    equal(c.bindingRetryAt, 130, "a claim refused again inside the window does not extend it")
+    -- The strip delivers the message first; the input is cancelled and nothing else would clear the mark.
+    s:Accept({ ack = c.global.outbox[1].id })
+    equal(#c.global.outbox, 0)
+    clock.now = 129; c:BindingTick()
+    equal(c.binding.active, nil, "the delivered input is cancelled")
+    equal(c.binding.inputBlocked, true); equal(c.bindingRetryAt, 130); equal(c:StripActive(), true)
+    clock.now = 130; c:BindingTick()
+    equal(c.binding.inputBlocked, nil, "the mark expires")
+    equal(c:StripActive(), false, "fallback hides the strip again")
+    assert(c:SetSetting("stripMode", "off"))
+    assert(c:Send("codex", "again"), "off takes prompts again")
+    clock.now = 200; c:BindingTick()
+    equal(c.binding.inputBlocked, true); equal(c.bindingRetryAt, 260, "a second failure blocks for 60 seconds")
+    c.binding.AcceptHost = function(self) self.inputBlocked = nil; return true, "frame" end
+    s:Accept({ ack = c.global.ack })
+    equal(c.bindingRetryDelay, 30, "an accepted acknowledgement resets the window")
+    for _ = 1, 8 do c.binding.inputBlocked = nil; c:BlockBinding() end
+    equal(c.bindingRetryDelay, 480); equal(c.bindingRetryAt - clock.now, 480, "the window never exceeds 480 seconds")
+end)
+
+test("a refused input claim is not tried again before its retry time, and the input stays buffered", function()
+    local clock, pumps = { now = 100 }, 0
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, { GetTime = function() return clock.now end })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        Pump = function() pumps = pumps + 1; return false, "SetBinding rejected the carrier frame" end })
+    s:Accept()
+    assert(c:Send("codex", "hello"))
+    c:BindingTick()
+    equal(pumps, 1); equal(c.bindingRetryAt, 130)
+    for now = 101, 129 do clock.now = now; c:BindingTick() end
+    equal(pumps, 1, "no claim attempt inside the retry window")
+    assert(c.binding.active and c.binding.active.kind == "input", "the input stays buffered")
+    equal(c:StripActive(), true, "the strip carries it meanwhile")
+    clock.now = 130; c:BindingTick()
+    equal(pumps, 2, "one attempt once the window has passed"); equal(c.bindingRetryAt, 190)
+end)
+
+test("a carrier quarantined between ticks brings the fallback strip back on the next binding tick", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock({ Heartbeat = function() return false, "heartbeat unchanged" end })
+    s:Accept()
+    equal(c:StripActive(), false); equal(c.timers.pixel, nil)
+    c.binding.enabled, c.binding.quarantined = false, "carrier cleanup failed"
+    c:BindingTick()
+    equal(c:StripActive(), true)
+    assert(c.timers.pixel ~= nil, "the pixel tick is scheduled by the binding tick")
+end)
+
+test("a heartbeat write that fails marks the carrier and brings the fallback strip straight back", function()
+    local c, s = fixture({ settings = { stripMode = "fallback" } })
+    c.binding = carrierMock({ Heartbeat = function() return false, "x", true end })
+    s:Accept()
+    equal(c.binding.inputBlocked, true)
+    equal(c:StripActive(), true)
+    assert(c.timers.pixel ~= nil, "the strip is scheduled again at once")
+    local c2, s2 = fixture({ settings = { stripMode = "fallback" } })
+    c2.binding = carrierMock({ Heartbeat = function() return false, "heartbeat unchanged" end })
+    s2:Accept()
+    equal(c2.binding.inputBlocked, nil); equal(c2:StripActive(), false, "a benign refusal keeps the strip hidden")
+    equal(c2.timers.pixel, nil)
+end)
+
+test("in mode always a placeholder, a stalled load and combat exit leave the pixel timer as it was", function()
+    for _, hidden in ipairs({ false, true }) do
+        for _, case in ipairs({ "placeholder", "stall", "regen" }) do
+            local c, s = fixture()
+            c.binding = carrierMock()
+            s:Accept()
+            if hidden then
+                c:Hide()
+                -- A probe in flight keeps the controller streaming with the window hidden.
+                c.binding.active = { kind = "probe", identity = "probe:abcdef01" }
+            end
+            local pixel = c.timers.pixel
+            equal(pixel ~= nil, not hidden)
+            if case == "placeholder" then s:Accept({ ready = false, changed = nil })
+            elseif case == "stall" then c:LoadTick(); equal(c.stalled, true)
+            else c:OnEvent("PLAYER_REGEN_ENABLED") end
+            equal(c.timers.pixel, pixel, case .. (hidden and " with the window hidden" or ""))
+        end
+    end
+end)
+
+test("a real binding carrier on the production adapter's GetTime writes a heartbeat after its probe", function()
+    local clock, actions = { now = 100 }, {}
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, {
+        GetTime = function() return clock.now end,
+        GetBindingAction = function(key) return actions[key] or "" end,
+        SetBinding = function(key, action) actions[key] = action; return true end,
+        SaveBindings = function() return true end,
+        GetCurrentBindingSet = function() return 1 end })
+    equal(c.binding.api.Now, nil, "the carrier gets the adapter, which has GetTime and no Now")
+    s:Accept()
+    c:HandleSlash("bindprobe")
+    c.timers.binding.handle:Fire()
+    assert(c.binding.outstanding and c.binding.outstanding.probe, "the probe frame is written")
+    s:Accept({ bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 1 })
+    equal(c.binding.enabled, true, "the probe is acknowledged")
+    equal(c:StripActive(), false)
+    clock.now = 102
+    local written, reason = c:OfferBindingHeartbeat()
+    equal(written, true, tostring(reason))
+    equal(ns.Binding.ParseAction(actions[ns.Binding.Keys[1]]).seq, 0, "the key holds a heartbeat frame")
+end)
+
+test("a context write that quarantines the carrier ends the tick cleanly and the fallback strip takes over", function()
+    local clock, actions = { now = 100 }, {}
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, {
+        GetTime = function() return clock.now end,
+        GetBindingAction = function(key) return actions[key] or "" end,
+        SetBinding = function(key, action) actions[key] = action; return true end,
+        SaveBindings = function() return true end,
+        GetCurrentBindingSet = function() return 1 end,
+        Context = { Capture = function() return { { true } } end } })
+    s:Accept()
+    c:HandleSlash("bindprobe")
+    c.timers.binding.handle:Fire()
+    s:Accept({ bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 1,
+        contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    clock.now = 102
+    equal(c:OfferBindingHeartbeat(), true)
+    local key = ns.Binding.Keys[1]
+    -- The user rebinds the key that holds the heartbeat, then context is due before the next host chunk.
+    actions[key] = "JUMP"
+    clock.now = 104
+    c:ContextTick()
+    assert(c.contextPending, "a context message is waiting for a carrier")
+    c:BindingTick()
+    assert(c.binding.quarantined, "the changed key quarantines the carrier")
+    equal(c.binding.active, nil)
+    equal(actions[key], "JUMP", "the user's binding is left alone")
+    equal(c:StripActive(), true, "fallback draws the strip once the carrier is quarantined")
+    assert(c.timers.pixel, "the pixel tick is running again")
+end)
+
+test("fallback restarts the pixel tick when demand returns while the strip shows; always leaves it alone", function()
+    for _, mode in ipairs({ "fallback", "always" }) do
+        -- The fixture has no context source, which stands in for context disabled and acknowledged.
+        local c, s = fixture({ settings = { stripMode = mode } })
+        c.binding = carrierMock({ Probe = function(self)
+            self.enabled, self.active = false, { kind = "probe", identity = "probe:abcdef01" }
+            return true
+        end })
+        s:Accept()
+        c:Hide()
+        if c.timers.pixel then c.timers.pixel.handle:Fire() end
+        equal(c.timers.pixel, nil, mode .. ": the tick stops while nothing is wanted")
+        c.binding.hasKey = false
+        c:BindingTick()
+        equal(c:WantStream(), false); equal(c:StripActive(), true)
+        equal(c.stripHidden, nil, mode); equal(c.timers.pixel, nil, mode)
+        c:HandleSlash("bindprobe")
+        equal(c:WantStream(), true); equal(c:StripActive(), true)
+        c.timers.binding.handle:Fire()
+        if mode == "fallback" then
+            assert(c.timers.pixel ~= nil, "BindingTick restarts the strip once the probe wants it")
+            c:CancelTimer("pixel")
+            c.timers.load.handle:Fire()
+            assert(c.timers.pixel ~= nil, "LoadTick restarts it too")
+        else
+            equal(c.timers.pixel, nil, "always: BindingTick schedules nothing")
+            c.timers.load.handle:Fire()
+            equal(c.timers.pixel, nil, "always: LoadTick schedules nothing")
+        end
+    end
+end)
+
+test("an input the strip delivered while its claim was outstanding keeps the claim until its acknowledgement", function()
+    local clock, actions = { now = 100 }, {}
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, {
+        GetTime = function() return clock.now end,
+        GetBindingAction = function(key) return actions[key] or "" end,
+        SetBinding = function(key, action) actions[key] = action; return true end,
+        SaveBindings = function() return true end,
+        GetCurrentBindingSet = function() return 1 end })
+    s:Accept()
+    c:HandleSlash("bindprobe")
+    c.timers.binding.handle:Fire()
+    s:Accept({ bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 1 })
+    equal(c.binding.enabled, true); equal(c:StripActive(), false)
+    assert(c:Send("codex", "first"))
+    clock.now = 101; c:BindingTick()
+    local claimed = c.binding.outstanding
+    assert(claimed and not claimed.probe, "input A is claimed"); equal(claimed.seq, 2)
+    -- No binding acknowledgement: the carrier is marked and the strip carries A.
+    clock.now = 106; c:BindingTick()
+    equal(c.binding.inputBlocked, true); equal(c.bindingRetryAt, 136); equal(c:StripActive(), true)
+    assert(c:Send("codex", "second"))
+    clock.now = 135
+    s:Accept({ ack = c.global.outbox[1].id })
+    c:BindingTick()
+    equal(c.binding.outstanding, claimed, "the delivered input's claim stays outstanding")
+    equal(actions[claimed.key], claimed.action, "its key still holds A")
+    -- The mark expires; the late acknowledgement marks the carrier again, so the strip stays.
+    for now = 136, 140 do
+        clock.now = now; c:BindingTick()
+        equal(c.binding.outstanding, claimed, "no other claim at " .. now)
+        equal(c:StripActive(), true, "the strip draws at " .. now)
+    end
+    clock.now = 141
+    s:Accept({ ack = c.global.ack, bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 2 })
+    equal(c.binding.outstanding, nil, "the acknowledgement releases A"); equal(actions[claimed.key], nil)
+    clock.now = 142; c:BindingTick()
+    assert(c.binding.outstanding, "the next prompt is claimed"); equal(c.binding.outstanding.seq, 3, "after A's sequence")
+end)
+
+test("a host change in combat that could not clear the old frame is finished by the binding tick after combat", function()
+    local clock, actions = { now = 100 }, {}
+    local c, s = fixture({ settings = { stripMode = "fallback", combatUpdates = true } }, {
+        GetTime = function() return clock.now end,
+        GetBindingAction = function(key) return actions[key] or "" end,
+        SetBinding = function(key, action) actions[key] = action; return true end,
+        SaveBindings = function() return true end,
+        GetCurrentBindingSet = function() return 1 end })
+    s:Accept()
+    c:HandleSlash("bindprobe")
+    c.timers.binding.handle:Fire()
+    s:Accept({ bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 1 })
+    assert(c:Send("codex", "first"))
+    clock.now = 101; c:BindingTick()
+    local claimed = c.binding.outstanding
+    assert(claimed and not claimed.probe, "the input is claimed")
+    s.combat = true
+    clock.now = 102
+    s:Accept({ epoch = "2222aaaa", bindingProtocol = 1, bindingNonce = "99999999", bindingAck = 0 })
+    equal(c.binding.enabled, false, "the old host's carrier ends at once")
+    equal(c.binding.outstanding, claimed, "its frame waits for combat to end")
+    s.combat = false
+    clock.now = 103; c:BindingTick()
+    equal(c.binding.outstanding, nil, "the binding tick clears the frame without another host result")
+    equal(actions[claimed.key], nil); equal(c.binding:Busy(), false)
+end)
+
+test("a context row not across the carrier by half its deadline is handed to the strip, except in mode off", function()
+    for _, mode in ipairs({ "fallback", "off" }) do
+        local clock = { now = 10 }
+        local c, s = fixture({ settings = { stripMode = mode } },
+            { GetTime = function() return clock.now end, Context = { Capture = function() return { { true } } end } })
+        local cancels = 0
+        c.binding = carrierMock({ Now = function() return clock.now end,
+            Pump = function(self)
+                if self.active and not self.outstanding then self.outstanding = { seq = 2, sentAt = clock.now }; return true end
+                return false
+            end,
+            OfferContext = function(self, msg) self.active = { kind = "context", identity = "context:" .. msg.id }; return true end,
+            Cancel = function(self) cancels = cancels + 1; self.active, self.outstanding = nil, nil; return true end })
+        s:Accept({ contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+        c:ContextTick()
+        assert(c.contextPending, mode .. ": a context row is pending")
+        -- Each frame is acknowledged inside the 5 s timeout, but the row is still not across.
+        for now = 11, 24 do clock.now = now; c.binding.outstanding = nil; c:BindingTick() end
+        equal(c.binding.contextBlocked, nil, mode .. ": the carrier keeps the row before the budget")
+        assert(c.binding.active, mode .. ": the row is still in the carrier")
+        clock.now = 25; c.binding.outstanding = nil; c:BindingTick()
+        if mode == "off" then
+            equal(c.binding.contextBlocked, nil, "off has no strip to hand the row to"); equal(cancels, 0)
+        else
+            equal(c.binding.contextBlocked, true, "the row is handed to the strip"); equal(cancels, 1)
+            equal(c:StripActive(), true); assert(s.top ~= nil, "the strip transmits the row at once")
+        end
+    end
+end)
+
+test("in mode off a context row the binding carrier is still sending is not retried at its 30 s deadline", function()
+    local clock = { now = 10 }
+    local c, s = fixture({ settings = { stripMode = "off" } },
+        { GetTime = function() return clock.now end, Context = { Capture = function() return { { true } } end } })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        Pump = function(self)
+            if self.active and not self.outstanding then self.outstanding = { seq = 2, sentAt = clock.now }; return true end
+            return false
+        end,
+        OfferContext = function(self, msg) self.active = { kind = "context", identity = "context:" .. msg.id }; return true end })
+    s:Accept({ contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    c:ContextTick()
+    local pending = assert(c.contextPending, "a context row is pending")
+    -- Every frame is acknowledged in time; the row simply needs more than 30 s of frames.
+    for now = 11, 45 do clock.now = now; c.binding.outstanding = nil; c:BindingTick(); c:ContextTick() end
+    equal(c.contextPending, pending, "the row the carrier is sending is not replaced")
+    c.binding.active, c.binding.outstanding = nil, nil
+    clock.now = 60; c:ContextTick()
+    equal(c.contextPending, pending, "the host's acknowledgement has 30 s from the last frame")
+    clock.now = 76; c:ContextTick()
+    assert(c.contextPending ~= pending, "a row the carrier no longer holds is retried at its deadline")
+end)
+
+test("a context mark with no frame outstanding expires after 30 s and the carrier is tried again", function()
+    local clock, offers = { now = 10 }, 0
+    local c, s = fixture({ settings = { stripMode = "off" } },
+        { GetTime = function() return clock.now end, Context = { Capture = function() return { { true } } end } })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        -- Every claim is refused until second 41.
+        Pump = function(self)
+            if clock.now < 41 or not self.active or self.outstanding then return false end
+            self.outstanding = { seq = 2, sentAt = clock.now }
+            return true
+        end,
+        OfferContext = function(self, msg)
+            offers = offers + 1
+            self.active = { kind = "context", identity = "context:" .. msg.id }
+            return true
+        end })
+    s:Accept({ contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    c:ContextTick()
+    assert(c.contextPending, "a context row is pending")
+    clock.now = 11; c:BindingTick()
+    equal(c.binding.contextBlocked, true, "the refused claim marks the carrier"); equal(offers, 1)
+    equal(c:BindingCarries(), false)
+    clock.now = 40; c:BindingTick()
+    equal(c.binding.contextBlocked, true, "the mark holds for 30 s"); equal(offers, 1)
+    clock.now = 41; c:BindingTick()
+    equal(offers, 2, "the row is offered to the carrier again")
+    equal(c.binding.contextBlocked, nil); equal(c:BindingCarries(), true)
+end)
+
+test("an expired input mark clears only on a tick that can try the carrier again", function()
+    local clock = { now = 100 }
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, { GetTime = function() return clock.now end })
+    c.binding = carrierMock({ Now = function() return clock.now end })
+    s:Accept()
+    -- The window has passed, but the carrier wrote half a second ago and cannot be tried on this tick.
+    c.binding.inputBlocked, c.bindingRetryAt, c.binding.lastWriteAt = true, 100, 99.5
+    c:BindingTick()
+    equal(c.binding.inputBlocked, true, "the mark stays, so fallback keeps the strip")
+    equal(c:StripActive(), true)
+    clock.now = 101; c:BindingTick()
+    equal(c.binding.inputBlocked, nil, "a tick that can try the carrier clears it")
+end)
+
+test("a context row handed to the strip stays with the strip when a late acknowledgement clears the mark", function()
+    local clock, offers = { now = 10 }, 0
+    local c, s = fixture({ settings = { stripMode = "fallback" } },
+        { GetTime = function() return clock.now end, Context = { Capture = function() return { { true } } end } })
+    c.binding = carrierMock({ Now = function() return clock.now end,
+        Pump = function(self)
+            if self.active and not self.outstanding then self.outstanding = { seq = 2, sentAt = clock.now }; return true end
+            return false
+        end,
+        OfferContext = function(self, msg)
+            offers = offers + 1
+            self.active = { kind = "context", identity = "context:" .. msg.id }
+            return true
+        end,
+        -- As the real carrier: a claimed frame is only marked abandoned.
+        Cancel = function(self)
+            if self.outstanding then self.active.abandoned = true; return false end
+            self.active = nil
+            return true
+        end })
+    s:Accept({ contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    c:ContextTick()
+    local pending = assert(c.contextPending, "a context row is pending")
+    for now = 11, 24 do clock.now = now; c.binding.outstanding = nil; c:BindingTick() end
+    clock.now = 25; c:BindingTick()
+    equal(c.binding.contextBlocked, true, "the slow row is handed to the strip with a frame still outstanding")
+    assert(c.binding.outstanding and c.binding.active.abandoned)
+    -- The acknowledgement for that frame arrives a second later and clears the mark, as AcceptHost does.
+    c.binding.outstanding, c.binding.active, c.binding.contextBlocked = nil, nil, nil
+    clock.now = 26; c:BindingTick()
+    equal(offers, 1, "the row is not handed back to the carrier")
+    equal(c.contextPending, pending)
+    equal(c:BindingContextActive(), false, "the strip does not stand aside for it")
+    equal(c:StripActive(), true, "fallback keeps the strip drawn while it carries the row")
+end)
+
+test("a context frame whose acknowledgement times out is cancelled and handed to the strip once", function()
+  for _, combat in ipairs({ false, true }) do
+    local clock, actions = { now = 100 }, {}
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, {
+        GetTime = function() return clock.now end,
+        GetBindingAction = function(key) return actions[key] or "" end,
+        SetBinding = function(key, action) actions[key] = action; return true end,
+        SaveBindings = function() return true end,
+        GetCurrentBindingSet = function() return 1 end,
+        Context = { Capture = function() return { { true } } end } })
+    s:Accept()
+    c:HandleSlash("bindprobe")
+    c.timers.binding.handle:Fire()
+    s:Accept({ bindingProtocol = 1, bindingNonce = "89abcdef", bindingAck = 1,
+        contextProtocol = 4, contextAck = 0, contextWant = 1, contextWantMask = 1 })
+    clock.now = 102
+    c:ContextTick()
+    assert(c.contextPending, "a context message is waiting for a carrier")
+    c:BindingTick()
+    local claimed = c.binding.outstanding
+    assert(claimed and c.binding.active and c.binding.active.kind == "context", "the context frame is claimed")
+    local cancels, pixels = 0, 0
+    local cancel, pixel = c.binding.Cancel, c.PixelTick
+    c.binding.Cancel = function(...) cancels = cancels + 1; return cancel(...) end
+    c.PixelTick = function(...) pixels = pixels + 1; return pixel(...) end
+    s.combat = combat
+    for now = 107, 111 do clock.now = now; c:BindingTick() end
+    local where = combat and " in combat" or ""
+    equal(c.binding.contextBlocked, true)
+    equal(c.binding.outstanding, claimed, "the timed-out frame stays claimed until its acknowledgement" .. where)
+    equal(cancels, 1, "Cancel runs once" .. where); equal(pixels, 1, "PixelTick runs once" .. where)
+  end
+end)
+
+test("resetpos on a stopped controller resets the View it kept, so Start does not bring the old size back", function()
+    local c, s = fixture()
+    c:SaveView({ point = "TOPLEFT", relativePoint = "TOPLEFT", x = 300, y = -200, width = 500, height = 400, minimized = false })
+    c:Stop()
+    assert(c.view, "the stopped controller keeps its View")
+    c:HandleSlash("resetpos")
+    equal(s.resetLayouts, 1, "the kept View is reset")
+    equal(c.global.view.width, 900); equal(c.global.view.height, 650)
+    equal(c.active, false, "resetpos does not start the controller")
+end)
+
+test("a heartbeat write that fails again after its mark expired renews the mark before BindingTick clears it", function()
+    local clock = { now = 100 }
+    local c, s = fixture({ settings = { stripMode = "fallback" } }, { GetTime = function() return clock.now end })
+    local calls = 0
+    c.binding = carrierMock({ Heartbeat = function() calls = calls + 1; return false, "x", true end })
+    s:Accept({ cursorLane = "file" })
+    if not c.binding.inputBlocked then c:OfferBindingHeartbeat() end
+    equal(c.binding.inputBlocked, true); equal(c.bindingRetryAt, 130)
+    clock.now = 131
+    local before = calls
+    s:Accept({ cursorLane = "file" })
+    equal(calls, before + 1, "LoadTick retries the heartbeat once its window has passed")
+    equal(c.binding.inputBlocked, true); equal(c.bindingRetryAt, 191, "the mark is renewed for the doubled 60 seconds")
+    c:BindingTick()
+    equal(c.binding.inputBlocked, true, "BindingTick keeps the renewed mark")
+    equal(c:StripActive(), true, "fallback still draws the strip")
+end)
+
+test("a failed binding heartbeat write waits out its retry window before the next attempt", function()
+    for _, case in ipairs({ { mode = "off" }, { mode = "fallback", lane = "file" } }) do
+        local clock = { now = 100 }
+        local c, s = fixture({ settings = { stripMode = case.mode } }, { GetTime = function() return clock.now end })
+        local calls = 0
+        c.binding = carrierMock({ Heartbeat = function() calls = calls + 1; return false, "x", true end })
+        s:Accept({ cursorLane = case.lane })
+        if not c.binding.inputBlocked then c:OfferBindingHeartbeat() end
+        equal(c.binding.inputBlocked, true, case.mode); equal(c.bindingRetryAt, 130, case.mode)
+        local before = calls
+        for now = 101, 129 do
+            clock.now = now
+            equal(c:OfferBindingHeartbeat(), false, case.mode .. " at " .. now)
+        end
+        equal(calls, before, case.mode .. ": no write inside the retry window")
+        clock.now = 130; c:BindingTick(); c:OfferBindingHeartbeat()
+        equal(calls, before + 1, case.mode .. ": one attempt after the window")
+    end
+end)
+
+test("an input mark alone does not stop the heartbeat a stalled strip needs", function()
+    local clock = { now = 100 }
+    local c, s = fixture(nil, { GetTime = function() return clock.now end })
+    local calls = 0
+    c.binding = carrierMock({ Heartbeat = function() calls = calls + 1; return true end })
+    s:Accept({})
+    c.binding.inputBlocked, c.bindingRetryAt, c.stalled = true, 130, true
+    local before = calls
+    clock.now = 101
+    equal(c:OfferBindingHeartbeat(), true, "the heartbeat is offered while only an input mark stands")
+    equal(calls, before + 1, "one heartbeat write")
+end)
+
+test("Stop undoes a combat minimize in the View too, so a later drag cannot save it", function()
+    local c, s = fixture({ settings = { combatWindow = "minimize" } })
+    s:Accept()
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    equal(s.minimized, true); equal(c.global.view.minimized, true)
+    c:Stop()
+    equal(s.minimized, false, "the View is restored"); equal(c.global.view.minimized, false)
+    s.combat = false; c:Start()
+    -- A drag saves the layout the View shows.
+    assert(c:SaveView({ point = "CENTER", relativePoint = "CENTER", x = 10, y = 0, width = 900, height = 650,
+        minimized = s.minimized }))
+    equal(c.global.view.minimized, false)
+end)
+
+-- The log carrier on a mocked C_Log.LogMessage that records every line.
+local function logLane(settings)
+    local lines = {}
+    local c, s = fixture({ settings = settings }, { LogAPI = { LogMessage = function(text) lines[#lines + 1] = text end } })
+    return c, s, lines
+end
+
+local function printedLine(s, text)
+    for _, line in ipairs(s.printed) do if line == text then return true end end
+    return false
+end
+
+test("fileLane log constructs the log carrier; binding or an unset lane keeps the binding carrier", function()
+    local c = logLane({ fileLane = "log" })
+    equal(c.binding.combatSafe, true); equal(c.binding.HasKey, nil); equal(c.binding.status, "Probe not run")
+    c = fixture({ settings = { fileLane = "binding" } })
+    equal(c.binding.combatSafe, nil); assert(c.binding.HasKey ~= nil, "the binding carrier")
+    c = fixture()
+    equal(c.binding.combatSafe, nil); equal(c:Setting("fileLane"), "binding")
+end)
+
+test("the log lane probes itself without autoBindProbe, in combat, and once ready carries in combat", function()
+    local c, s, lines = logLane({ fileLane = "log", stripMode = "fallback", combatUpdates = true })
+    equal(c:Setting("autoBindProbe"), false)
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    s:Accept()
+    assert(c.binding.active and c.binding.active.probe, "the probe starts in combat without autoBindProbe")
+    if c.timers.binding then c.timers.binding.handle:Fire() end
+    assert(c.binding.outstanding and c.binding.outstanding.probe, "the probe frame is logged in combat")
+    equal(#lines, 26, "one frame line and its padding")
+    s:Accept({ logProtocol = 1, logNonce = "89abcdef", logAck = 1 })
+    equal(c.binding.enabled, true, "the probe is acknowledged")
+    assert(printedLine(s, "Witchcraft log carrier proved host decode and ACK"))
+    equal(c:BindingCarries(), true, "the ready log carrier carries in combat")
+    equal(c:StripActive(), false, "fallback keeps the strip hidden in combat")
+end)
+
+test("in mode off the log lane refuses a prompt before it is ready and accepts one after, in combat too", function()
+    local c, s = logLane({ fileLane = "log", stripMode = "off", combatUpdates = true })
+    s.combat = true; c:OnEvent("PLAYER_REGEN_DISABLED")
+    local ok, reason = c:Send("codex", "hello")
+    equal(ok, false); equal(reason, STRIP_OFF)
+    s:Accept()
+    ok, reason = c:Send("codex", "hello")
+    equal(ok, false); equal(reason, STRIP_OFF, "a probe still waiting is not ready")
+    if c.timers.binding then c.timers.binding.handle:Fire() end
+    s:Accept({ logProtocol = 1, logNonce = "89abcdef", logAck = 1 })
+    assert(c:Send("codex", "hello"), "a ready log carrier takes the prompt in combat")
+    equal(#c.global.outbox, 1)
+end)
+
+test("with the strip off the log lane probes before the link, once, and the link makes it ready", function()
+    -- The default fixture starts with no host epoch saved; the second run starts with one.
+    for _, saved in ipairs({ false, "1234abcd" }) do
+        local lines = {}
+        local c, s = fixture({ epoch = saved or nil, settings = { fileLane = "log", stripMode = "off" } },
+            { LogAPI = { LogMessage = function(text) lines[#lines + 1] = text end } })
+        equal(c.global.epoch, saved or nil, "the saved epoch")
+        assert(not c.connected, "never linked")
+        assert(c.binding.active and c.binding.active.probe, "the probe is the carrier's active item")
+        c.timers.binding.handle:Fire()
+        equal(#lines, 26, "one frame line and its padding")
+        equal(lines[1], ns.LogCarrier.FrameText({ epoch = "00000000", nonce = "00000000", uiNonce = "abcdef01",
+            slot = c.ring.nextSeq, seq = 1, payload = ns.Binding.PROBE }), "the frame names the next ring slot")
+        equal(c:MaybeAutoBindProbe(), false); equal(#lines, 26, "one cold probe per UI session")
+        s:Accept({ logProtocol = 1, logNonce = "89abcdef", logAck = 1 })
+        equal(c.connected, true); equal(c.binding.enabled, true)
+        assert(c:Send("codex", "hello"), "a ready log carrier takes the prompt")
+    end
+end)
+
+test("an acknowledged cold probe counts for its host epoch: a lost lane waits for /reload, a new epoch probes", function()
+    local c, s, lines = logLane({ fileLane = "log", stripMode = "off" })
+    local function probes()
+        local count = 0
+        for _, line in ipairs(lines) do
+            if line:find("^WCL1_00000000_00000000_") then count = count + 1 end
+        end
+        return count
+    end
+    c.timers.binding.handle:Fire()
+    equal(probes(), 1, "the cold probe is logged")
+    s:Accept({ logProtocol = 1, logNonce = "89abcdef", logAck = 1 })
+    equal(c.binding.enabled, true)
+    local epoch = c.global.epoch
+    equal(c.autoProbedEpoch, epoch, "the acknowledging host epoch")
+    s:Accept({ logProtocol = 1, logNonce = "76543210", logAck = 0 })
+    equal(c.global.epoch, epoch, "the same host epoch")
+    equal(c.binding.enabled, false); equal(c.binding.status, "Host changed; /reload to probe again")
+    for _ = 1, 3 do
+        if c.timers.binding then c.timers.binding.handle:Fire() end
+        s:Accept({ logProtocol = 1, logNonce = "76543210", logAck = 0 })
+    end
+    if c.timers.binding then c.timers.binding.handle:Fire() end
+    equal(c.binding.active, nil, "no probe waits"); equal(probes(), 1, "no new probe within the same epoch")
+    assert(epoch ~= "87654321")
+    s:Accept({ epoch = "87654321", logProtocol = 1, logNonce = "76543210", logAck = 0 })
+    assert(c.binding.active and c.binding.active.probe, "a new epoch starts a new probe")
+end)
+
+test("in modes always and fallback the log lane logs nothing before the first accepted chunk", function()
+    for _, mode in ipairs({ "always", "fallback" }) do
+        local c, s, lines = logLane({ fileLane = "log", stripMode = mode })
+        equal(c.binding.active, nil, mode); equal(c:MaybeAutoBindProbe(), false, mode)
+        if c.timers.binding then c.timers.binding.handle:Fire() end
+        equal(#lines, 0, mode)
+        s:Accept()
+        assert(c.binding.active and c.binding.active.probe, mode .. ": the link starts the probe")
+    end
+end)
+
+test("with the strip off the binding lane still waits for the link before its opt-in probe", function()
+    local c = fixture({ settings = { fileLane = "binding", stripMode = "off", autoBindProbe = true } })
+    equal(c.binding.active, nil); equal(c:MaybeAutoBindProbe(), false); equal(c.coldProbed, nil)
+end)
+
+test("switching to mode off while unlinked starts the log carrier's probe", function()
+    local c, _, lines = logLane({ fileLane = "log", stripMode = "always" })
+    equal(c.binding.active, nil)
+    assert(c:SetSetting("stripMode", "off"))
+    assert(c.binding.active and c.binding.active.probe, "the probe goes before the link")
+    equal(c.timers.load.handle.delay, 1, "the host gets a second to answer the cold probe")
+    c.timers.binding.handle:Fire()
+    equal(#lines, 26)
+end)
+
+test("/witch filelane saves a lane for the next reload, rejects anything else, and status names the lane", function()
+    local c, s = fixture()
+    c:HandleSlash("filelane log")
+    equal(c:Setting("fileLane"), "log"); equal(s.printed[#s.printed], "Witchcraft file lane: log; /reload to apply")
+    equal(c.binding.combatSafe, nil, "no swap at run time")
+    c:HandleSlash("filelane pigeon")
+    equal(c:Setting("fileLane"), "log"); equal(s.printed[#s.printed], "Usage: /witch filelane log|binding")
+    c:HandleSlash("status")
+    assert(s.printed[#s.printed]:find("^Witchcraft lanes: binding "), s.printed[#s.printed])
+    local d, t = logLane({ fileLane = "log" })
+    d:HandleSlash("status")
+    assert(t.printed[#t.printed]:find("^Witchcraft lanes: log Probe not run"), t.printed[#t.printed])
+end)
+
+test("a client without C_Log.LogMessage names the log carrier unavailable in status", function()
+    local c, s = fixture({ settings = { fileLane = "log" } }, { LogAPI = {} })
+    s:Accept()
+    c:HandleSlash("status")
+    local line = s.printed[#s.printed]
+    equal(line:find("Witchcraft lanes: log Log carrier unavailable on this client |", 1, true), 1, line)
+end)
+
+test("the autoBindProbe option and /witch bindprobe off leave a ready log carrier running", function()
+    local c, s = logLane({ fileLane = "log" })
+    s:Accept()
+    if c.timers.binding then c.timers.binding.handle:Fire() end
+    s:Accept({ logProtocol = 1, logNonce = "89abcdef", logAck = 1 })
+    equal(c.binding.enabled, true)
+    c:SetSetting("autoBindProbe", true)
+    c:SetSetting("autoBindProbe", false)
+    equal(c.binding.enabled, true, "the option does not stop the log carrier")
+    c:HandleSlash("bindprobe off")
+    equal(c.binding.enabled, true, "bindprobe off does not stop the log carrier")
+    equal(c:Setting("autoBindProbe"), false, "the setting is still saved")
+end)
+
+test("/witch bindprobe on the log lane names the log carrier probe", function()
+    local c, s = logLane({ fileLane = "log" })
+    c:HandleSlash("bindprobe")
+    equal(s.printed[#s.printed], "Log carrier probe started; waiting for host ACK")
 end)

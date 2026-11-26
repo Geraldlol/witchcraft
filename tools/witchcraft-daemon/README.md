@@ -53,7 +53,7 @@ Calibrate the screen strip before your first run. Once calibration is saved, ord
 node bin/witchcraft.js calibrate
 ```
 
-Return to WoW and run `/witch calibrate off` after calibration. Start the daemon with the `run` command above, then `/reload` in game. Calibration captures the virtual desktop once; ongoing strip capture runs only while `WowB` is the foreground process. It pauses when you switch to another window. `--no-pixels` disables capture, so use it only when a separately configured file carrier can keep the connection moving.
+Return to WoW and run `/witch calibrate off` after calibration. Start the daemon with the `run` command above, then `/reload` in game. Calibration captures the virtual desktop once; ongoing strip capture runs only while the game client (`Wow`, `WowClassic`, `WowB` or `WowT`) is the foreground process. It pauses when you switch to another window. `--no-pixels` disables capture, so use it only when a separately configured file carrier can keep the connection moving.
 
 Use `/witch` in game. Ctrl+] switches the real terminal between agents; the game tabs select independently. Closing all launched CLI sessions stops the daemon. Ordinary Ctrl+C is passed to the selected CLI. A second daemon is rejected by `.local/bridge.lock`, which names the running pid. A lock left by a crash (its process gone, or empty and either over a minute old or written before the last boot) is set aside as `.local/bridge.lock.stale-<written>-<epoch>.json` on the next start. A lock whose pid is alive is always refused; if that pid now belongs to another program, the witchcraft-daemon skill's status action says so and its start action clears the lock. Closing the daemon's console window, or Ctrl+Break, stops it cleanly and releases the lock.
 

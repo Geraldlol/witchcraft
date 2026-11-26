@@ -124,6 +124,16 @@ test('heartbeat and probe acknowledgements must belong to the live daemon and cu
   const report = await diagnose();
   assert.equal(check(report, 'binding').status, 'ok');
   assert.match(check(report, 'binding').detail, /1s ago/u);
+  assert.equal(check(report, 'log lane').status, 'wait');
+  assert.equal(check(report, 'log lane').detail, 'No log-probe acknowledgement observed for this UI session.');
+  await fs.appendFile(trace + '.1', '\n' + probe(now - 2500, { what: 'log-probe-ack', ui: 'eeeeeeee' }));
+  assert.equal(check(await diagnose(), 'log lane').status, 'wait', 'another UI session');
+  await fs.appendFile(trace, '\n' + probe(now - 2500, { what: 'log-probe-ack' }));
+  const logged = await diagnose();
+  assert.equal(check(logged, 'log lane').status, 'ok');
+  assert.equal(check(logged, 'log lane').detail, 'Host acknowledged the log probe 2s ago.');
+  assert.equal(check(logged, 'binding').status, 'ok');
+  assert.ok(!JSON.stringify(logged).includes(epoch) && !JSON.stringify(logged).includes(ui));
   assert.ok(!JSON.stringify(report).includes(epoch) && !JSON.stringify(report).includes(ui));
 });
 

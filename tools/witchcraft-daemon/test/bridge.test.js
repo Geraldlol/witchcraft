@@ -9,6 +9,7 @@ import { initializeRing } from '../src/init.js';
 import { encodeMessage, encodeContext, encodeHeartbeat } from '../src/pixel.js';
 import { readContextFile } from '../src/context-cache.js';
 import { BINDING_KEYS, BINDING_PROBE_BODY, encodeBindingAction } from '../src/binding-carrier.js';
+import { LogCarrier, encodeLogLine } from '../src/log-carrier.js';
 import { encodeCooldownContext, encodeCooldownFrame } from '../src/cooldown-carrier.js';
 import { cooldownLayout } from './helpers/cooldown-layout.js';
 import { contextWantPath, requestContext } from '../src/context-want.js';
@@ -101,6 +102,7 @@ async function fixture(t, settings = {}) {
     savedVariables: path.join(root, 'Witchcraft.lua') };
   if (settings.noRegion) delete config.region;
   if (settings.binding) config.accountDir = accountDir;
+  if (settings.log) config.logFile = path.join(root, 'Logs', 'General.log');
   if (settings.cooldown) { config.cooldownCarrier = true; config.characterDir = characterDir; }
   if (settings.configOverlay) config.overlay = true;
   if (settings.commands) config.commands = settings.commands;
@@ -511,6 +513,31 @@ test('bridge: binding probe bootstraps LoD and routes input without screen captu
   const acknowledged = await f.payload(2, value => value.bindingAck === 2 && value.ack === 1);
   assert.equal(acknowledged.uiNonce, uiNonce);
   assert.deepEqual(f.state.writes, [['codex', 'from binding\r']]);
+  f.state.pair.finish(); assert.equal(await within(f.running), undefined);
+  assert.equal(f.state.capture, undefined);
+});
+
+test('bridge: log probe bootstraps LoD and routes input without screen capture', async t => {
+  let started = false;
+  class StartedLogCarrier extends LogCarrier { async start() { await super.start(); started = true; } }
+  const f = await fixture(t, { log: true, noPixels: true, adapters: { LogCarrier: StartedLogCarrier } }); await f.ready();
+  // The reader skips what a file held at its first scan, so the log appears only once it is watching.
+  await until(() => started, 'Log carrier startup');
+  const uiNonce = 'abcdef01', logFile = f.config.logFile;
+  await fs.mkdir(path.dirname(logFile));
+  await fs.appendFile(logFile, `${encodeLogLine({ epoch: '00000000', nonce: '00000000', uiNonce, slot: 1, seq: 1, payload: BINDING_PROBE_BODY })}\r\n`);
+  const connected = await f.payload(1, value => value.uiNonce === uiNonce && value.logAck === 1);
+  assert.equal(connected.logProtocol, 1); assert.match(connected.logNonce, /^[0-9a-f]{8}$/u);
+  assert.equal(connected.logUi, uiNonce); assert.notEqual(connected.logNonce, connected.bindingNonce);
+  assert.equal(connected.bindingAck, 0);
+
+  const id = Buffer.alloc(3); id.writeUIntBE(1, 0, 3);
+  const body = Buffer.concat([Buffer.from('I'), id, Buffer.from([1, 0]), Buffer.from('from log')]);
+  await fs.appendFile(logFile, ['11/23 19:41:31.300  [N][Lua] WCLP' + '.'.repeat(200), '11/23 19:41:31.301  [N][Lua] another addon',
+    encodeLogLine({ epoch: connected.epoch, nonce: connected.logNonce, uiNonce, slot: 2, seq: 2, payload: body }), ''].join('\r\n'));
+  const acknowledged = await f.payload(2, value => value.logAck === 2 && value.ack === 1);
+  assert.equal(acknowledged.uiNonce, uiNonce);
+  assert.deepEqual(f.state.writes, [['codex', 'from log\r']]);
   f.state.pair.finish(); assert.equal(await within(f.running), undefined);
   assert.equal(f.state.capture, undefined);
 });

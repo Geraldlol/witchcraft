@@ -157,11 +157,26 @@ export class RingWriter {
         || snapshot.contextWantMask < 0 || snapshot.contextWantMask > 15)
         throw new TypeError('Invalid context acknowledgement extension');
     }
-    if (snapshot.bindingProtocol !== undefined || snapshot.bindingNonce !== undefined || snapshot.bindingAck !== undefined) {
+    // bindingUi names the UI session the binding acknowledgement belongs to; optional, only with the other three.
+    if (snapshot.bindingProtocol !== undefined || snapshot.bindingNonce !== undefined || snapshot.bindingAck !== undefined
+      || snapshot.bindingUi !== undefined) {
       if (snapshot.bindingProtocol !== 1 || !/^[0-9a-f]{8}$/u.test(snapshot.bindingNonce ?? '')
         || snapshot.bindingNonce === '00000000' || !Number.isInteger(snapshot.bindingAck)
-        || snapshot.bindingAck < 0 || snapshot.bindingAck > 16777215) {
+        || snapshot.bindingAck < 0 || snapshot.bindingAck > 16777215
+        || (snapshot.bindingUi !== undefined && (typeof snapshot.bindingUi !== 'string'
+          || !/^[0-9a-f]{8}$/u.test(snapshot.bindingUi) || snapshot.bindingUi === '00000000'))) {
         throw new TypeError('Invalid binding acknowledgement extension');
+      }
+    }
+    // The log lane's acknowledgement, validated exactly as the binding extension above.
+    if (snapshot.logProtocol !== undefined || snapshot.logNonce !== undefined || snapshot.logAck !== undefined
+      || snapshot.logUi !== undefined) {
+      if (snapshot.logProtocol !== 1 || !/^[0-9a-f]{8}$/u.test(snapshot.logNonce ?? '')
+        || snapshot.logNonce === '00000000' || !Number.isInteger(snapshot.logAck)
+        || snapshot.logAck < 0 || snapshot.logAck > 16777215
+        || (snapshot.logUi !== undefined && (typeof snapshot.logUi !== 'string'
+          || !/^[0-9a-f]{8}$/u.test(snapshot.logUi) || snapshot.logUi === '00000000'))) {
+        throw new TypeError('Invalid log acknowledgement extension');
       }
     }
     const generation = this.generation, seq = this.cursor;

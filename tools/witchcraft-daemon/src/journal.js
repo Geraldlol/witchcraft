@@ -360,7 +360,7 @@ export class JournalStore {
         // Without this listing the clear cannot know its marker is the newest: the journal stays (already reported).
         if (values === null) return false;
         // A higher marker created since the read supersedes this one: create again above it.
-        if (Math.max(...values) > value) {
+        if (values.some(other => other > value)) {
           if (attempt < 3) continue;
           return lost();
         }

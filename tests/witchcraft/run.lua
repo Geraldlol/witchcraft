@@ -1,5 +1,6 @@
 local ns = {}
-for _, file in ipairs({ "Evidence", "Errors", "Ring", "Pixel", "Prompts", "Binding", "AddonsState", "CooldownCarrier", "Context", "Options", "Core" }) do
+for _, file in ipairs({ "Evidence", "Errors", "Ring", "Pixel", "Prompts", "Binding", "LogCarrier",
+    "AddonsState", "CooldownCarrier", "Context", "Options", "Minimap", "Core" }) do
     assert(loadfile("Witchcraft/" .. file .. ".lua"))("Witchcraft", ns)
 end
 
@@ -12,7 +13,8 @@ local function test(name, fn)
     if ok then passed = passed + 1; print("PASS " .. name)
     else failed = failed + 1; print("FAIL " .. name .. "\n" .. err) end
 end
-for _, suite in ipairs({ "evidence", "errors", "error-watch", "ring", "pixel", "binding", "addons-state", "cooldown-carrier",
+for _, suite in ipairs({ "evidence", "errors", "error-watch", "ring", "pixel", "binding", "log-carrier",
+    "addons-state", "cooldown-carrier",
     "core", "persistence", "context", "context-transport", "cooldown-transport", "options" }) do
     assert(loadfile("tests/witchcraft/" .. suite .. ".lua"))(ns, test, equal)
 end

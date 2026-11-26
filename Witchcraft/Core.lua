@@ -5,13 +5,18 @@ local Core, Persistence = {}, {}
 ns.Core, ns.Persistence = Core, Persistence
 local methods = {}
 methods.__index = methods
-local BUILD = "release-0.4.0"
+local BUILD = "release-0.5.0"
 local Ring, Prompts = ns.Ring, ns.Prompts
 local Binding = ns.Binding
 local CooldownCarrier = ns.CooldownCarrier
 local integer, plain, epoch = Ring.Integer, Ring.Plain, Ring.Epoch
 local actions = { text = true, enter = true, interrupt = true, escape = true, up = true, down = true, control = true }
 local BINDING_ACK_TIMEOUT = 5
+-- Seconds of a context row's 30 s deadline the binding carrier may use before the strip takes the row.
+local BINDING_CONTEXT_BUDGET = 15
+-- Seconds an input mark holds before the binding carrier is tried again; a failure that still
+-- holds marks it again with the doubled window.
+local BINDING_RETRY, BINDING_RETRY_CEILING = 30, 480
 -- A bootstrap heartbeat with no host answering is a settings write nobody reads, so its cadence
 -- backs off from the ring's own toward a two-minute floor until something proves a host is there.
 local HEARTBEAT_BASE, HEARTBEAT_CEILING = 8, 120
@@ -19,6 +24,7 @@ local HEARTBEAT_BASE, HEARTBEAT_CEILING = 8, 120
 -- Every try spends a ring slot, so each further silent slot doubles the wait up to the ceiling.
 local PAUSED_RETRY, PAUSED_CEILING = 2, 30
 local RELOAD_NOTICE = "Ring exhausted. Reload to continue: /witch reload"
+local STRIP_OFF_NOTICE = "Pixel strip is off and the file link is not ready; /witch strip fallback"
 -- Capture order: progress is one cheap part and answers "how far to level", so it precedes
 -- the multi-part quest batch. Errors come last and only when a want names them. Bits are the
 -- chunk's contextWantMask.
@@ -57,10 +63,21 @@ end
 -- `values` takes only those; the rest take a value of their default's type.
 local SETTINGS = {
     layer = { default = "normal", values = { top = true, normal = true, back = true } },
+    windowScale = { default = 100, min = 80, max = 140 },
+    idleFade = { default = false },
+    combatWindow = { default = "keep", values = { keep = true, minimize = true, hide = true } },
     locked = { default = false }, docked = { default = false }, escapeCloses = { default = false },
     openOnLoad = { default = true },
-    alertText = { default = true }, alertSound = { default = true }, alertFinished = { default = true },
-    combatUpdates = { default = false }, autoBindProbe = { default = false }, showChoices = { default = true }, showStatus = { default = true },
+    alertText = { default = true },
+    alertChannel = { default = "raid", values = { raid = true, chat = true } },
+    alertSound = { default = true },
+    alertSoundStyle = { default = "raid", values = { raid = true, ready = true, tell = true, ping = true } },
+    alertFinished = { default = true },
+    combatUpdates = { default = false }, autoBindProbe = { default = false },
+    stripMode = { default = "always", values = { always = true, fallback = true, off = true } },
+    fileLane = { default = "binding", values = { binding = true, log = true } },
+    autoFitCols = { default = false },
+    showChoices = { default = true }, showStatus = { default = true },
     minimap = { default = true }, historySize = { default = 50, values = { [20] = true, [50] = true, [100] = true } },
     tabClaude = { default = true }, tabCodex = { default = true }, tabCopilot = { default = false }, tabAgy = { default = false },
 }
@@ -68,6 +85,7 @@ local function validSetting(key, value)
     local spec = SETTINGS[key]
     if not spec then return false end
     if spec.values then return spec.values[value] == true end
+    if spec.min then return integer(value, spec.min, spec.max) end
     return type(value) == type(spec.default)
 end
 ns.Settings = SETTINGS
@@ -149,6 +167,7 @@ function Persistence.Validate(raw)
         end
     end
     if global.hz ~= nil and not finite(global.hz, 0.125, 2) then return false, "Invalid stream rate" end
+    if global.minimapAngle ~= nil and not finite(global.minimapAngle, -360, 360) then return false, "Invalid minimap angle" end
     if global.activeTab ~= nil and not TAB_SETTING[global.activeTab] then
         return false, "Invalid tab"
     end
@@ -185,6 +204,7 @@ function Persistence.Initialize(global)
     global.nextId = math.max(global.nextId or 1, maximum + 1)
     global.activeTab, global.fontSize, global.hz = global.activeTab or "claude", global.fontSize or 10, global.hz or 1
     if global.opacity == nil then global.opacity = 80 end
+    if global.minimapAngle == nil then global.minimapAngle = 225 end
     if global.contextEnabled == nil then global.contextEnabled = true end
     global.snippets = global.snippets or {}
     global.trace = global.trace or {}
@@ -270,6 +290,7 @@ function Core.New(global, api)
     self.scrolledAt = { claude = 0, codex = 0, copilot = 0, agy = 0 }
     self.heartbeatBackoff, self.heartbeatNextAt = HEARTBEAT_BASE, 0
     self.stallDelay, self.ringWarned, self.reloadPending = PAUSED_RETRY, false, false
+    self.bindingRetryAt, self.bindingRetryDelay = nil, BINDING_RETRY
     if api.Context ~= nil then self.context = api.Context
     elseif ns.Context then self.context = ns.Context.New() end
     -- Errors.lua has been recording since it loaded; the saved list joins it here.
@@ -279,7 +300,12 @@ function Core.New(global, api)
     self.contextNextID, self.contextRevision, self.contextNextAt = 1, 0, 0
     self.contextStatus, self.contextDomains, self.contextPublished = "Waiting for host", {}, {}
     self.contextOffPending = self.context and not self.global.contextEnabled or nil
-    if api.Binding ~= false and Binding then self.binding = Binding.New(api.BindingAPI or api) end
+    -- The file lane is chosen once, from the saved setting: a change applies at the next /reload.
+    if api.Binding ~= false then
+        if self.global.settings.fileLane == "log" and ns.LogCarrier then
+            self.binding = ns.LogCarrier.New(api.LogAPI or ns.LogCarrier.NativeAPI())
+        elseif Binding then self.binding = Binding.New(api.BindingAPI or api) end
+    end
     if api.Cooldown ~= false and CooldownCarrier then
         if api.Cooldown then self.cooldown = api.Cooldown
         else
@@ -356,7 +382,8 @@ end
 -- When the binding carrier is qualified, has a claimable key, and has not timed out on an ACK, it owns context out of combat.
 function methods:BindingContextActive()
     local carrier = self.binding
-    if not carrier or carrier.enabled ~= true or carrier.quarantined or carrier.contextBlocked or self:Combat() then
+    if not carrier or carrier.enabled ~= true or carrier.quarantined or carrier.contextBlocked or self:CarrierPaused()
+        or self:ContextOnStrip() then
         return false
     end
     if carrier.outstanding then
@@ -365,18 +392,36 @@ function methods:BindingContextActive()
     return not carrier.HasKey or carrier:HasKey()
 end
 
--- Opt-in automatic binding carrier qualification once per host session outside combat.
+-- Combat pauses the carrier path, except for a carrier that writes nothing combat protects (the log carrier).
+function methods:CarrierPaused()
+    return self:Combat() and not (self.binding and self.binding.combatSafe == true)
+end
+
+-- Automatic carrier qualification once per host session: opt-in and outside combat for the binding
+-- carrier; always, in or out of combat, for the log carrier, which touches no key binding.
+-- With the strip hidden and no link (a cold start in mode "off"), nothing else tells the host this UI
+-- session, so the log carrier's zero-addressed probe goes before the link, once per UI session.
 function methods:MaybeAutoBindProbe()
-    if not self.active or not self.connected or self.global.settings.autoBindProbe ~= true or self:Combat() then return false end
+    local wanted = self.global.settings.autoBindProbe == true or (self.binding and self.binding.combatSafe == true)
+    local cold = self.binding ~= nil and self.binding.combatSafe == true and not self.connected and not self:StripActive()
+    if not self.active or not (self.connected or cold) or not wanted or self:CarrierPaused() then return false end
     local carrier = self.binding
     if not carrier or carrier.enabled or carrier.quarantined or carrier:Busy() then return false end
-    if self.autoProbedEpoch == self.global.epoch then return false end
-    self.autoProbedEpoch = self.global.epoch
+    if cold then
+        -- Not autoProbedEpoch: at a first start the epoch is nil, and the linked path still probes a later epoch.
+        if self.coldProbed then return false end
+        self.coldProbed = true
+    else
+        if self.autoProbedEpoch == self.global.epoch then return false end
+        self.autoProbedEpoch = self.global.epoch
+    end
     local ok = carrier:Probe(self.uiNonce)
     if ok then
-        self.bindingAuto = true
+        -- The option qualified only a binding carrier; the log carrier qualifies itself.
+        if carrier.combatSafe ~= true then self.bindingAuto = true end
         self:Schedule("binding", 0, self.BindingTick)
-        self:Schedule("load", 0.2, self.LoadTick)
+        -- A cold probe gives the host time to read the line and write the chunk; an earlier load spends a slot.
+        self:Schedule("load", cold and 1 or 0.2, self.LoadTick)
     end
     return ok == true
 end
@@ -431,15 +476,98 @@ function methods:OfferHeartbeat()
     return written, reason
 end
 
--- The strip reaches the host only while WoW is in front. After a stall, or while the host says a file
--- lane last moved its cursor, the binding carrier advertises the ring slot instead.
+-- Whether the binding carrier can carry everything the strip would: queued input, context and the
+-- heartbeat. It writes nothing in combat, and a full key set, a refused claim or an unanswered
+-- frame each mean it cannot. The cooldown carrier never carries input, so it does not count.
+function methods:BindingCarries()
+    if self:CarrierPaused() or not self.connected or self.stalled then return false end
+    local carrier = self.binding
+    if not carrier or carrier.enabled ~= true or carrier.quarantined or carrier.contextBlocked
+        or carrier.inputBlocked or self:ContextOnStrip() then return false end
+    return not carrier.HasKey or carrier:HasKey() == true
+end
+
+-- Marks the binding carrier as unable to carry context. An acknowledgement clears the mark; with no
+-- frame outstanding none will come, so BindingTick clears it after BINDING_RETRY seconds.
+function methods:BlockContext()
+    self.binding.contextBlocked = true
+    self.contextBlockedUntil = self:ContextNow() + BINDING_RETRY
+    -- Where a strip exists the row is the strip's from here: an acknowledgement that clears the mark must
+    -- not hand the same row back to the carrier, or hide the strip that is sending it.
+    if self.contextPending and (self.global.settings.stripMode or "always") ~= "off" then
+        self.contextPending.viaStrip = true
+    end
+end
+
+function methods:ContextOnStrip()
+    return self.contextPending ~= nil and self.contextPending.viaStrip == true
+end
+
+-- Marks the binding carrier as unable to carry input until bindingRetryAt. A mark still inside its
+-- window is left alone, so a claim refused on every tick does not extend it; an expired one is renewed.
+function methods:BlockBinding()
+    local carrier = self.binding
+    if not carrier then return end
+    if carrier.inputBlocked and self:ContextNow() < (self.bindingRetryAt or 0) then return end
+    carrier.inputBlocked = true
+    self.bindingRetryAt = self:ContextNow() + self.bindingRetryDelay
+    self.bindingRetryDelay = math.min(self.bindingRetryDelay * 2, BINDING_RETRY_CEILING)
+end
+
+-- Whether the 132x12 top-left optical strip should draw right now. Calibration and burst probes
+-- always show it; "fallback" hides it only while the binding carrier carries everything; "off"
+-- never draws it, and QueueBatch refuses prompts while that carrier cannot.
+function methods:StripActive()
+    if self.calibrating or self.burstProbe ~= nil then return true end
+    local mode = self.global.settings.stripMode or "always"
+    if mode == "off" then return false end
+    if mode == "fallback" then return not self:BindingCarries() end
+    return true
+end
+
+-- Hides the strip while StripActive() is false and restarts its tick once that turns true again,
+-- so a carrier that stops carrying never strands queued input. stripHidden records that the strip
+-- was hidden for that reason; in mode "always" it is never set, so this schedules and cancels nothing.
+function methods:SyncStrip()
+    if not self:StripActive() then
+        local wasHidden = self.stripHidden
+        self.stripHidden = true
+        self:CancelTimer("pixel")
+        if self.view then self.view:RenderStrip(nil, nil) end
+        if not wasHidden then self:OfferBindingHeartbeat() end
+        -- A heartbeat write that failed marks the carrier, so the strip comes straight back.
+        if not self:StripActive() then return end
+    end
+    if self.stripHidden then
+        self.stripHidden = nil
+        if self:WantStream() then self:Schedule("pixel", 0.2, self.PixelTick) end
+    end
+    -- PixelTick stops without setting stripHidden while nothing is wanted, so outside mode "always" the
+    -- tick restarts here once demand returns. StripActive() holds here: the branch above returned if not.
+    if (self.global.settings.stripMode or "always") ~= "always" and not self.timers.pixel and self:WantStream() then
+        self:Schedule("pixel", 0.2, self.PixelTick)
+    end
+end
+
+-- The strip reaches the host only while WoW is in front. After a stall, while the strip is hidden,
+-- or while the host says a file lane last moved its cursor, the binding carrier advertises the ring slot instead.
 function methods:OfferBindingHeartbeat()
     local carrier = self.binding
     if not self.active or not carrier or carrier.enabled ~= true or not self.everLinked or carrier:Busy() ~= false then
         return false
     end
-    if not self.stalled and self.cursorLane ~= "file" then return false end
-    local written, reason = carrier:Heartbeat(self.ring.nextSeq, self:HeartbeatFlags())
+    -- A heartbeat whose write failed is not offered again before its retry time. An input mark alone
+    -- does not stop it: after a stall the heartbeat is how the host finds the ring again.
+    if self.heartbeatRetryAt then
+        if self:ContextNow() < self.heartbeatRetryAt then return false end
+        self.heartbeatRetryAt = nil
+    end
+    if not self.stalled and self.cursorLane ~= "file" and self:StripActive() then return false end
+    local written, reason, failed = carrier:Heartbeat(self.ring.nextSeq, self:HeartbeatFlags())
+    if failed then
+        self:BlockBinding()
+        self.heartbeatRetryAt = math.max(self.bindingRetryAt or 0, self:ContextNow() + BINDING_RETRY)
+    end
     local refused = not written and tostring(reason) or nil
     if refused and refused ~= self.bindingHeartbeatReason then self:Trace("binding heartbeat refused: " .. refused) end
     self.bindingHeartbeatReason = refused
@@ -508,9 +636,14 @@ end
 
 function methods:ContextTick()
     if not self.active or not self:ContextActive() then return end
+    -- Mode off has no strip to take a slow row, so a row the binding carrier is still sending keeps its
+    -- deadline open: the 30 s count from the last moment the carrier held it.
+    local pending, item = self.contextPending, self.binding and self.binding.active
+    if pending and item and item.kind == "context" and not item.abandoned
+        and (self.global.settings.stripMode or "always") == "off" then pending.carriedAt = self:ContextNow() end
     if not self.connected or self.contextProtocol ~= 4 then
         self.contextStatus = self.connected and "Unsupported host" or "Waiting for host"
-    elseif self.contextPending and (self:ContextNow() - self.contextPending.createdAt >= 30
+    elseif pending and (self:ContextNow() - math.max(pending.createdAt, pending.carriedAt or 0) >= 30
         or (self.contextPending.retryAt and self:ContextNow() >= self.contextPending.retryAt)) then
         local current = self.contextCurrent
         current.retries = (current.retries or 0) + 1
@@ -738,10 +871,18 @@ function methods:Start()
     self:Schedule("context", 1, self.ContextTick)
     if self.cooldown then self:Schedule("cooldown", 1, self.CooldownTick) end
     if self.binding and self.binding:Busy() then self:Schedule("binding", 1, self.BindingTick) end
+    self:MaybeAutoBindProbe()
 end
 
 function methods:Stop()
     self.active, self.visible, self.generation, self.loading = false, false, self.generation + 1, nil
+    -- A combat minimize is ours to undo; the saved layout keeps only the player's own choice.
+    if self.combatMinimized then
+        self.global.view.minimized = false
+        if self.view and self.view.SetMinimized then self.view:SetMinimized(false) end
+    end
+    self.combatHidden, self.combatMinimized, self.stripHidden = nil, nil, nil
+    self.bindingRetryAt, self.bindingRetryDelay, self.heartbeatRetryAt = nil, BINDING_RETRY, nil
     self:CancelTimer("load")
     self:CancelTimer("pixel")
     self:CancelTimer("context")
@@ -793,6 +934,7 @@ function methods:Snapshot()
     local ring = self.ring:Snapshot()
     local status = self:InboundPaused() and "Paused: combat (outbound remains active)" or ring.status
     if self.stalled then status = "Waiting for the desktop; updates pause while WoW is in the background" end
+    if self.global.settings.stripMode == "off" and not self:BindingCarries() then status = STRIP_OFF_NOTICE end
     if stale > 0 then status = status .. " / " .. stale .. " retained: /witch pending to review" end
     -- A pending reload is derived from state, so neither input (which clears the notice) nor a later
     -- notice such as a resend can hide it.
@@ -835,11 +977,14 @@ end
 function methods:SetVisible(visible)
     if not self.active or type(visible) ~= "boolean" or self.visible == visible then return end
     self.visible = visible
-    if visible then self:ResetHeartbeatBackoff() end
+    if visible then
+        self.combatHidden = nil
+        self:ResetHeartbeatBackoff()
+    end
     self:Render()
     if self:WantStream() then
         self:Schedule("load", 1, self.LoadTick)
-        self:Schedule("pixel", 0.2, self.PixelTick)
+        if self:StripActive() then self:Schedule("pixel", 0.2, self.PixelTick) else self.stripHidden = true end
     else
         self:CancelTimer("load"); self:CancelTimer("pixel")
         if self.view then self.view:RenderStrip(nil, nil) end
@@ -946,7 +1091,13 @@ function methods:Setting(key) return self.global.settings[key] end
 
 -- One validated change from the Options page or a slash command, applied at once.
 function methods:SetSetting(key, value)
-    if not validSetting(key, value) then return false, "Invalid value for " .. tostring(key) end
+    local spec = SETTINGS[key]
+    -- Range first: an out-of-range value is refused, never rounded into range.
+    if spec and spec.min and finite(value, spec.min, spec.max) then value = math.floor(value + 0.5) end
+    if not validSetting(key, value) then
+        if key == "windowScale" then return false, "Window scale must be 80 to 140 percent" end
+        return false, "Invalid value for " .. tostring(key)
+    end
     if self.global.settings[key] == value then return true end
     -- Hiding a tab is a display preference, and the last visible tab cannot be hidden.
     local tabSetting = key == "tabClaude" or key == "tabCodex" or key == "tabCopilot" or key == "tabAgy"
@@ -963,6 +1114,7 @@ function methods:SetSetting(key, value)
     end
     if key == "minimap" and self.api.SetMinimapShown then self.api.SetMinimapShown(value) end
     if key == "combatUpdates" and value and self.active and self:Combat() then self:Schedule("load", 0.2, self.LoadTick) end
+    if key == "stripMode" and self.active then self:SyncStrip(); self:MaybeAutoBindProbe() end
     if key == "autoBindProbe" then
         if value then self:MaybeAutoBindProbe()
         else
@@ -1055,8 +1207,47 @@ function methods:SaveView(value)
     if not validView(value) then return false end
     local copy = {}
     for _, key in ipairs({ "point", "relativePoint", "x", "y", "width", "height", "minimized" }) do copy[key] = value[key] end
+    if self.combatMinimized and copy.minimized == false then self.combatMinimized = nil end
     self.global.view = copy
     self:Render()
+    return true
+end
+
+function methods:SetHz(value)
+    local ok, reason = self.ring:SetHz(value)
+    if not ok then return false, reason end
+    self.global.hz = value
+    if self.active and self:WantStream() and not self:InboundPaused() then
+        self:Schedule("load", math.min(self.ring.delay, self.ring.baseDelay), self.LoadTick)
+    end
+    return true
+end
+
+function methods:SetMinimapAngle(angle)
+    if not finite(angle, -360, 360) then return false, "Invalid minimap angle" end
+    angle = angle % 360
+    self.global.minimapAngle = angle
+    if self.api.SetMinimapAngle then self.api.SetMinimapAngle(angle) end
+    return true
+end
+
+function methods:ResetPosition()
+    self.combatHidden, self.combatMinimized = nil, nil
+    self.global.settings.docked = false
+    self.global.settings.locked = false
+    self.global.settings.windowScale = 100
+    self.global.view = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0,
+        width = 900, height = 650, minimized = false }
+    if self.active then self:EnsureView(); self.visible = true end
+    -- A stopped controller keeps its View, which reads the saved layout only once; it is reset too.
+    if self.view and self.view.ResetLayout then self.view:ResetLayout() end
+    if self.active then
+        self:Render()
+        if self:WantStream() then
+            self:Schedule("load", 1, self.LoadTick)
+            if self:StripActive() then self:Schedule("pixel", 0.2, self.PixelTick) else self.stripHidden = true end
+        end
+    end
     return true
 end
 
@@ -1078,6 +1269,10 @@ end
 
 -- Stage every row before mutating the durable queue or arming any carrier.
 function methods:QueueBatch(tab, batch, replace)
+    -- With the strip off only the binding carrier delivers; refuse rather than queue what nothing sends. This
+    -- comes before the host check: a cold start in "off" links only through the log carrier's probe, so waiting
+    -- for the host is the wrong advice.
+    if self.active and self.global.settings.stripMode == "off" and not self:BindingCarries() then return false, STRIP_OFF_NOTICE end
     if not self.active or not self.connected or not epoch(self.global.epoch) then return false, "Wait for the terminal host" end
     for _, session in ipairs(self.sessions) do
         local stopped = session.id == tab and stoppedStatus(session.status)
@@ -1127,6 +1322,7 @@ function methods:SendLong(tab, text, replace)
     if #text <= 600 and not text:find("[\r\n]") and not Prompts.Reserved(text) and self.promptProtocol ~= 1 then
         return self:QueueBatch(tab, { { action = "text", text = text } }, replace)
     end
+    if self.active and self.global.settings.stripMode == "off" and not self:BindingCarries() then return false, STRIP_OFF_NOTICE end
     if not self.active or not self.connected then return false, "Wait for the terminal host" end
     if self.promptProtocol ~= 1 then return false, "Update the desktop daemon to send this prompt; the draft is retained" end
     local parts, reason = Prompts.Parts(text)
@@ -1336,6 +1532,7 @@ function methods:ReceiveChunk(payload)
         end
         self.connected, self.contextProtocol, self.cursorLane = false, nil, nil
         self:OfferBindingHeartbeat()
+        self:SyncStrip()
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
     local global = self.global
@@ -1344,7 +1541,16 @@ function methods:ReceiveChunk(payload)
     global.nextId = math.max(global.nextId, result.ack + 1)
     if self.binding then
         local accepted, kind = self.binding:AcceptHost(result)
-        if accepted and kind == "probe" then self:Print("Witchcraft binding carrier proved host decode, ACK, and exact cleanup") end
+        if accepted then self.bindingRetryDelay, self.heartbeatRetryAt = BINDING_RETRY, nil end
+        -- A host change in combat disables the carrier but cannot clear its frame; the binding tick finishes that.
+        local left = self.binding.enabled ~= true and self.binding.outstanding
+        if left and not left.probe then self.bindingStopPending = true end
+        if accepted and kind == "probe" then
+            -- An acknowledged log probe, a cold one too, is this host epoch's: within it only /reload probes again.
+            if self.binding.combatSafe == true then self.autoProbedEpoch = global.epoch end
+            self:Print(self.binding.combatSafe == true and "Witchcraft log carrier proved host decode and ACK"
+                or "Witchcraft binding carrier proved host decode, ACK, and exact cleanup")
+        end
     end
     self:AcceptCooldownHost(result)
     local retained = {}
@@ -1426,7 +1632,16 @@ function methods:ReceiveChunk(payload)
             if kind then
                 self.attention[id] = kind
                 local notice, sound = settings.alertText ~= false, settings.alertSound ~= false
-                if (notice or sound) and self.view and self.view.Alert then self.view:Alert(id, kind, { text = notice, sound = sound }) end
+                local channel = settings.alertChannel or "raid"
+                local soundStyle = settings.alertSoundStyle or "raid"
+                if notice and channel == "chat" then
+                    local title = TAB_TITLE[id] or "Claude"
+                    self:Print(kind == "waiting" and (title .. " needs you") or (title .. " finished"))
+                end
+                local raidText = notice and channel ~= "chat"
+                if (raidText or sound) and self.view and self.view.Alert then
+                    self.view:Alert(id, kind, { text = raidText, sound = sound, soundStyle = soundStyle })
+                end
             end
         end
         if now ~= "waiting" and self.attention[id] == "waiting" then self.attention[id] = false end
@@ -1448,6 +1663,7 @@ function methods:ReceiveChunk(payload)
     self:ResetHeartbeatBackoff()
     self:MaybeAutoBindProbe()
     self:AcceptContext(result)
+    self:SyncStrip()
     self:Render()
     return true
 end
@@ -1511,6 +1727,7 @@ function methods:LoadTick()
     self:WarnRing()
     self:OfferHeartbeat()
     self:OfferBindingHeartbeat()
+    self:SyncStrip()
     self:Render()
     if self:WantStream() then
         self:Schedule("load", self.ring.delay, self.LoadTick)
@@ -1521,10 +1738,12 @@ function methods:LoadTick()
 end
 
 function methods:PixelTick()
-    if not self:WantStream() then
+    if not self:WantStream() or not self:StripActive() then
+        if self:WantStream() then self.stripHidden = true end
         if self.view then self.view:RenderStrip(nil, nil) end
         return
     end
+    self.stripHidden = nil
     local colors
     if self.calibrating then
         colors = ns.Pixel.Calibration()
@@ -1559,8 +1778,19 @@ function methods:PixelTick()
 end
 
 function methods:BindingTick()
-    if not self.active or not self.binding or self.binding.quarantined then return end
-    if self.bindingStopPending and not self:Combat() then
+    if not self.active or not self.binding then return end
+    -- A carrier quarantined since the last tick carries nothing more; fallback takes the strip back here.
+    if self.binding.quarantined then self:SyncStrip(); return end
+    -- An expired mark clears on a tick that can try the carrier again, so a failure that still holds marks
+    -- it again below, before SyncStrip, and fallback never hides the strip for a tick in between.
+    local clock = self.binding.Now and self.binding:Now() or self:ContextNow()
+    local ready = not self:CarrierPaused() and (clock - (self.binding.lastWriteAt or 0) >= 1)
+    if ready and self.binding.inputBlocked and self:ContextNow() >= (self.bindingRetryAt or 0) then
+        self.binding.inputBlocked = nil
+    end
+    if ready and self.binding.contextBlocked and not self.binding.outstanding
+        and self:ContextNow() >= (self.contextBlockedUntil or 0) then self.binding.contextBlocked = nil end
+    if self.bindingStopPending and not self:CarrierPaused() then
         if self.binding:Stop() then self.bindingStopPending = nil end
     end
     -- An input whose message is no longer queued is cancelled here too, which retries a cancel deferred in combat.
@@ -1568,32 +1798,51 @@ function methods:BindingTick()
     if active and active.kind == "input" then
         local activeEpoch, activeId = active.identity:match("^input:(%x+):(%d+)$")
         if not queued(self.global.outbox, activeEpoch, tonumber(activeId)) then self.binding:Cancel(active.identity) end
-    elseif active and active.kind == "context" then
+        -- An unanswered input frame marks the carrier, so fallback draws the strip to carry the message too.
         local outstanding = self.binding.outstanding
         if outstanding and (self:ContextNow() - (outstanding.sentAt or 0)) >= BINDING_ACK_TIMEOUT then
-            self.binding.contextBlocked = true
-            if not self:Combat() then self.binding:Cancel(active.identity) end
+            self:BlockBinding()
+        end
+    elseif active and active.kind == "context" then
+        local outstanding = self.binding.outstanding
+        local late = outstanding and (self:ContextNow() - (outstanding.sentAt or 0)) >= BINDING_ACK_TIMEOUT
+        -- A long row can be acknowledged frame by frame and still miss its deadline; mode off has no strip to take it.
+        local pending = self.contextPending
+        local slow = pending and (self:ContextNow() - pending.createdAt) >= BINDING_CONTEXT_BUDGET
+            and (self.global.settings.stripMode or "always") ~= "off"
+        if not active.abandoned and (late or slow) then
+            self:BlockContext()
+            -- Cancel only marks a claimed data frame, so it needs no combat guard.
+            self.binding:Cancel(active.identity)
             self:PixelTick()
         end
     end
-    if not self:Combat() and self.binding.enabled and not self.binding.active and not self.binding.outstanding then
+    if not self:CarrierPaused() and self.binding.enabled and not self.binding.active and not self.binding.outstanding then
         local message = self:PendingInput()
         if message then self.binding:OfferInput(message)
         elseif self.contextPending and not self:CooldownActive() and not self.binding.contextBlocked
+            and not self:ContextOnStrip()
             and (not self.binding.HasKey or self.binding:HasKey()) then
             self.binding:OfferContext({ epoch = self.contextPending.epoch, uiNonce = self.contextPending.uiNonce,
                 id = self.contextPending.id, text = self.contextPending.text })
         end
     end
     local hadContext = self.binding.active and self.binding.active.kind == "context" and not self.binding.outstanding
+    local hadInput = self.binding.active and self.binding.active.kind == "input" and not self.binding.outstanding
     local now = self.binding.Now and self.binding:Now() or self:ContextNow()
-    local canTry = not self:Combat() and (now - (self.binding.lastWriteAt or 0) >= 1)
-    local pumped = self.binding:Pump(self.ring.nextSeq)
+    local canTry = not self:CarrierPaused() and (now - (self.binding.lastWriteAt or 0) >= 1)
+    -- Pump can quarantine the carrier, which drops its active item; the identity is read before it.
+    local attempted = self.binding.active and self.binding.active.identity
+    -- A marked carrier keeps its buffered input and makes no claim attempt before the retry time.
+    local pumped = not (hadInput and self.binding.inputBlocked) and self.binding:Pump(self.ring.nextSeq)
     if hadContext and canTry and not pumped and not self.binding.outstanding then
-        self.binding.contextBlocked = true
-        self.binding:Cancel(self.binding.active.identity)
+        self:BlockContext()
+        self.binding:Cancel(attempted)
         self:PixelTick()
     end
+    -- A refused input claim keeps its input; only the mark changes, and the strip carries it as well.
+    if hadInput and canTry and not pumped and not self.binding.outstanding then self:BlockBinding() end
+    self:SyncStrip()
     if self.binding:Busy() or self.binding.enabled or self.bindingStopPending then self:Schedule("binding", 1, self.BindingTick) end
 end
 
@@ -1629,24 +1878,51 @@ end
 function methods:OnEvent(event)
     if not self.active then return end
     if event == "UPDATE_BINDINGS" then
+        -- SetBinding fires this inside the carrier's own write; nothing may run until that write records itself.
+        if self.binding and self.binding.mutating then return end
         if self.binding then self.binding:OnBindingsChanged() end
+        self:SyncStrip()
     elseif event == "PLAYER_LOGOUT" then
         -- Nothing else would clear a heartbeat once the game closes; bypass only our own write
         -- interval while retaining the carrier's build, security, combat and ownership gates.
         self:ReleaseCooldown(true)
+        -- PLAYER_LOGOUT fires on /reload too: a combat minimize must not reach the saved layout.
+        if self.combatMinimized then self.global.view.minimized = false end
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- No heartbeat is offered here: the carrier's gate refuses every write in combat.
         -- With "keep updating in combat" on, the load timer is the only thing that re-arms
         -- itself, so it keeps running; the setting is read rather than InCombatLockdown, which
         -- may not be true yet inside this event.
+        local behavior = self.global.settings.combatWindow
+        if behavior == "hide" and self.visible then
+            self:SetVisible(false)
+            self.combatHidden = true
+        elseif behavior == "minimize" and self.visible and self.global.view.minimized ~= true then
+            self.combatMinimized = true
+            self.global.view.minimized = true
+            if self.view and self.view.SetMinimized then self.view:SetMinimized(true) end
+        end
         if self.global.settings.combatUpdates ~= true then self:CancelTimer("load") end
+        if self:WantStream() and self.global.settings.stripMode == "fallback" then
+            self:Schedule("pixel", 0.2, self.PixelTick)
+        end
     elseif event == "PLAYER_REGEN_ENABLED" then
         if self.resetRequested then self:Reset(); return end
+        if self.combatHidden then
+            self.combatHidden = nil
+            self:SetVisible(true)
+        end
+        if self.combatMinimized then
+            self.combatMinimized = nil
+            self.global.view.minimized = false
+            if self.view and self.view.SetMinimized then self.view:SetMinimized(false) end
+        end
         if self.cooldownDeferred then self:ReleaseCooldown() end
         self:OfferHeartbeat()
         self:OfferBindingHeartbeat()
         self:MaybeAutoBindProbe()
         if self:WantStream() then self:Schedule("load", 1, self.LoadTick) end
+        self:SyncStrip()
         if self.binding and (self.binding:Busy() or self.binding.enabled) then self:Schedule("binding", 0, self.BindingTick) end
     end
     self:Render()
@@ -1735,6 +2011,28 @@ function methods:HandleSlash(input)
         local ok, reason = self:SetFontSize(tonumber(arg)); if not ok then self:Print(reason) end
     elseif command == "opacity" then
         local ok, reason = self:SetOpacity(tonumber(arg)); if not ok then self:Print(reason) end
+    elseif command == "scale" then
+        local ok, reason = self:SetSetting("windowScale", tonumber(arg))
+        if not ok then self:Print(reason) end
+    elseif command == "resetpos" then
+        self:ResetPosition()
+        self:Print("Witchcraft window position and size reset")
+    elseif command == "strip" then
+        local mode = arg:lower()
+        if mode == "" then
+            self:Print("Pixel strip mode: " .. tostring(self:Setting("stripMode")) .. "; /witch strip always|fallback|off")
+        else
+            local ok = self:SetSetting("stripMode", mode)
+            self:Print(ok and ("Pixel strip mode: " .. mode) or "Usage: /witch strip always|fallback|off")
+        end
+    elseif command == "filelane" then
+        -- Saved for the next /reload; the running carrier is never swapped.
+        local lane = arg:lower()
+        if lane == "" then
+            self:Print("Witchcraft file lane: " .. tostring(self:Setting("fileLane")) .. "; /witch filelane log|binding")
+        elseif self:SetSetting("fileLane", lane) then
+            self:Print("Witchcraft file lane: " .. lane .. "; /reload to apply")
+        else self:Print("Usage: /witch filelane log|binding") end
     elseif command == "cols" then
         local ok, detail = self:RequestCols(arg == "fit" and "fit" or tonumber(arg))
         self:Print(ok and ("Terminal width request queued (" .. tostring(detail) .. " columns)") or detail)
@@ -1746,8 +2044,8 @@ function methods:HandleSlash(input)
             self:Print(ok and "Session journal clear queued" or reason)
         else self:Print("WoW context: " .. self:Snapshot().context.status .. "; /witch context on|off|refresh|clear-journal") end
     elseif command == "hz" then
-        local ok, reason = self.ring:SetHz(tonumber(arg))
-        if ok then self.global.hz = tonumber(arg) else self:Print(reason) end
+        local ok, reason = self:SetHz(tonumber(arg))
+        if not ok then self:Print(reason) end
     elseif command == "calibrate" then
         self.calibrating = arg ~= "off"
         self:Schedule("pixel", 0.2, self.PixelTick)
@@ -1773,7 +2071,8 @@ function methods:HandleSlash(input)
             -- An explicit off always stops (and releases any claimed key) here, so SetSetting does not stop too.
             if not enabled then self.bindingAuto = nil end
             self:SetSetting("autoBindProbe", enabled)
-            if not enabled and self.binding and not self.binding:Stop() then
+            -- The option governs the binding carrier only; off leaves the log carrier running.
+            if not enabled and self.binding and self.binding.combatSafe ~= true and not self.binding:Stop() then
                 self.bindingStopPending = true
             end
             self:Print("Binding carrier auto-probe " .. (enabled and "enabled" or "disabled"))
@@ -1782,7 +2081,8 @@ function methods:HandleSlash(input)
             local ok, reason = self.binding:Probe(self.uiNonce)
             if ok then
                 self.bindingAuto = nil
-                self:Print("Binding carrier canary armed; one verified-empty key will be restored after host ACK")
+                self:Print(self.binding.combatSafe == true and "Log carrier probe started; waiting for host ACK"
+                    or "Binding carrier canary armed; one verified-empty key will be restored after host ACK")
                 self:Schedule("binding", 0, self.BindingTick)
                 self:Schedule("load", 0.2, self.LoadTick)
             else self:Print(reason) end
@@ -1803,14 +2103,16 @@ function methods:HandleSlash(input)
             self.reloadPending and " / reload pending" or ""))
         local detail = snapshot.cooldown.reason or snapshot.cooldown.quarantined
         local cooldown = snapshot.cooldown.status .. (detail and (" (" .. detail .. ")") or "")
-        self:Print(string.format("Witchcraft lanes: binding %s | cooldown %s | cursor %s", snapshot.binding.status or "?",
+        local lane = self.binding and self.binding.combatSafe == true and "log" or "binding"
+        self:Print(string.format("Witchcraft lanes: %s %s | cooldown %s | cursor %s", lane, snapshot.binding.status or "?",
             cooldown, self.cursorLane or "none"))
     else
         self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
             .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"
-            .. " | tab <claude|codex|copilot|agy> [on|off] | size 8-20 | cols 40-160|fit | opacity 0-100"
-            .. " | context on|off|refresh|clear-journal | hz 0.125-2"
-            .. " | calibrate [off] | burstprobe [200-2000|corrupt|off] | bindprobe [auto|off] | status | resend | reset")
+            .. " | tab <claude|codex|copilot|agy> [on|off] | size 8-20 | scale 80-140 | cols 40-160|fit | opacity 0-100"
+            .. " | resetpos | strip [always|fallback|off] | context on|off|refresh|clear-journal | hz 0.125-2"
+            .. " | calibrate [off] | burstprobe [200-2000|corrupt|off] | bindprobe [auto|off] | filelane log|binding"
+            .. " | status | resend | reset")
     end
 end
 
@@ -1840,6 +2142,9 @@ if LibStub then
             end,
             SetMinimapShown = function(shown)
                 if addon.minimapButton then if shown then addon.minimapButton:Show() else addon.minimapButton:Hide() end end
+            end,
+            SetMinimapAngle = function(angle)
+                if addon.minimapButton and addon.minimapButton.SetAngle then addon.minimapButton:SetAngle(angle) end
             end,
             NewTimer = function(delay, callback) return C_Timer.NewTimer(delay, callback) end,
             LoadAddOn = function(name)
@@ -1886,7 +2191,14 @@ if LibStub then
         self.events:RegisterEvent("UPDATE_BINDINGS")
         self.events:RegisterEvent("PLAYER_LOGOUT")
         controller:Start()
-        if not self.minimapButton then self.minimapButton = ns.MinimapButton.Create(function() self:Toggle() end) end
+        if not self.minimapButton then
+            self.minimapButton = ns.MinimapButton.Create(function() self:Toggle() end, {
+                angle = controller.global.minimapAngle,
+                onAngleChanged = function(angle) controller:SetMinimapAngle(angle) end,
+            })
+        elseif self.minimapButton.SetAngle then
+            self.minimapButton:SetAngle(controller.global.minimapAngle)
+        end
         if self.minimapButton then
             if controller:Setting("minimap") ~= false then self.minimapButton:Show() else self.minimapButton:Hide() end
         end

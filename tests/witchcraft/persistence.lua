@@ -204,3 +204,90 @@ test("AceAddon checks raw database before constructing AceDB", function()
     equal(state.newCalls, 1); equal(addon.controller, nil)
     equal(env.WitchcraftDB.global.probe.logins, 2); equal(env.WitchcraftDB.global.nextId, 1)
 end)
+
+test("minimap angle and new window/alert/strip settings validate bounds and support draggable rim placement", function()
+    for _, angle in ipairs({ -180, 0, 135.5, 225, 360 }) do
+        local raw = { global = { schema = 1, minimapAngle = angle, settings = {
+            windowScale = 115, idleFade = true, combatWindow = "minimize",
+            alertChannel = "chat", alertSoundStyle = "ready", stripMode = "fallback", autoFitCols = true,
+        } } }
+        equal(ns.Persistence.Validate(raw), true)
+    end
+    for _, bad in ipairs({
+        { global = { minimapAngle = 361 } },
+        { global = { minimapAngle = -361 } },
+        { global = { minimapAngle = "225" } },
+        { global = { settings = { windowScale = 75 } } },
+        { global = { settings = { windowScale = 145 } } },
+        { global = { settings = { windowScale = 100.5 } } },
+        { global = { settings = { combatWindow = "destroy" } } },
+        { global = { settings = { stripMode = "sometimes" } } },
+        { global = { settings = { alertChannel = "yell" } } },
+        { global = { settings = { alertSoundStyle = "gong" } } },
+    }) do
+        local before = clone(bad)
+        equal(ns.Persistence.Validate(bad), false)
+        same(bad, before)
+    end
+
+    -- Draggable MinimapButton places on the rim, attaches OnUpdate only while dragging, and persists on stop.
+    local savedGlobals = { Minimap = _G.Minimap, CreateFrame = _G.CreateFrame, GetCursorPosition = _G.GetCursorPosition,
+        GameTooltip = _G.GameTooltip }
+    local cursorX, cursorY, toggled, savedAngle = 200, 100, 0, nil
+    _G.Minimap = {
+        GetFrameLevel = function() return 2 end,
+        GetCenter = function() return 100, 100 end,
+        GetEffectiveScale = function() return 1 end,
+    }
+    _G.GetCursorPosition = function() return cursorX, cursorY end
+    _G.GameTooltip = { IsOwned = function() return false end, Hide = function() end }
+    _G.CreateFrame = function(_, name, parent)
+        local btn = { name = name, parent = parent, scripts = {}, textures = {} }
+        function btn:SetSize(w, h) self.w, self.h = w, h end
+        function btn:SetFrameLevel(lvl) self.lvl = lvl end
+        function btn:RegisterForClicks() end
+        function btn:RegisterForDrag(buttonName) self.dragButton = buttonName end
+        function btn:SetHighlightTexture() end
+        function btn:ClearAllPoints() self.point = nil end
+        function btn:SetPoint(...) self.point = { ... } end
+        function btn:SetScript(ev, fn) self.scripts[ev] = fn end
+        function btn.CreateTexture()
+            local tex = {}
+            tex.SetSize = function() end
+            tex.SetPoint = function() end
+            tex.SetTexture = function() end
+            tex.SetTexCoord = function() end
+            btn.textures[#btn.textures + 1] = tex
+            return tex
+        end
+        return btn
+    end
+    local ok, err = xpcall(function()
+        local btn = ns.MinimapButton.Create(function() toggled = toggled + 1 end, {
+            angle = 90,
+            onAngleChanged = function(angle) savedAngle = angle end,
+        })
+        equal(btn.dragButton, "LeftButton")
+        equal(btn.angle, 90)
+        assert(math.abs(btn.point[4]) < 0.001 and math.abs(btn.point[5] - 80) < 0.001, "90 degrees sits at top of minimap")
+        equal(btn.scripts.OnUpdate, nil, "idle minimap button never runs OnUpdate")
+        btn.scripts.OnDragStart(btn)
+        assert(type(btn.scripts.OnUpdate) == "function", "dragging attaches OnUpdate")
+        cursorX, cursorY = 100, 20 -- directly below center -> 270 degrees
+        btn.scripts.OnUpdate(btn)
+        equal(math.floor(btn.angle + 0.5), 270)
+        cursorX, cursorY = 200, 100 -- directly right of center -> 0 degrees
+        btn.scripts.OnDragStop(btn)
+        equal(btn.scripts.OnUpdate, nil, "releasing drag detaches OnUpdate")
+        equal(math.floor((savedAngle or -1) + 0.5), 0)
+        -- Hiding mid-drag also detaches OnUpdate cleanly.
+        btn.scripts.OnDragStart(btn)
+        assert(btn.scripts.OnUpdate ~= nil)
+        btn.scripts.OnHide(btn)
+        equal(btn.scripts.OnUpdate, nil, "OnHide cleans up active drag OnUpdate")
+        btn.scripts.OnClick(btn)
+        equal(toggled, 1)
+    end, debug.traceback)
+    for k, v in pairs(savedGlobals) do _G[k] = v end
+    assert(ok, err)
+end)

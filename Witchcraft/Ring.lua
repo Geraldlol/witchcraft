@@ -131,7 +131,7 @@ function Ring.New(options)
         nextSeq = 1, ringSize = integer(options.ringSize, 1, 9999) and options.ringSize or 3000,
         baseDelay = 1, delay = 1, status = "Waiting for host", ack = 0, retired = {}, retiredCount = 0,
         epoch = epoch(options.epoch) and options.epoch:lower() or nil, accepted = 0,
-        uiNonce = options.uiNonce, contextAck = 0, bindingAck = 0,
+        uiNonce = options.uiNonce, contextAck = 0, bindingAck = 0, logAck = 0,
     }, methods):SetHz(options.hz or 1)
 end
 
@@ -183,9 +183,17 @@ function methods:OnChunk(payload)
             return self:Reject("context extension")
         end
     end
-    if payload.bindingProtocol ~= nil or payload.bindingNonce ~= nil or payload.bindingAck ~= nil then
+    -- bindingUi, the UI session the binding acknowledgement belongs to, is optional (an older daemon leaves it out).
+    if payload.bindingProtocol ~= nil or payload.bindingNonce ~= nil or payload.bindingAck ~= nil
+        or payload.bindingUi ~= nil then
         if payload.bindingProtocol ~= 1 or not epoch(payload.bindingNonce)
-            or not integer(payload.bindingAck, 0, 16777215) then return self:Reject("binding extension") end
+            or not integer(payload.bindingAck, 0, 16777215)
+            or (payload.bindingUi ~= nil and not epoch(payload.bindingUi)) then return self:Reject("binding extension") end
+    end
+    -- The log carrier's extension mirrors the binding one; logUi is optional the same way.
+    if payload.logProtocol ~= nil or payload.logNonce ~= nil or payload.logAck ~= nil or payload.logUi ~= nil then
+        if payload.logProtocol ~= 1 or not epoch(payload.logNonce) or not integer(payload.logAck, 0, 16777215)
+            or (payload.logUi ~= nil and not epoch(payload.logUi)) then return self:Reject("log extension") end
     end
     if payload.cooldownProtocol ~= nil or payload.cooldownNonce ~= nil
         or payload.cooldownAck ~= nil or payload.cooldownChecksum ~= nil then
@@ -201,8 +209,13 @@ function methods:OnChunk(payload)
     if incomingEpoch == self.epoch and payload.contextProtocol == 4 and payload.contextAck < self.contextAck then
         return self:Reject("context acknowledgement regression")
     end
+    -- The host restarts its binding sequence for a new UI session (bindingUi), so only the same session can regress.
+    local bindingUi = payload.bindingUi and payload.bindingUi:lower()
     if incomingEpoch == self.epoch and payload.bindingProtocol == 1 and payload.bindingNonce == self.bindingNonce
-        and payload.bindingAck < self.bindingAck then return self:Reject("binding acknowledgement regression") end
+        and bindingUi == self.bindingUi and payload.bindingAck < self.bindingAck then return self:Reject("binding acknowledgement regression") end
+    local logUi = payload.logUi and payload.logUi:lower()
+    if incomingEpoch == self.epoch and payload.logProtocol == 1 and payload.logNonce == self.logNonce
+        and logUi == self.logUi and payload.logAck < self.logAck then return self:Reject("log acknowledgement regression") end
     local promptResults = {}
     if payload.promptProtocol == 1 then
         if not array(payload.promptResults, 64) then return self:Reject("prompt receipts") end
@@ -224,9 +237,12 @@ function methods:OnChunk(payload)
     self.contextAck = negotiated and payload.contextAck or (newEpoch and 0 or self.contextAck)
     self.contextWant = negotiated and payload.contextWant or (newEpoch and 0 or self.contextWant)
     self.contextWantMask = negotiated and payload.contextWantMask or (newEpoch and 0 or self.contextWantMask)
-    local newBindingSession = newEpoch or self.bindingNonce ~= payload.bindingNonce
-    self.bindingProtocol, self.bindingNonce = payload.bindingProtocol, payload.bindingNonce
+    local newBindingSession = newEpoch or self.bindingNonce ~= payload.bindingNonce or self.bindingUi ~= bindingUi
+    self.bindingProtocol, self.bindingNonce, self.bindingUi = payload.bindingProtocol, payload.bindingNonce, bindingUi
     self.bindingAck = payload.bindingAck or (newBindingSession and 0 or self.bindingAck)
+    local newLogSession = newEpoch or self.logNonce ~= payload.logNonce or self.logUi ~= logUi
+    self.logProtocol, self.logNonce, self.logUi = payload.logProtocol, payload.logNonce, logUi
+    self.logAck = payload.logAck or (newLogSession and 0 or self.logAck)
     self.ringSize, self.nextSeq, self.accepted = payload.ringSize, self.nextSeq + 1, self.accepted + 1
     self.delay = (payload.changed or newEpoch) and self.baseDelay or math.min(8, self.delay * 2)
     self.status = "Connected"
@@ -239,6 +255,8 @@ function methods:OnChunk(payload)
         contextProtocol = payload.contextProtocol, contextAck = payload.contextAck, contextWant = payload.contextWant,
         contextWantMask = payload.contextWantMask,
         bindingProtocol = payload.bindingProtocol, bindingNonce = payload.bindingNonce, bindingAck = payload.bindingAck,
+        bindingUi = bindingUi,
+        logProtocol = payload.logProtocol, logNonce = payload.logNonce, logAck = payload.logAck, logUi = logUi,
         cooldownProtocol = payload.cooldownProtocol, cooldownNonce = payload.cooldownNonce,
         cooldownAck = payload.cooldownAck, cooldownChecksum = payload.cooldownChecksum,
         cursorLane = self.cursorLane,
@@ -262,5 +280,6 @@ function methods:Snapshot()
     return { nextSeq = self.nextSeq, seq = self.nextSeq - 1, ringSize = self.ringSize, epoch = self.epoch,
         delay = self.delay, ack = self.ack, status = self.status, accepted = self.accepted, exhausted = self:Exhausted(),
         bindingProtocol = self.bindingProtocol, bindingNonce = self.bindingNonce, bindingAck = self.bindingAck,
+        logProtocol = self.logProtocol, logNonce = self.logNonce, logAck = self.logAck,
         cursorLane = self.cursorLane }
 end

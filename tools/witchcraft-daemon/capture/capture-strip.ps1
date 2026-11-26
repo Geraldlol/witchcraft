@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # Read-only screen capture. Stream mode samples either the calibrated 132x12
 # strip or the strict 132x144 carrier-probe region at five frames/sec, and
-# refuses frames unless WowB owns the foreground window.
+# refuses frames unless the game client owns the foreground window.
 param(
     [ValidateSet('Stream', 'Once')][string]$Mode = 'Stream',
     [ValidateRange(-32768, 32768)][int]$X = 0,
@@ -39,6 +39,8 @@ public static class WitchcraftReadOnlyCapture {
     public static int[] Desktop() {
         return new int[] { GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79) };
     }
+    // The live client is Wow.exe; the beta was WowB.exe. The same names the macOS helper accepts.
+    private static readonly string[] GameProcesses = { "Wow", "WowClassic", "WowB", "WowT" };
     public static bool ForegroundIsWow() {
         IntPtr window = GetForegroundWindow();
         if (window == IntPtr.Zero) return false;
@@ -46,7 +48,9 @@ public static class WitchcraftReadOnlyCapture {
         GetWindowThreadProcessId(window, out processId);
         try {
             using (Process process = Process.GetProcessById((int)processId)) {
-                return String.Equals(process.ProcessName, "WowB", StringComparison.OrdinalIgnoreCase);
+                string name = process.ProcessName;
+                foreach (string game in GameProcesses) if (String.Equals(name, game, StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
             }
         } catch (ArgumentException) { return false; }
           catch (InvalidOperationException) { return false; }

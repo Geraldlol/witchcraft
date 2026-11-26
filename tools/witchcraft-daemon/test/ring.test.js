@@ -436,3 +436,55 @@ test('scrubStale reports a failed helper folder listing and still scrubs the slo
   assert.deepEqual(await writer.scrubStale(), { scrubbed: 1, failed: ['helper folder listing: listing denied'] });
   assert.doesNotMatch(await fs.readFile(path.join(root, 'Witchcraft_Chunk_0002', 'Chunk.lua'), 'utf8'), /leftover-secret/u);
 });
+
+test('writer publishes the UI session of the binding acknowledgement only with the binding fields', async () => {
+  const writes = [];
+  const writer = new RingWriter({ addonsDir: os.tmpdir(), ringSize: 3, epoch: '0123abcd',
+    check: async () => os.tmpdir(), write: (file, source) => writes.push({ file, source }) });
+  writer.request({ epoch: '00000000', uiNonce: 'aaaabbbb', nextSeq: 1 });
+  const binding = { bindingProtocol: 1, bindingNonce: '89abcdef', bindingAck: 3 };
+  await writer.publish({ changed: false, ...binding, bindingUi: 'aaaabbbb' });
+  assert.match(writes[0].source, /\["bindingUi"\]="aaaabbbb"/u);
+  for (const payload of [
+    { ...binding, bindingUi: '00000000' },
+    { ...binding, bindingUi: 'AAAABBBB' },
+    { ...binding, bindingUi: 'zzzzzzzz' },
+    { ...binding, bindingUi: 12345678 },
+    { bindingUi: 'aaaabbbb' },
+  ]) assert.throws(() => writer.publish({ changed: false, ...payload }), /binding acknowledgement/u);
+  await writer.stop();
+});
+
+test('writer publishes the log acknowledgement extension like the binding one, and omits it when absent', async () => {
+  const writes = [];
+  const writer = new RingWriter({ addonsDir: os.tmpdir(), ringSize: 3, epoch: '0123abcd',
+    check: async () => os.tmpdir(), write: (file, source) => writes.push({ file, source }) });
+  writer.request({ epoch: '00000000', uiNonce: 'aaaabbbb', nextSeq: 1 });
+  const log = { logProtocol: 1, logNonce: '89abcdef', logAck: 3 };
+  await writer.publish({ changed: false, ...log, logUi: 'aaaabbbb' });
+  for (const field of ['["logProtocol"]=1', '["logNonce"]="89abcdef"', '["logAck"]=3', '["logUi"]="aaaabbbb"']) {
+    assert.ok(writes[0].source.includes(field), field);
+  }
+  await writer.publish({ changed: true, ...log });
+  assert.doesNotMatch(writes[1].source, /logUi/u);
+  await writer.publish({ changed: false, bindingProtocol: 1, bindingNonce: '89abcdef', bindingAck: 0 });
+  assert.doesNotMatch(writes[2].source, /\["log/u);
+  for (const payload of [
+    { ...log, logProtocol: 2 },
+    { ...log, logProtocol: undefined },
+    { ...log, logNonce: '00000000' },
+    { ...log, logNonce: 'ABCDEF01' },
+    { ...log, logNonce: undefined },
+    { ...log, logAck: -1 },
+    { ...log, logAck: 16777216 },
+    { ...log, logAck: 1.5 },
+    { ...log, logAck: undefined },
+    { ...log, logUi: '00000000' },
+    { ...log, logUi: 'AAAABBBB' },
+    { ...log, logUi: 'zzzzzzzz' },
+    { ...log, logUi: 12345678 },
+    { logUi: 'aaaabbbb' },
+    { logAck: 0 },
+  ]) assert.throws(() => writer.publish({ changed: false, ...payload }), /Invalid log acknowledgement extension/u);
+  await writer.stop();
+});

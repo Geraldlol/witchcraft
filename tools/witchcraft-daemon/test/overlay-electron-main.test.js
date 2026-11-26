@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ElectronOverlayMain, OVERLAY_RENDERER_CHANNELS } from '../src/overlay-electron-main.js';
@@ -98,6 +98,16 @@ test('electron overlay: renderer events are monotonic and distinguish snapshot f
   assert.deepEqual(events.map(value => value.kind), ['output', 'snapshot']);
   assert.deepEqual(events.map(value => value.eventSeq), [before + 1, before + 2]);
   assert.equal(events[0].output.data, '\u001b[31mred');
+});
+
+test('electron overlay: the content policy permits xterm-generated styles only in style elements', async () => {
+  const html = await readFile(new URL('../overlay/index.html', import.meta.url), 'utf8');
+  const policy = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/u)?.[1];
+  assert.ok(policy, 'The overlay must declare a content security policy');
+  const directives = policy.split(';').map(part => part.trim());
+  assert.deepEqual(directives.filter(part => part.includes("'unsafe-inline'")), ["style-src-elem 'self' 'unsafe-inline'"]);
+  assert.ok(directives.includes("style-src 'self'"));
+  assert.ok(directives.includes("script-src 'self'"));
 });
 
 test('electron overlay: navigation, windows, permissions and click-through escape are hardened', async t => {

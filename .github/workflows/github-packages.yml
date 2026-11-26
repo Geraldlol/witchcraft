@@ -73,13 +73,14 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           package="@geraldlol/witchcraft-daemon@$RELEASE_VERSION"
-          tarball="candidate/geraldlol-witchcraft-daemon-$RELEASE_VERSION.tgz"
+          tarball="$GITHUB_WORKSPACE/candidate/geraldlol-witchcraft-daemon-$RELEASE_VERSION.tgz"
           digest="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
-          current=$(npm view "$package" dist.integrity --prefer-online 2>/dev/null) || current=''
+          current=$(npm view "$package" version --prefer-online 2>/dev/null) || current=''
           if [[ -z "$current" ]]; then
             npm publish "$tarball" --registry=https://npm.pkg.github.com/ --access public --ignore-scripts
           fi
-          test "$(npm view "$package" dist.integrity --prefer-online)" = "$digest"
+          npm pack "$package" --ignore-scripts --prefer-online --pack-destination "$RUNNER_TEMP"
+          cmp "$tarball" "$RUNNER_TEMP/$(basename "$tarball")"
           echo "Verified $package ($digest)" >> "$GITHUB_STEP_SUMMARY"
       - name: Check the GitHub repository link and report visibility
         env:

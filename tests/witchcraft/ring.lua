@@ -8,6 +8,18 @@ local function payload(seq, overrides)
     return value
 end
 ns.TestPayload = payload
+
+test("a terminal frame exposes only a bounded tool name and never raw tool arguments", function()
+    for _, sample in ipairs({ { "exec_command", true }, { "mcp__wow__get-quests", true }, { "", false },
+        { "Bash /private/file", false }, { "|Hitem:1", false }, { string.rep("a", 65), false } }) do
+        local ring = ns.Ring.New({ uiNonce = "abcdef01" })
+        local frame = payload(1)
+        frame.sessions[1].activity = sample[1]
+        local result = ring:OnChunk(frame)
+        assert(result.accepted)
+        equal(result.sessions[1].activity, sample[2] and sample[1] or nil)
+    end
+end)
 local function ring(options)
     options = options or {}
     options.uiNonce = "abcdef01"

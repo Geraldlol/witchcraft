@@ -1,6 +1,6 @@
 local ns = {}
 for _, file in ipairs({ "Evidence", "Errors", "Ring", "Pixel", "Prompts", "Binding", "LogCarrier",
-    "AddonsState", "CooldownCarrier", "Context", "MacroProposal", "Route", "Options", "Minimap", "Core" }) do
+    "AddonsState", "CooldownCarrier", "Context", "MacroProposal", "Options", "Minimap", "Core" }) do
     assert(loadfile("Witchcraft/" .. file .. ".lua"))("Witchcraft", ns)
 end
 
@@ -15,7 +15,7 @@ local function test(name, fn)
 end
 for _, suite in ipairs({ "evidence", "errors", "error-watch", "ring", "pixel", "binding", "log-carrier",
     "addons-state", "cooldown-carrier",
-    "core", "player-actions", "macro-proposal", "route", "persistence", "context", "context-transport", "cooldown-transport", "options" }) do
+    "core", "macro-receive", "macro-proposal", "persistence", "context", "context-transport", "cooldown-transport", "options" }) do
     assert(loadfile("tests/witchcraft/" .. suite .. ".lua"))(ns, test, equal)
 end
 test("Witchcraft view routing, layout, keyboard, drafts, lifecycle and physical strip", function()

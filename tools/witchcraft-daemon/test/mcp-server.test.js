@@ -60,8 +60,8 @@ for (const mode of ['legacy', 'auto']) {
     const { version } = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
     assert.deepEqual(client.getServerVersion(), { name: 'witchcraft-wow', version });
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['wow_explain_quest', 'wow_find_guide', 'wow_get_character', 'wow_get_context', 'wow_get_errors', 'wow_get_loot_plan', 'wow_get_loot_sources', 'wow_get_passport', 'wow_get_progress', 'wow_get_quests', 'wow_get_session_log', 'wow_rehearse_dungeon', 'wow_set_loot_goal', 'wow_set_passport_campaign', 'wow_stamp_passport', 'wow_suggest_detours', 'wow_suggest_macro', 'wow_suggest_route']);
-    assert.equal(tools.filter(tool => !['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign', 'wow_suggest_macro', 'wow_suggest_route'].includes(tool.name)).every(tool => tool.annotations.readOnlyHint && tool.annotations.destructiveHint === false), true);
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['wow_explain_quest', 'wow_find_guide', 'wow_get_character', 'wow_get_context', 'wow_get_errors', 'wow_get_loot_plan', 'wow_get_loot_sources', 'wow_get_passport', 'wow_get_progress', 'wow_get_quests', 'wow_get_session_log', 'wow_rehearse_dungeon', 'wow_set_loot_goal', 'wow_set_passport_campaign', 'wow_stamp_passport', 'wow_suggest_detours', 'wow_suggest_macro']);
+    assert.equal(tools.filter(tool => !['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign', 'wow_suggest_macro'].includes(tool.name)).every(tool => tool.annotations.readOnlyHint && tool.annotations.destructiveHint === false), true);
     assert.equal(tools.find(tool => tool.name === 'wow_set_loot_goal').annotations.readOnlyHint, false);
     const description = tools.find(tool => tool.name === 'wow_get_progress').description;
     for (const claim of [/own money/iu, /experience/iu, /situation/iu, /size and (the player's )?own role/iu, /historical/iu]) assert.match(description, claim);
@@ -168,51 +168,44 @@ test('without --allow-local-writes the server registers no write tools, and help
   const file = await workspace(t);
   const client = await connect(t, file, undefined, { writes: false });
   const { tools } = await client.listTools();
-  assert.equal(tools.some(tool => ['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign', 'wow_suggest_macro', 'wow_suggest_route'].includes(tool.name)), false);
+  assert.equal(tools.some(tool => ['wow_set_loot_goal', 'wow_stamp_passport', 'wow_set_passport_campaign', 'wow_suggest_macro'].includes(tool.name)), false);
   assert.equal(tools.every(tool => tool.annotations.readOnlyHint === true), true);
   const help = spawnSync(process.execPath, [binary, '--help'], { encoding: 'utf8', windowsHide: true });
   assert.match(help.stderr, /--allow-local-writes/u);
   assert.doesNotMatch(help.stderr, /^Read-only WoW context/mu);
 });
 
-test('macro and route MCP proposals require the current live bridge, validate visible data and replace each kind independently', async t => {
+test('macro proposals require the current live bridge, validate visible data and replace the last suggestion', async t => {
   const file = await workspace(t), client = await connect(t, file), context = snapshot(Date.now());
   const lock = path.join(path.dirname(file), 'bridge.lock');
   const macro = { name: '🐈'.repeat(4), body: '/say ' + 'é'.repeat(125) };
-  const route = { name: 'Walk', points: [{ label: 'From here', mapID: 1, x: 0, y: 100 }] };
-  const call = (kind, args) => client.callTool({ name: 'wow_suggest_' + kind, arguments: args });
+  const call = args => client.callTool({ name: 'wow_suggest_macro', arguments: args });
   await fs.writeFile(file, JSON.stringify(context));
-  assert.equal((await call('macro', macro)).isError, true, 'a freshly cached heartbeat cannot outlive its owner lock');
+  assert.equal((await call(macro)).isError, true, 'a freshly cached heartbeat cannot outlive its owner lock');
   await fs.writeFile(lock, JSON.stringify({ epoch: '11223344', pid: process.pid }));
-  assert.equal((await call('macro', macro)).isError, true, 'the new bridge has not acquired this UI');
+  assert.equal((await call(macro)).isError, true, 'the new bridge has not acquired this UI');
   await fs.writeFile(lock, JSON.stringify({ epoch: context.session.epoch, pid: process.pid }));
-  assert.equal((await call('macro', macro)).isError, true, 'a bootstrap heartbeat is not proof that this UI has seen this host');
-  context.playerActionSeenAt = Date.now();
+  assert.equal((await call(macro)).isError, true, 'a bootstrap heartbeat is not proof that this UI has seen this host');
+  context.confirmedCursorAt = Date.now();
   await fs.writeFile(file, JSON.stringify(context));
   for (const args of [{ ...macro, name: macro.name + 'a' }, { ...macro, body: macro.body + 'a' },
     { ...macro, body: '/say a\t' }, { ...macro, name: 'a\u202eb' }, { ...macro, epoch: 'deadbeef' }]) {
-    assert.equal((await call('macro', args)).isError, true);
+    assert.equal((await call(args)).isError, true);
   }
-  for (const changes of [{ x: -1 }, { y: 101 }, { mapID: 1.5 }, { label: 'a'.repeat(65) }, { label: ' ' }]) {
-    assert.equal((await call('route', { ...route, points: [{ ...route.points[0], ...changes }] })).isError, true);
-  }
-  assert.equal((await call('route', { ...route, points: Array(13).fill(route.points[0]) })).isError, true);
-  const [first, trip] = await Promise.all([call('macro', macro), call('route', route)]);
+  const first = await call(macro);
   assert.equal(first.structuredContent.status, 'queued');
-  assert.match(trip.structuredContent.id, /^[a-f0-9]{32}$/u);
-  const second = await call('macro', { name: 'Replacement', body: '/wave\n/dance' });
+  assert.match(first.structuredContent.id, /^[a-f0-9]{32}$/u);
+  const second = await call({ name: 'Replacement', body: '/wave\n/dance' });
   assert.notEqual(second.structuredContent.id, first.structuredContent.id);
-  const records = (await fs.readdir(path.dirname(file))).filter(name => name.includes('.player-action.'));
-  assert.equal(records.length, 2);
-  for (const name of records) {
-    const record = JSON.parse(await fs.readFile(path.join(path.dirname(file), name), 'utf8'));
-    assert.equal(record.uiNonce, context.session.uiNonce);
-    assert.equal(record.proposal.id, name.endsWith('macro.json') ? second.structuredContent.id : trip.structuredContent.id);
-  }
+  const records = (await fs.readdir(path.dirname(file))).filter(name => name.includes('.macro-proposal.'));
+  assert.equal(records.length, 1);
+  const record = JSON.parse(await fs.readFile(path.join(path.dirname(file), records[0]), 'utf8'));
+  assert.equal(record.uiNonce, context.session.uiNonce);
+  assert.equal(record.proposal.id, second.structuredContent.id);
   await fs.writeFile(file, JSON.stringify({ ...context, lastHeartbeatAt: Date.now() - 60_000 }));
-  assert.equal((await call('macro', macro)).isError, true, 'an expired heartbeat cannot accept new proposals');
-  await fs.writeFile(file, JSON.stringify({ ...context, lastHeartbeatAt: Date.now(), playerActionSeenAt: Date.now() - 60_000 }));
-  assert.equal((await call('macro', macro)).isError, true, 'a repeated disk heartbeat cannot renew proposal eligibility');
+  assert.equal((await call(macro)).isError, true, 'an expired heartbeat cannot accept new proposals');
+  await fs.writeFile(file, JSON.stringify({ ...context, lastHeartbeatAt: Date.now(), confirmedCursorAt: Date.now() - 60_000 }));
+  assert.equal((await call(macro)).isError, true, 'a repeated disk heartbeat cannot renew proposal eligibility');
 });
 
 test('wow_get_session_log reads only the journal, filters it, and is listed without --allow-local-writes', { timeout: 15000 }, async t => {

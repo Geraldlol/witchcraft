@@ -14,7 +14,7 @@ const rest = allowWrites ? args.slice(0, -1) : args;
 if (args.length === 1 && args[0] === '--help') {
   process.stderr.write(`${USAGE}WoW context over MCP STDIO; start the Witchcraft daemon to populate the cache.\n`
     + 'Read-only by default. --allow-local-writes enables local wishlist and passport changes\n'
-    + 'and in-game proposals for player review (wow_suggest_macro, wow_suggest_route).\n');
+    + 'and macro suggestions for player review (wow_suggest_macro).\n');
 } else if (rest.length !== 0 && (rest.length !== 2 || rest[0] !== '--cache' || !path.isAbsolute(rest[1]))) {
   process.stderr.write(USAGE);
   process.exitCode = 2;

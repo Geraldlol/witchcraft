@@ -40,35 +40,11 @@ local function proposalText(value, limit, multiline)
         and ns.Pixel.ValidDisplayText(value, multiline)
 end
 
-local function proposalHeader(value, nameLimit)
-    return plain(value) and type(value.id) == "string" and #value.id == 32 and value.id:match("^[0-9a-f]+$")
-        and proposalText(value.name, nameLimit)
-end
-
-local function coordinates(value)
-    return type(value) == "number" and value >= 0 and value <= 100
-end
-
-local function readRoute(route)
-    if not proposalHeader(route, 64) then return end
-    local ok, count = array(route.points, 12)
-    if not ok or count == 0 then return end
-    local points = {}
-    for i, p in ipairs(route.points) do
-        if not plain(p) or not integer(p.mapID, 1, 2147483647) or not coordinates(p.x)
-            or not coordinates(p.y) or not proposalText(p.label, 64) then return end
-        points[i] = { mapID = p.mapID, x = p.x, y = p.y, label = p.label }
+local function readMacro(value)
+    if plain(value) and type(value.id) == "string" and #value.id == 32 and value.id:match("^[0-9a-f]+$")
+        and proposalText(value.name, 16) and proposalText(value.body, 255, true) then
+        return { id = value.id, name = value.name, body = value.body }
     end
-    return { id = route.id, name = route.name, points = points }
-end
-
-local function readActions(value)
-    if not plain(value) then return end
-    local route, macro = readRoute(value.route), value.macro
-    if proposalHeader(macro, 16) and proposalText(macro.body, 255, true) then
-        return { macro = { id = macro.id, name = macro.name, body = macro.body }, route = route }
-    end
-    if route then return { route = route } end
 end
 
 local function sessions(value, rows)
@@ -291,7 +267,7 @@ function methods:OnChunk(payload)
         accepted = true, changed = payload.changed, delay = self.delay, newEpoch = newEpoch,
         epoch = incomingEpoch, ack = payload.ack, cols = payload.cols, rows = payload.rows, sessions = copied,
         promptProtocol = payload.promptProtocol, promptResults = promptResults,
-        playerActions = readActions(payload.playerActions),
+        macroProposal = readMacro(payload.macroProposal),
         contextProtocol = payload.contextProtocol, contextAck = payload.contextAck, contextWant = payload.contextWant,
         contextWantMask = payload.contextWantMask,
         bindingProtocol = payload.bindingProtocol, bindingNonce = payload.bindingNonce, bindingAck = payload.bindingAck,

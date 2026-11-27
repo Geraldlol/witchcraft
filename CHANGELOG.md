@@ -3,7 +3,7 @@
 ## Unreleased
 
 - The terminal footer shows the last tool a working Claude or Codex session called when WITCHCRAFT can identify its transcript.
-- Assistants can suggest a macro or a route. Review and pick up a character macro with `/witch macro`, or show up to 12 numbered map stops with `/witch route`. Both actions are also available in Guides when a suggestion arrives.
+- Assistants can suggest a character macro. Read the full text in **Guides → Review macro** or with `/witch macro`, then choose **Create & pick up** to place it on your action bar.
 
 ## 0.5.2 - 2026-11-26
 

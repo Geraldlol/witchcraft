@@ -11,7 +11,7 @@ export const HEARTBEAT_REFRESH_MS = 10_000;
  * read, so only this has to reach disk; `savedAt` and a drifting heartbeat do not.
  */
 export function contextWriteKey(raw) {
-  const { savedAt, lastHeartbeatAt, playerActionSeenAt, ...durable } = raw;
+  const { savedAt, lastHeartbeatAt, confirmedCursorAt, ...durable } = raw;
   return JSON.stringify(durable);
 }
 
@@ -22,7 +22,7 @@ export function contextWriteKey(raw) {
  */
 export function shouldPersistContext(written, raw) {
   if (!written || written.key !== contextWriteKey(raw)) return true;
-  for (const field of ['lastHeartbeatAt', 'playerActionSeenAt']) {
+  for (const field of ['lastHeartbeatAt', 'confirmedCursorAt']) {
     const before = written[field] ?? null, after = raw[field] ?? null;
     if ((before === null) !== (after === null) || (before !== null && after - before >= HEARTBEAT_REFRESH_MS)) return true;
   }
@@ -78,7 +78,7 @@ const recordSchema = data => z.object({ revision, available: z.boolean(), reason
 const diskSchema = z.object({ schemaVersion: z.literal(1), source: z.literal('witchcraft-addon'),
   session: z.object({ epoch: z.string().regex(HEX), uiNonce: z.string().regex(HEX) }).nullable(),
   enabled: z.boolean().nullable(), lastHeartbeatAt: stamp.nullable(), savedAt: stamp,
-  playerActionSeenAt: stamp.nullable().default(null),
+  confirmedCursorAt: stamp.nullable().default(null),
   player: recordSchema(playerData).nullable(), quests: recordSchema(questData).nullable(),
   // Additive under schemaVersion 1: a document written before this domain existed still reads.
   progress: recordSchema(progressData).nullable().default(null),
@@ -97,7 +97,7 @@ function unavailableReason(fields) {
 }
 
 function empty() {
-  return { schemaVersion: 1, source: 'witchcraft-addon', session: null, enabled: null, lastHeartbeatAt: null, playerActionSeenAt: null,
+  return { schemaVersion: 1, source: 'witchcraft-addon', session: null, enabled: null, lastHeartbeatAt: null, confirmedCursorAt: null,
     savedAt: 0, player: null, quests: null, progress: null, errors: null };
 }
 
@@ -185,7 +185,7 @@ export class ContextCache {
     if (!HEX.test(epoch ?? '') || !HEX.test(uiNonce ?? '') || /^0{8}$/u.test(epoch) || /^0{8}$/u.test(uiNonce)) return false;
     if (this.raw.session?.epoch === epoch && this.raw.session.uiNonce === uiNonce) return false;
     this.raw = { ...empty(), session: { epoch, uiNonce } };
-    this.playerActionSlot = 0;
+    this.confirmedSlot = 0;
     this.epoch = epoch;
     this.ack = 0;
     this.latest = { player: 0, quests: 0, progress: 0, errors: 0, state: 0 };
@@ -196,15 +196,15 @@ export class ContextCache {
   heartbeat(now = Date.now()) { this.raw.lastHeartbeatAt = now; return true; }
   // A disk heartbeat can be read forever after WoW exits. Only a cursor that echoes the
   // current host and moves beyond the last confirmed slot proves fresh UI activity.
-  confirmPlayerActionCursor({ epoch, uiNonce, slot }, now = Date.now()) {
+  confirmCursor({ epoch, uiNonce, slot }, now = Date.now()) {
     const session = this.raw.session;
     if (!session || epoch !== session.epoch || uiNonce !== session.uiNonce ||
-      !Number.isInteger(slot) || slot <= this.playerActionSlot || slot > 9999) return false;
-    this.playerActionSlot = slot;
-    this.raw.playerActionSeenAt = now;
+      !Number.isInteger(slot) || slot <= this.confirmedSlot || slot > 9999) return false;
+    this.confirmedSlot = slot;
+    this.raw.confirmedCursorAt = now;
     return true;
   }
-  disconnect() { this.raw.lastHeartbeatAt = null; this.raw.playerActionSeenAt = null; }
+  disconnect() { this.raw.lastHeartbeatAt = null; this.raw.confirmedCursorAt = null; }
 
   accept(message, now = Date.now()) {
     const reject = reason => ({ accepted: false, ack: this.ack, reason });

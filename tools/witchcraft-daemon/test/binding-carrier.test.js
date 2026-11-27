@@ -12,7 +12,7 @@ const action = (overrides = {}) => encodeBindingAction({ ...session, slot: 7, se
   payload: Buffer.from('payload'), ...overrides });
 const parsed = overrides => parseBindingAction(action(overrides));
 
-test('re-reading an unchanged binding retries the slot without extending player-action liveness', async () => {
+test('re-reading an unchanged binding retries the slot without extending macro proposal eligibility', async () => {
   let now = 1_000;
   const cache = new ContextCache(), confirmed = [];
   const receiver = new BindingReceiver({ ...session,
@@ -21,26 +21,26 @@ test('re-reading an unchanged binding retries the slot without extending player-
       cache.heartbeat(now);
       return true;
     },
-    onConfirmedCursor(frame) { if (cache.confirmPlayerActionCursor(frame, now)) confirmed.push(frame.slot); },
+    onConfirmedCursor(frame) { if (cache.confirmCursor(frame, now)) confirmed.push(frame.slot); },
   });
   // Previous-run bytes can advertise a slot before the binding receiver checks their host ids.
   await receiver.accept(parsed({ epoch: 'deadbeef' }));
-  assert.equal(cache.raw.playerActionSeenAt, null);
+  assert.equal(cache.raw.confirmedCursorAt, null);
   await receiver.accept(parsed({ epoch: '00000000', nonce: '00000000', seq: 1, payload: BINDING_PROBE_BODY }));
-  assert.equal(cache.raw.playerActionSeenAt, null);
+  assert.equal(cache.raw.confirmedCursorAt, null);
   const heartbeat = parsed({ seq: 0, payload: Buffer.from([0x48, 0]) });
   assert.equal((await receiver.accept(heartbeat)).accepted, true);
-  assert.equal(cache.raw.playerActionSeenAt, now);
+  assert.equal(cache.raw.confirmedCursorAt, now);
   now += HEARTBEAT_TTL_MS + 1;
   assert.equal((await receiver.accept(heartbeat)).accepted, true, 'cursor retries remain available');
   assert.equal(cache.raw.lastHeartbeatAt, now);
-  assert.ok(now - cache.raw.playerActionSeenAt > HEARTBEAT_TTL_MS);
+  assert.ok(now - cache.raw.confirmedCursorAt > HEARTBEAT_TTL_MS);
   await receiver.accept(parsed({ seq: 0, slot: 8, payload: Buffer.from([0x48, 0]) }));
   assert.deepEqual(confirmed, [7, 8]);
-  assert.equal(cache.raw.playerActionSeenAt, now);
+  assert.equal(cache.raw.confirmedCursorAt, now);
   cache.setSession(session.epoch, '11112222');
-  assert.equal(cache.confirmPlayerActionCursor(heartbeat, now), false, 'late completion after a reload');
-  assert.equal(cache.raw.playerActionSeenAt, null);
+  assert.equal(cache.confirmCursor(heartbeat, now), false, 'late completion after a reload');
+  assert.equal(cache.raw.confirmedCursorAt, null);
 });
 
 test('binding carrier parser is anchored, canonical, CRC checked and key allowlisted', () => {

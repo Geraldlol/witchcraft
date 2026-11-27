@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The terminal footer shows the last tool a working Claude or Codex session called when WITCHCRAFT can identify its transcript.
+- Assistants can suggest a macro or a route. Review and pick up a character macro with `/witch macro`, or show up to 12 numbered map stops with `/witch route`. Both actions are also available in Guides when a suggestion arrives.
+
 ## 0.5.2 - 2026-11-26
 
 - Log lane in combat: with **Keep updating in combat** off (the default) the addon loads no terminal updates during a fight, so the daemon's acknowledgement of a message cannot arrive until combat ends. The addon took the missing acknowledgement for a failed link after five seconds: strip mode `off` then refused the next prompt, `fallback` drew the strip, and the message was logged again several times at about 100 KB each. The acknowledgement timeout and the repeat logging now wait while updates are paused. With updates paused, one message still goes out per fight and the next is sent when combat ends. Checked by tests; not yet run in the live client.

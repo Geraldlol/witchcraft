@@ -8,6 +8,7 @@ import { runBridge } from '../bin/witchcraft.js';
 import { initializeRing } from '../src/init.js';
 import { encodeMessage, encodeContext, encodeHeartbeat } from '../src/pixel.js';
 import { readContextFile } from '../src/context-cache.js';
+import { suggestPlayerAction } from '../src/player-actions.js';
 import { BINDING_KEYS, BINDING_PROBE_BODY, encodeBindingAction } from '../src/binding-carrier.js';
 import { LogCarrier, encodeLogLine } from '../src/log-carrier.js';
 import { encodeCooldownContext, encodeCooldownFrame } from '../src/cooldown-carrier.js';
@@ -784,6 +785,38 @@ test('bridge: a slow journal write holds neither the next cache write nor its ac
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
   assert.match(await fs.readFile(path.join(path.dirname(f.lockPath), 'events.log'), 'utf8'), /journal write still pending at shutdown/u);
   releaseLate();
+});
+
+test('bridge: idle delivery carries literal player proposals and fences off retired UI sessions', async t => {
+  const f = await fixture(t, { options: { hz: 2 } });
+  await f.ready();
+  const cache = path.join(f.adapters.localDir, 'wow-context.json'), nonce = '12345678';
+  f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
+  const ready = await f.payload(2, item => item.uiNonce === nonce);
+  const macro = { name: 'A"|B', body: '/say Привіт\n/say "); error("oops") -- \\end' };
+  const route = { name: 'West', points: [{ mapID: 1, x: 0, y: 100, label: 'A|cffff0000"B' }] };
+  await assert.rejects(suggestPlayerAction(cache, 'route', route), /Connect/u);
+  f.state.capture.emit(image(null, encodeHeartbeat('11223344', 2, 0, nonce)));
+  await assert.rejects(suggestPlayerAction(cache, 'route', route), /Connect/u);
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 2, 0, nonce)));
+  await until(async () => (await readContextFile(cache)).playerActionSeenAt, 'the strip to echo the active host epoch');
+  const [m, r] = await Promise.all([suggestPlayerAction(cache, 'macro', macro), suggestPlayerAction(cache, 'route', route)]);
+  const proposed = await f.payload(2, item => item.playerActions?.macro?.id === m.id && item.playerActions?.route?.id === r.id);
+  assert.deepEqual(proposed.playerActions, { macro: { ...macro, id: m.id }, route: { ...route, id: r.id } });
+  assert.deepEqual(f.state.writes, []);
+
+  const next = '87654321';
+  // Even a stale record copied into the new UI's filename must not become that player's proposal.
+  await fs.writeFile(`${cache}.player-action.${ready.epoch}.${next}.macro.json`,
+    JSON.stringify({ epoch: ready.epoch, uiNonce: nonce, proposal: proposed.playerActions.macro }));
+  // Nor can extra fields copied into an otherwise current record enter the Lua serializer.
+  await fs.writeFile(`${cache}.player-action.${ready.epoch}.${next}.route.json`,
+    JSON.stringify({ epoch: ready.epoch, uiNonce: next, proposal: { ...proposed.playerActions.route, injected: 'arbitrary' } }));
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 1, 0, next)));
+  const fresh = await f.payload(1, item => item.uiNonce === next);
+  assert.equal(fresh.playerActions, undefined);
+  assert.equal(await fs.stat(`${cache}.player-action.${ready.epoch}.${nonce}.macro.json`).catch(() => null), null);
+  assert.deepEqual(f.state.writes, []);
 });
 
 test('bridge: per-domain wants fold into one id carrying an incremental mask', async t => {

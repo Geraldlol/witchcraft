@@ -891,6 +891,8 @@ end
 
 function methods:Stop()
     self.active, self.visible, self.generation, self.loading = false, false, self.generation + 1, nil
+    self:UpdatePlayerActions(nil)
+    if ns.Route then ns.Route.Clear() end
     -- A combat minimize is ours to undo; the saved layout keeps only the player's own choice.
     if self.combatMinimized then
         self.global.view.minimized = false
@@ -970,6 +972,8 @@ function methods:Snapshot()
         answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil,
             copilot = self:AnswerPending("copilot") ~= nil, agy = self:AnswerPending("agy") ~= nil },
         snippets = { unpack(self.global.snippets) },
+        hasMacro = self.playerActions ~= nil and self.playerActions.macro ~= nil,
+        hasRoute = self.playerActions ~= nil and self.playerActions.route ~= nil,
         settings = (function() local copy = {}; for key, value in pairs(self.global.settings) do copy[key] = value end; return copy end)(),
         view = self.global.view, fontSize = self.global.fontSize, opacity = self.global.opacity,
         status = status, seq = ring.seq, ringSize = ring.ringSize,
@@ -1543,6 +1547,7 @@ function methods:ReceiveChunk(payload)
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
     self:WarnRing()
     if result.placeholder then
+        self:UpdatePlayerActions(nil)
         if self.everLinked then
             self.stalled, self.ring.delay = true, self.stallDelay
             self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
@@ -1553,6 +1558,7 @@ function methods:ReceiveChunk(payload)
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
     local global = self.global
+    self:UpdatePlayerActions(result.playerActions, result.newEpoch)
     global.epoch, global.ack, global.reloadAwaitHost = result.epoch, result.ack, false
     self.cursorLane, self.promptProtocol = result.cursorLane, result.promptProtocol
     global.nextId = math.max(global.nextId, result.ack + 1)
@@ -1963,11 +1969,45 @@ function methods:ListErrors(arg)
     self.errors:Command(arg, function(message) self:Print(message) end)
 end
 
+function methods:UpdatePlayerActions(incoming, newEpoch)
+    local previous = self.playerActions or {}
+    self.playerActions = incoming
+    local macro = incoming and incoming.macro
+    if previous.macro and (newEpoch or not macro or previous.macro.id ~= macro.id) then
+        ns.MacroProposal.Hide()
+    end
+    if macro and (newEpoch or not previous.macro or previous.macro.id ~= macro.id) then
+        self:Print("Macro suggestion ready. Use /witch macro to review it.")
+    end
+    local route = incoming and incoming.route
+    if route and (newEpoch or not previous.route or previous.route.id ~= route.id) then
+        self:Print("Route suggested. Use /witch route to show its stops on your map.")
+    end
+end
+
+function methods:ShowPlayerAction(kind)
+    local proposal = self.playerActions and self.playerActions[kind]
+    if not proposal then
+        self:Print("No " .. kind .. " suggestion yet. Ask your assistant to suggest a " .. kind .. ".")
+        return
+    end
+    local adapter = kind == "route" and ns.Route or ns.MacroProposal
+    local ok, detail = adapter.Show(proposal)
+    if detail then self:Print(detail) end
+    return ok
+end
+
 function methods:HandleSlash(input)
     self:ResetHeartbeatBackoff()
     local command, arg = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
     command = command:lower()
     if command == "" then self:Toggle()
+    elseif command == "route" and arg:lower() == "clear" then
+        ns.Route.Clear()
+        self:Print("Witchcraft route pins cleared.")
+    elseif command == "route" or command == "macro" then
+        if arg == "" then self:ShowPlayerAction(command)
+        else self:Print(command == "route" and "Use /witch route or /witch route clear." or "Use /witch macro.") end
     elseif command == "guide" then
         local ok, reason = self:OpenGuide(); if not ok then self:Print(reason) end
     elseif command == "quest" then
@@ -2127,7 +2167,7 @@ function methods:HandleSlash(input)
         self:Print(string.format("Witchcraft lanes: %s %s | cooldown %s | cursor %s", lane, snapshot.binding.status or "?",
             cooldown, self.cursorLane or "none"))
     else
-        self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
+        self:Print("/witch | guide | route [clear] | macro | quest [nudge|details|solution] <name/id> | loot [name/id]"
             .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"
             .. " | tab <claude|codex|copilot|agy> [on|off] | size 8-20 | scale 80-140 | cols 40-160|fit | opacity 0-100"
             .. " | resetpos | strip [always|fallback|off] | context on|off|refresh|clear-journal | hz 0.125-2"

@@ -77,14 +77,15 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   // Doctor and setup must start even before the native terminal dependencies load.
   const [{ TerminalPair, attachTerminal }, { SessionSet, addonSessions }, { listConsoles }, { Outbox, watchSavedVariables },
     { ContextCache, contextWriteKey, shouldPersistContext }, { foldContextWants, readContextWants },
-    { JournalStore, journalPath, observe }] = await Promise.all([
+    { JournalStore, journalPath, observe }, { PlayerActionInbox, clearPlayerActionFiles }] = await Promise.all([
     import('../src/pty.js'), import('../src/sessions.js'), import('../src/console-list.js'), import('../src/outbox.js'),
-    import('../src/context-cache.js'), import('../src/context-want.js'), import('../src/journal.js'),
+    import('../src/context-cache.js'), import('../src/context-want.js'), import('../src/journal.js'), import('../src/player-actions.js'),
   ]);
   const Pair = adapters.TerminalPair ?? TerminalPair, Display = adapters.attachTerminal ?? attachTerminal;
   const CaptureStream = adapters.Capture ?? Capture, watch = adapters.watchSavedVariables ?? watchSavedVariables;
   const localDir = adapters.localDir ?? LOCAL_DIR;
   const contextPath = path.join(localDir, 'wow-context.json');
+  const playerActionInbox = new PlayerActionInbox(contextPath);
   const cols = boundedInteger(options.cols ?? 120, 40, 160, 'columns');
   const rows = boundedInteger(options.rows ?? 40, 10, 60, 'rows');
   const hz = Number(options.hz ?? 1);
@@ -281,7 +282,8 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         // Stamp the key from the same state the snapshot came from. Reading the cache again
         // after the await would record a newer key against an older document, and the next
         // write would be skipped as unchanged while its message was acknowledged anyway.
-        const written = { key: contextWriteKey(context.raw), lastHeartbeatAt: context.raw.lastHeartbeatAt };
+        const written = { key: contextWriteKey(context.raw), lastHeartbeatAt: context.raw.lastHeartbeatAt,
+          playerActionSeenAt: context.raw.playerActionSeenAt };
         // The journal diffs what was persisted, so it copies the same state the snapshot came from.
         const persisted = structuredClone(context.raw);
         await (adapters.writeContext ?? atomicWrite)(contextPath, JSON.stringify(snapshot) + '\n');
@@ -343,6 +345,9 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     if (cooldownCursorMoved) trace.note({ what: 'cursor', lane: 'file', from: previousSeq, to: writer.cursor, ui: writer.uiNonce });
     return true;
   }
+  function confirmPlayerActionCursor(frame) {
+    if (!stopped && context.confirmPlayerActionCursor(frame)) void publish();
+  }
   // A new UI session has served nothing, so the want the chunks still name would be captured
   // again. Forget it; the next refresh folds back only the wants still inside their TTL.
   function forgetWants() { contextWant = 0; contextWantMask = 0; wantServedAt = {}; }
@@ -368,6 +373,11 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         await refreshContextWant();
         const wanted = performance.now();
         await persistContext();
+        const actionSession = context.raw.session;
+        const proposals = await playerActionInbox.read(actionSession);
+        // A heartbeat can select a new UI while reading. Only stamp actions on their own frame.
+        const playerActions = proposals && context.raw.session === actionSession && writer.uiNonce === actionSession.uiNonce
+          ? proposals : undefined;
         const persisted = performance.now();
         if (stopped) return;
         const bindingAck = bindingReceiver?.ack ?? 0;
@@ -384,11 +394,11 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         // AGY is left out, so a 0.3.1 addon (at most three sessions) still takes the frame.
         const sessions = addonSessions(pair.snapshot()).map(session => ({ ...session, ...sessionInfo?.get(session.id),
           ...(session.id === 'claude' && claudeTools === false ? { tools: false } : {}) }));
-        const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, bindingUi, logAck, logUi, cooldown });
+        const signature = JSON.stringify({ sessions, ack: outbox.ack, contextAck, contextWant, contextWantMask, bindingAck, bindingUi, logAck, logUi, cooldown, playerActions });
         const published = await writer.publish({ changed: signature !== oldScreen, ack: outbox.ack,
           promptProtocol: 1, promptResults: [...outbox.promptResults],
           contextProtocol: 4, contextAck, contextWant, contextWantMask, bindingProtocol: 1, bindingNonce, bindingAck, ...bindingUi, ...log, ...cooldown,
-          cols: pair.cols, rows: pair.rows, sessions });
+          cols: pair.cols, rows: pair.rows, sessions, ...(playerActions ? { playerActions } : {}) });
         if (published) oldScreen = signature;
         const finished = performance.now();
         if (finished - started > 1000) {
@@ -445,6 +455,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       await attempt(() => writer.stop());
       context.disconnect();
       await attempt(() => persistContext());
+      await clearPlayerActionFiles(contextPath).catch(error => events.error('player-actions', error));
       // The last cache write handed its batch to the journal without waiting; let it land, but
       // within a bound so a stuck write never holds the lock. close() also fences off any batch
       // that has not started its write by then.
@@ -464,6 +475,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
   }
   const terminate = () => { void stop(); };
   try {
+    await clearPlayerActionFiles(contextPath).catch(error => events.error('player-actions', error));
     const stale = await writer.scrubStale();
     for (const failure of stale.failed) {
       events.error('ring', failure);
@@ -506,7 +518,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
     if (config.accountDir && adapters.bindingCarrier !== false) {
       const Receiver = adapters.BindingReceiver ?? BindingReceiver;
       const Carrier = adapters.BindingCarrier ?? BindingCarrier;
-      bindingReceiver = new Receiver({ epoch, nonce: bindingNonce,
+      bindingReceiver = new Receiver({ epoch, nonce: bindingNonce, onConfirmedCursor: confirmPlayerActionCursor,
         // File polling presents the same heartbeat until the UI consumes the slot. A failed
         // write still needs service, even though the requested cursor has already moved.
         onCursor: frame => {
@@ -536,7 +548,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
       const Receiver = adapters.LogReceiver ?? BindingReceiver;
       const Carrier = adapters.LogCarrier ?? LogCarrier;
       // The binding lane's protocol on its own nonce; only the medium is the game's General.log.
-      logReceiver = new Receiver({ epoch, nonce: logNonce,
+      logReceiver = new Receiver({ epoch, nonce: logNonce, onConfirmedCursor: confirmPlayerActionCursor,
         onCursor: frame => {
           const accepted = followCursor({ uiNonce: frame.uiNonce, nextSeq: frame.slot });
           if (accepted && frame.seq === 0 && !writer.hasPublishedCursor) void publish();
@@ -579,6 +591,7 @@ export async function runBridge(config, options = {}, child = [], adapters = {})
         cooldownCarrierReader = new Reader({ characterDir: config.characterDir, receiver: cooldownReceiver,
           // A heartbeat that moved nothing is not worth a chunk write; the interval publishes anyway.
           onResult: (result, frame, fingerprint) => {
+            if (result?.accepted && !result.duplicatePoll && frame.nonce === cooldownNonce) confirmPlayerActionCursor(frame);
             const seen = `${fingerprint ?? 'same'}:${result?.accepted}:${result?.reason ?? ''}`;
             if (!result?.duplicatePoll && seen !== tracedFrame) {
               tracedFrame = seen;
@@ -626,6 +639,7 @@ Cooldown carrier retained for inspection: ${error.message}
             forgetWants();
           }
           context.heartbeat();
+          confirmPlayerActionCursor({ epoch: heartbeat.epoch, uiNonce: heartbeat.uiNonce, slot: heartbeat.nextSeq });
           if (previousSeq !== writer.cursor || previousNonce !== writer.uiNonce) {
             if (previousNonce !== writer.uiNonce) decoder.clear();
             trace.note({ what: 'cursor', lane: 'strip', from: previousSeq, to: writer.cursor, ui: writer.uiNonce });

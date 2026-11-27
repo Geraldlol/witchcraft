@@ -239,6 +239,7 @@ return function(options)
         return true
     end
     function controller:Action(tab, value) calls.action[#calls.action + 1] = { tab, value }; return true end
+    function controller:ShowPlayerAction(kind) calls.suggestion = kind end
     function controller:SelectTab(tab)
         calls.selected[#calls.selected + 1] = tab; snapshot.activeTab = tab; self.view:Render(snapshot)
     end
@@ -389,6 +390,18 @@ return function(options)
     end
     local ok, err = xpcall(function()
         layout()
+        assert(not view.guideMacro.shown and not view.guideRoute.shown)
+        snapshot.hasMacro, snapshot.hasRoute = true, true
+        view:Render(snapshot)
+        assert(view.guideMacro.shown and view.guideRoute.shown)
+        click(view.guideMacro); assert(calls.suggestion == "macro")
+        click(view.guideRoute); assert(calls.suggestion == "route")
+        snapshot.hasMacro, snapshot.hasRoute = nil, nil
+        snapshot.sessions[1].activity, snapshot.sessions[1].state = "Read", "working"
+        view:Render(snapshot)
+        assert(view.footerHint.text == "Last tool: Read")
+        snapshot.sessions[1].activity, snapshot.sessions[1].state = nil, nil
+        view:Render(snapshot)
         assert(#view.rows == 60 and view.visibleRows == math.min(40, math.floor((view.terminal.height - 20) / (view.fontSize + 3))),
             "bounded sixty-row allocation fits the current pane without cropping a row")
         assert(view.frame.width == 900 and view.frame.height == 650, "new layouts use the compact console size")

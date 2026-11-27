@@ -36,6 +36,46 @@ async function tailLines(file, bytes = TAIL_BYTES) {
 const parse = line => { try { return JSON.parse(line); } catch { return undefined; } };
 const count = value => Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 
+// In a backwards scan, undefined means keep looking and null means stop here with no
+// activity. Never derive a display name from text, arguments, a tool result, or a command.
+function toolName(name) {
+  return typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u.test(name) ? name : null;
+}
+
+function claudeActivity(entry) {
+  if (!entry || entry.isSidechain || entry.isMeta) return undefined;
+  const message = entry.message;
+  if (entry.type === 'result') return null;
+  if (entry.type === 'system' && ['turn_duration', 'compact_boundary'].includes(entry.subtype)) return null;
+  if (entry.type === 'user') {
+    const onlyResults = Array.isArray(message?.content) && message.content.length > 0 && message.content.every(p => p?.type === 'tool_result');
+    return onlyResults ? undefined : null;
+  }
+  if (entry.type !== 'assistant' || !message) return undefined;
+  if (message.stop_reason && message.stop_reason !== 'tool_use') return null;
+  if (!Array.isArray(message.content)) return undefined;
+  const tool = message.content.findLast(part => part?.type === 'tool_use' || part?.type === 'server_tool_use');
+  if (tool) return toolName(tool.name);
+  // Older transcripts may omit stop_reason. Treat a text answer as a boundary.
+  return !message.stop_reason && message.content.some(part => part?.type === 'text') ? null : undefined;
+}
+
+function codexActivity(entry, payload) {
+  if (entry.type === 'turn_context' || entry.type === 'compacted') return null;
+  if (entry.type === 'event_msg') {
+    if (['task_started', 'task_complete', 'turn_aborted', 'thread_rolled_back', 'user_message'].includes(payload.type)) return null;
+    if (payload.type === 'agent_message' && payload.phase !== 'commentary') return null;
+    if (payload.type === 'item_completed' && (payload.item?.type === 'UserMessage'
+      || (payload.item?.type === 'AgentMessage' && payload.item.phase === 'final_answer'))) return null;
+  }
+  if (entry.type !== 'response_item') return undefined;
+  if (payload.type === 'function_call' || payload.type === 'custom_tool_call') return toolName(payload.name);
+  if (payload.type === 'web_search_call') return 'web_search';
+  if (typeof payload.type === 'string' && payload.type.endsWith('_call')) return null;
+  if (payload.type === 'message' && (payload.role === 'user' || (payload.role === 'assistant' && payload.phase !== 'commentary'))) return null;
+  return undefined;
+}
+
 /**
  * A reply's text as bounded display lines: no control characters, long lines cut, newest last.
  * Lines are cut by code point and made well-formed, since the Lua serializer refuses half a
@@ -52,10 +92,12 @@ export function replyLines(text) {
 /** Claude Code: the last assistant message's model and context, and its last text reply. */
 export async function readClaudeInfo(file) {
   const lines = await tailLines(file);
-  let info, reply;
-  for (let index = lines.length - 1; index >= 0 && !(info && reply); index--) {
+  let info, reply, activity;
+  for (let index = lines.length - 1; index >= 0 && !(info && reply && activity !== undefined); index--) {
     const entry = parse(lines[index]);
-    if (entry?.type !== 'assistant' || typeof entry.message !== 'object') continue;
+    // An incomplete newest record might be a new turn or a final answer.
+    if (activity === undefined) activity = !entry && lines[index].trim() ? null : claudeActivity(entry);
+    if (entry?.type !== 'assistant' || !entry.message || typeof entry.message !== 'object') continue;
     const { model, usage, content } = entry.message;
     if (!info && typeof model === 'string' && usage) {
       info = { model: boundBytes(model, MODEL_BYTES),
@@ -66,7 +108,7 @@ export async function readClaudeInfo(file) {
       if (text.trim()) reply = replyLines(text);
     }
   }
-  return { info, reply };
+  return { info, reply, ...(activity ? { activity } : {}) };
 }
 
 const partsText = (parts, kinds) => Array.isArray(parts)
@@ -94,10 +136,12 @@ function codexText(entry, payload, phase) {
 /** Codex: the turn's model and effort, the last token count against the window, the last reply. */
 export async function readCodexInfo(file) {
   const lines = await tailLines(file);
-  let model, effort, used, window, reply, progress;
+  let model, effort, used, window, reply, progress, activity;
   for (let index = lines.length - 1; index >= 0; index--) {
     const entry = parse(lines[index]), payload = entry?.payload;
+    if (activity === undefined && !entry && lines[index].trim()) activity = null;
     if (!payload) continue;
+    if (activity === undefined) activity = codexActivity(entry, payload);
     if (!model && entry.type === 'turn_context' && typeof payload.model === 'string') {
       model = boundBytes(payload.model, MODEL_BYTES);
       if (typeof payload.effort === 'string') effort = boundBytes(payload.effort, EFFORT_BYTES);
@@ -109,13 +153,15 @@ export async function readCodexInfo(file) {
     if (!reply) reply = replyLines(codexText(entry, payload, 'final_answer'));
     // A long turn can push every reply out of the tail; then its newest progress is shown instead.
     if (!reply && !progress) progress = replyLines(codexText(entry, payload, 'commentary'));
-    if (model && used !== undefined && reply) break;
+    if (model && used !== undefined && reply && activity !== undefined) break;
   }
   reply ??= progress;
   const info = model || used !== undefined ? { ...(model ? { model } : {}), ...(effort ? { effort } : {}),
     ...(used !== undefined ? { used } : {}), ...(window ? { window } : {}) } : undefined;
-  return { info, reply };
+  return { info, reply, ...(activity ? { activity } : {}) };
 }
+
+function withoutActivity({ info, reply }) { return { info, reply }; }
 
 /** The transcript of the Claude Code process `pid`, through its ~/.claude/sessions record. */
 export async function claudeTranscript(pid, { home = os.homedir() } = {}) {
@@ -141,9 +187,12 @@ export function createSessionInfo({ cwd, pid, codexFile, intervalMs = 5000, home
       const claudeFile = await claudeTranscript(pid?.('claude'), { home });
       const codex = codexFile ?? (await findCodexThread({ cwd, root: path.join(home, '.codex', 'sessions') }))?.file;
       const next = {
-        claude: claudeFile ? await readClaudeInfo(claudeFile).catch(() => current.claude) : {},
-        codex: codex ? await readCodexInfo(codex).catch(() => current.codex) : {},
+        claude: claudeFile ? await readClaudeInfo(claudeFile).catch(() => withoutActivity(current.claude)) : {},
+        codex: codex ? await readCodexInfo(codex).catch(() => withoutActivity(current.codex)) : {},
       };
+      // A fresh Codex tab has no confirmed rollout path. Another terminal in the same
+      // project may own the newest thread, so never attribute its tool calls to this tab.
+      if (!codexFile) next.codex = withoutActivity(next.codex);
       const changed = JSON.stringify(next) !== JSON.stringify(current);
       Object.assign(current, next);
       if (changed && !stopped) onChange();
@@ -153,10 +202,10 @@ export function createSessionInfo({ cwd, pid, codexFile, intervalMs = 5000, home
     start() { void poll(); timer = setInterval(() => void poll(), intervalMs); timer.unref?.(); return this; },
     stop() { stopped = true; clearInterval(timer); },
     poll,
-    /** The fields a published session carries: `info` and `reply`, each only when known. */
+    /** Optional display fields from the session transcript. */
     get(tab) {
-      const { info, reply } = current[tab] ?? {};
-      return { ...(info ? { info } : {}), ...(reply ? { reply } : {}) };
+      const { info, reply, activity } = current[tab] ?? {};
+      return { ...(info ? { info } : {}), ...(reply ? { reply } : {}), ...(activity ? { activity } : {}) };
     },
   };
 }

@@ -28,6 +28,8 @@ Witchcraft is **free and open source (MIT)**. You bring your own Claude Code, Co
 - **Write proper prompts.** Shift-click items, quests and spells into your message, write multi-line prompts of up to about 4,600 bytes, save the ones you reuse as snippets, search the scrollback, or copy the agent's last reply with one click.
 - **Let your agents see your character.** Local MCP tools give them your character, zone, tracked quests, gold, XP and rested bonus, your group, and a session journal of recent milestones (`wow_get_session_log`). There is also a Lua error log (`wow_get_errors`), so an agent can read a stack trace and check across `/reload`s that its fix held.
 - **Try Guides and Adventures.** Ask for a spoiler-light nudge on a quest, keep a dungeon loot wishlist, rehearse boss fights as tank, healer or DPS, look up detours near your zone, and stamp a personal campaign passport. The built-in catalog is Classic reference material (Defias quests, Deadmines, Wailing Caverns and Shadowfang Keep), so Forever's custom changes are not verified in it.
+- **Put a suggestion on your map or action bar.** Ask your assistant for a route using known map coordinates, or for a macro. Open **Guides → Show route** to see numbered stops on the world map, or **Guides → Review macro** to read the complete text before creating a character macro and picking it up. Drop it on your preferred action button.
+- **See what a working agent just used.** The terminal footer can show the last tool name from the linked Claude transcript or a resumed Codex thread. Open the terminal output for the details.
 - **Make the window yours.** Resize, minimize, dock or lock it. Set the font size, overall scale (`/witch scale 80-140`), terminal width (`/witch cols fit`), background opacity and frame strata, fade the window while it is unfocused, choose whether it stays open, minimizes or hides in combat, pause updates during combat, or open the optional Electron overlay on your desktop.
 
 ## How it works under the hood
@@ -48,7 +50,7 @@ WoW addons can't open network sockets or start processes, and that is how it sho
 |---|---|---|
 | **WoW addon** | [`Witchcraft/`](Witchcraft/) | The in-game terminal window, UI controls, error recorder, and context capture. |
 | **Desktop daemon & overlay** | [`tools/witchcraft-daemon/`](tools/witchcraft-daemon/) | Runs on your computer to connect WoW to local Claude, Codex, Copilot, and AGY sessions. |
-| **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only WoW tools and 3 optional wishlist/passport tools. |
+| **WoW MCP server** | [`witchcraft-mcp.js`](tools/witchcraft-daemon/bin/witchcraft-mcp.js) | Local STDIO server with 13 read-only tools and five optional tools for personal records and player suggestions. |
 | **Claude Code skill** | [`.claude/skills/witchcraft-daemon/`](.claude/skills/witchcraft-daemon/) | Lets you ask Claude to start, stop, restart, or check the daemon for you (Windows + `pwsh`). |
 
 The `Witchcraft-X.Y.Z.zip` on the [releases page](https://github.com/Geraldlol/witchcraft/releases/latest) contains the addon. Clone the repo or download **Source code (zip)** for the matching daemon. Versions 0.5.1 and later also support installing the daemon from an npm tarball.
@@ -216,7 +218,7 @@ Things you can ask in game:
 - *"Which dungeon knocks out the most items on my loot wishlist?"*
 - *"Quiz me on the Deadmines bosses as a healer, one fight at a time."*
 
-See [docs/MCP.md](docs/MCP.md) for all 16 tools and the manual MCP setup.
+See [docs/MCP.md](docs/MCP.md) for the complete tool list and manual MCP setup.
 
 ---
 
@@ -239,6 +241,8 @@ See [docs/MCP.md](docs/MCP.md) for all 16 tools and the manual MCP setup.
 | `/witch pending` / `inspect <id>` / `resend <id>` / `discard <id>` | Review, retry, or discard unconfirmed prompts kept across a daemon restart. |
 | `/witch snippet add <prompt>` / `list` / `remove <n>` | Save reusable prompts into the **/** quick-command menu. |
 | `/witch guide` · `quest` · `loot` · `rehearse` · `nearby` · `passport` | Open Guides/Adventures or prefill a quest, wishlist, dungeon-practice, detour, or passport prompt. |
+| `/witch route` · `/witch route clear` | Show the latest suggested route or remove WITCHCRAFT's pins. Hover a numbered stop for its label. |
+| `/witch macro` | Review the latest suggested macro. Create and pick it up with an empty cursor outside combat. |
 | `/witch reload` (or `/witch reset`) | Reload the WoW UI (waits until you're out of combat). |
 | **Key Bindings > AddOns > Witchcraft** | Bind keys to toggle the window, open-and-focus the input box, cycle tabs, or interrupt an agent. |
 

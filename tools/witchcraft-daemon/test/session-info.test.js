@@ -155,3 +155,91 @@ test('the poller publishes what it read and reports changes once', async t => {
   assert.equal(changes, 1, 'an unchanged reading is not a change');
   info.stop();
 });
+
+test('Claude last tool uses a main-turn invocation, survives tool results, and clears on an answer or new prompt', async t => {
+  const file = path.join(await temp(t), 'claude.jsonl');
+  const assistant = (content, stop_reason) => ({ type: 'assistant', isSidechain: false, message: { content, stop_reason } });
+  const calls = assistant([
+    { type: 'text', text: 'Checking the project.' },
+    { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/private/path' } },
+    { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'sensitive command' } },
+  ], 'tool_use');
+  await fs.writeFile(file, jsonl([calls,
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'private output' }] } },
+    { ...assistant([{ type: 'tool_use', name: 'WorkerTool' }], 'tool_use'), isSidechain: true },
+  ]));
+  assert.equal((await readClaudeInfo(file)).activity, 'Bash');
+  await fs.appendFile(file, '{"type":"user"');
+  assert.equal(Object.hasOwn(await readClaudeInfo(file), 'activity'), false);
+  for (const boundary of [
+    { type: 'user', message: { content: 'new prompt' } },
+    { type: 'user', message: { content: [{ type: 'text', text: 'new prompt' }] } },
+    assistant([{ type: 'text', text: 'Finished.' }], 'end_turn'),
+    assistant([{ type: 'text', text: 'Finished.' }]),
+    { type: 'system', subtype: 'turn_duration' },
+  ]) {
+    await fs.writeFile(file, jsonl([calls, boundary]));
+    assert.equal(Object.hasOwn(await readClaudeInfo(file), 'activity'), false);
+  }
+});
+
+test('Codex last tool survives commentary and results, and clears at legacy and paginated turn boundaries', async t => {
+  const file = path.join(await temp(t), 'codex.jsonl');
+  const response = payload => ({ type: 'response_item', payload });
+  const event = payload => ({ type: 'event_msg', payload });
+  const calls = [event({ type: 'task_started', turn_id: 'turn' }),
+    response({ type: 'function_call', call_id: '1', name: 'exec_command', arguments: '{"cmd":"private"}' }),
+    response({ type: 'function_call_output', call_id: '1', output: 'private result' }),
+    response({ type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Checking.' }] }),
+  ];
+  await fs.writeFile(file, jsonl(calls));
+  assert.equal((await readCodexInfo(file)).activity, 'exec_command');
+  await fs.appendFile(file, jsonl([response({ type: 'custom_tool_call', name: 'apply_patch', input: 'private patch' })]));
+  assert.equal((await readCodexInfo(file)).activity, 'apply_patch');
+  await fs.appendFile(file, '{"type":"event_msg"');
+  assert.equal(Object.hasOwn(await readCodexInfo(file), 'activity'), false);
+  for (const boundary of [
+    event({ type: 'turn_aborted', turn_id: 'turn' }),
+    event({ type: 'task_complete', last_agent_message: 'done' }),
+    event({ type: 'task_started', turn_id: 'next' }),
+    { type: 'turn_context', payload: { model: 'test' } },
+    event({ type: 'agent_message', message: 'done' }),
+    event({ type: 'item_completed', item: { type: 'AgentMessage', phase: 'final_answer' } }),
+    response({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'new turn' }] }),
+  ]) {
+    await fs.writeFile(file, jsonl([...calls, boundary]));
+    assert.equal(Object.hasOwn(await readCodexInfo(file), 'activity'), false);
+  }
+});
+
+test('invalid tool names suppress older activity and never supply arguments, paths, escape sequences or display markup', async t => {
+  const file = path.join(await temp(t), 'rollout.jsonl');
+  const call = name => ({ type: 'response_item', payload: { type: 'function_call', name, arguments: '{"name":"valid"}' } });
+  for (const name of ['../private', 'x|Tsecret|t', 'ctrl\u001b', 'line\n', 'x'.repeat(65), '', undefined]) {
+    await fs.writeFile(file, jsonl([call('older_tool'), call(name)]));
+    assert.equal(Object.hasOwn(await readCodexInfo(file), 'activity'), false);
+  }
+  const name = 'x'.repeat(64);
+  await fs.writeFile(file, jsonl([call(name)]));
+  assert.equal((await readCodexInfo(file)).activity, name);
+});
+
+test('only a bound Codex rollout publishes activity, and losing the file clears the activity but keeps its model', async t => {
+  const home = await temp(t);
+  const dir = path.join(home, '.codex', 'sessions', '2026', '11', '27');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'rollout-example.jsonl');
+  await fs.writeFile(file, jsonl([
+    { type: 'session_meta', payload: { id: '892e7425-5e44-4ddc-9d5e-6fe6c09a398e', cwd: home, source: 'vscode' } },
+    { type: 'turn_context', payload: { model: 'test' } },
+    { type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: '{}', call_id: '1' } },
+  ]));
+  const bound = createSessionInfo({ cwd: home, home, codexFile: file });
+  const guessed = createSessionInfo({ cwd: home, home });
+  await Promise.all([bound.poll(), guessed.poll()]);
+  assert.deepEqual(bound.get('codex'), { info: { model: 'test' }, activity: 'exec_command' });
+  assert.deepEqual(guessed.get('codex'), { info: { model: 'test' } });
+  await fs.unlink(file);
+  await bound.poll();
+  assert.deepEqual(bound.get('codex'), { info: { model: 'test' } });
+});

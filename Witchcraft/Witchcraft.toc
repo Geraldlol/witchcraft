@@ -16,6 +16,7 @@ Binding.lua
 LogCarrier.lua
 CooldownCarrier.lua
 Context.lua
+MacroProposal.lua
 View.lua
 Options.lua
 Minimap.lua

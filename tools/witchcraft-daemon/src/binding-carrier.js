@@ -181,10 +181,10 @@ function parseApplicationBody(body, frame, startedAt, now) {
 }
 
 export class BindingReceiver {
-  constructor({ epoch, nonce, onCursor = () => true, onMessage = () => ({ accepted: true }), onAck = () => {}, now = Date.now } = {}) {
+  constructor({ epoch, nonce, onCursor = () => true, onMessage = () => ({ accepted: true }), onAck = () => {}, onConfirmedCursor = () => {}, now = Date.now } = {}) {
     this.epoch = fixedHex(epoch, 'host epoch').toLowerCase();
     this.nonce = fixedHex(nonce, 'host nonce').toLowerCase();
-    Object.assign(this, { onCursor, onMessage, onAck, now });
+    Object.assign(this, { onCursor, onMessage, onAck, onConfirmedCursor, now });
     this.ack = 0; this.uiNonce = null; this.pending = null; this.seen = new Map(); this.quarantined = false;
     this.cursor = null;
   }
@@ -216,6 +216,14 @@ export class BindingReceiver {
   }
 
   async accept(frame) {
+    const result = await this.acceptFrame(frame);
+    if (result.accepted && frame.epoch === this.epoch && frame.nonce === this.nonce && frame.uiNonce === this.uiNonce) {
+      this.onConfirmedCursor(frame);
+    }
+    return result;
+  }
+
+  async acceptFrame(frame) {
     if (this.quarantined) return { accepted: false, reason: this.quarantined, ack: this.ack };
     if (frame.seq === 0) return this.acceptHeartbeat(frame);
     const fingerprint = frame.action;

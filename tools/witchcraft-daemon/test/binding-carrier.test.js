@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { ContextCache, HEARTBEAT_TTL_MS } from '../src/context-cache.js';
 import { BINDING_KEYS, BINDING_PROBE_BODY, BindingCarrier, BindingReceiver, discoverBindingFiles,
   encodeBindingAction, parseBindingAction, parseBindingFile, readStableBindingFile } from '../src/binding-carrier.js';
 
@@ -10,6 +11,37 @@ const session = Object.freeze({ epoch: '0123abcd', nonce: '89abcdef', uiNonce: '
 const action = (overrides = {}) => encodeBindingAction({ ...session, slot: 7, seq: 2, part: 1, count: 1,
   payload: Buffer.from('payload'), ...overrides });
 const parsed = overrides => parseBindingAction(action(overrides));
+
+test('re-reading an unchanged binding retries the slot without extending macro proposal eligibility', async () => {
+  let now = 1_000;
+  const cache = new ContextCache(), confirmed = [];
+  const receiver = new BindingReceiver({ ...session,
+    onCursor(frame) {
+      cache.setSession(session.epoch, frame.uiNonce);
+      cache.heartbeat(now);
+      return true;
+    },
+    onConfirmedCursor(frame) { if (cache.confirmCursor(frame, now)) confirmed.push(frame.slot); },
+  });
+  // Previous-run bytes can advertise a slot before the binding receiver checks their host ids.
+  await receiver.accept(parsed({ epoch: 'deadbeef' }));
+  assert.equal(cache.raw.confirmedCursorAt, null);
+  await receiver.accept(parsed({ epoch: '00000000', nonce: '00000000', seq: 1, payload: BINDING_PROBE_BODY }));
+  assert.equal(cache.raw.confirmedCursorAt, null);
+  const heartbeat = parsed({ seq: 0, payload: Buffer.from([0x48, 0]) });
+  assert.equal((await receiver.accept(heartbeat)).accepted, true);
+  assert.equal(cache.raw.confirmedCursorAt, now);
+  now += HEARTBEAT_TTL_MS + 1;
+  assert.equal((await receiver.accept(heartbeat)).accepted, true, 'cursor retries remain available');
+  assert.equal(cache.raw.lastHeartbeatAt, now);
+  assert.ok(now - cache.raw.confirmedCursorAt > HEARTBEAT_TTL_MS);
+  await receiver.accept(parsed({ seq: 0, slot: 8, payload: Buffer.from([0x48, 0]) }));
+  assert.deepEqual(confirmed, [7, 8]);
+  assert.equal(cache.raw.confirmedCursorAt, now);
+  cache.setSession(session.epoch, '11112222');
+  assert.equal(cache.confirmCursor(heartbeat, now), false, 'late completion after a reload');
+  assert.equal(cache.raw.confirmedCursorAt, null);
+});
 
 test('binding carrier parser is anchored, canonical, CRC checked and key allowlisted', () => {
   const valid = action();

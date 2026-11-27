@@ -8,6 +8,9 @@ import { runBridge } from '../bin/witchcraft.js';
 import { initializeRing } from '../src/init.js';
 import { encodeMessage, encodeContext, encodeHeartbeat } from '../src/pixel.js';
 import { readContextFile } from '../src/context-cache.js';
+import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { BINDING_KEYS, BINDING_PROBE_BODY, encodeBindingAction } from '../src/binding-carrier.js';
 import { LogCarrier, encodeLogLine } from '../src/log-carrier.js';
 import { encodeCooldownContext, encodeCooldownFrame } from '../src/cooldown-carrier.js';
@@ -784,6 +787,45 @@ test('bridge: a slow journal write holds neither the next cache write nor its ac
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
   assert.match(await fs.readFile(path.join(path.dirname(f.lockPath), 'events.log'), 'utf8'), /journal write still pending at shutdown/u);
   releaseLate();
+});
+
+test('bridge: an MCP macro reaches the idle ring with literal text and stays within its UI session', async t => {
+  const f = await fixture(t, { options: { hz: 2 } });
+  await f.ready();
+  const cache = path.join(f.adapters.localDir, 'wow-context.json'), nonce = '12345678';
+  f.state.capture.emit(image(null, encodeHeartbeat('00000000', 2, 0, nonce)));
+  const ready = await f.payload(2, item => item.uiNonce === nonce);
+  const macro = { name: 'A"|B', body: '/say Привіт\n/say "); error("oops") -- \\end' };
+  const client = new Client({ name: 'macro-delivery-test', version: '1.0.0' });
+  t.after(() => client.close());
+  await client.connect(new StdioClientTransport({ command: process.execPath, stderr: 'pipe',
+    args: [fileURLToPath(new URL('../bin/witchcraft-mcp.js', import.meta.url)), '--cache', cache, '--allow-local-writes'] }));
+  const suggest = () => client.callTool({ name: 'wow_suggest_macro', arguments: macro });
+  assert.equal((await suggest()).isError, true);
+  f.state.capture.emit(image(null, encodeHeartbeat('11223344', 2, 0, nonce)));
+  assert.equal((await suggest()).isError, true);
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 2, 0, nonce)));
+  await until(async () => (await readContextFile(cache)).confirmedCursorAt, 'the strip to echo the active host epoch');
+  const { id } = (await suggest()).structuredContent;
+  const proposed = await f.payload(2, item => item.macroProposal?.id === id);
+  assert.deepEqual(proposed.macroProposal, { ...macro, id });
+  assert.deepEqual(f.state.writes, []);
+
+  const next = '87654321';
+  // Even a stale record copied into the new UI's filename must not become that player's proposal.
+  await fs.writeFile(`${cache}.macro-proposal.${ready.epoch}.${next}.json`,
+    JSON.stringify({ epoch: ready.epoch, uiNonce: nonce, proposal: proposed.macroProposal }));
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 1, 0, next)));
+  const fresh = await f.payload(1, item => item.uiNonce === next);
+  assert.equal(fresh.macroProposal, undefined);
+  assert.equal(await fs.stat(`${cache}.macro-proposal.${ready.epoch}.${nonce}.json`).catch(() => null), null);
+  // Nor can extra fields copied into an otherwise current record enter the Lua serializer.
+  const third = '12121212';
+  await fs.writeFile(`${cache}.macro-proposal.${ready.epoch}.${third}.json`,
+    JSON.stringify({ epoch: ready.epoch, uiNonce: third, proposal: { ...macro, id, injected: 'arbitrary' } }));
+  f.state.capture.emit(image(null, encodeHeartbeat(ready.epoch, 1, 0, third)));
+  assert.equal((await f.payload(1, item => item.uiNonce === third)).macroProposal, undefined);
+  assert.deepEqual(f.state.writes, []);
 });
 
 test('bridge: per-domain wants fold into one id carrying an incremental mask', async t => {

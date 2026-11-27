@@ -473,9 +473,10 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
         contextHeight = 115
     end
     place(context, content, PAD, HEADER + ACCENT + 6, contextWidth, math.min(contextHeight, height - HEADER - ACCENT - 6))
-    -- Guides fit even at the minimum window size; all actions prepare drafts.
+    -- Reserve the preview row when the assistant has suggested a macro.
     local guide, guideWidth = self.guidePanel, math.min(340, width - 2 * PAD)
-    local guideInner, guideHeight = guideWidth - 2 * PAD, 200
+    local hasMacro = self.snapshot and self.snapshot.hasMacro
+    local guideInner, guideHeight = guideWidth - 2 * PAD, hasMacro and 226 or 200
     place(guide, content, PAD, math.min(HEADER + ACCENT + 6, math.max(0, height - guideHeight - 6)), guideWidth, guideHeight)
     place(self.guideTitle, guide, PAD, 3, guideInner - 22, 16)
     place(self.guideClose, guide, guideWidth - PAD - 16, 0, 16, 22)
@@ -492,7 +493,9 @@ function View:LayoutPopovers(width, height, composerY, terminalHeight)
     place(self.guideLootAdd, guide, PAD, 144, half, 22)
     place(self.guideLootPlan, guide, PAD + half + 6, 144, half, 22)
     for i, control in ipairs(self.guideAdventureButtons) do place(control, guide, PAD + (i - 1) * (third + 4), 144, third, 22) end
-    place(self.guideHint, guide, PAD, 172, guideInner, 24)
+    show(self.guideMacro, hasMacro)
+    if hasMacro then place(self.guideMacro, guide, PAD, 172, guideInner, 22) end
+    place(self.guideHint, guide, PAD, guideHeight - 28, guideInner, 24)
     self:RenderGuidePage()
 end
 
@@ -1100,6 +1103,7 @@ function View:RenderStatus()
     local toolless = not halted and not ringNotice and state == "linked" and selected.tools == false
     local hint = self.message or (halted and name .. plain(halted)) or ringNotice
         or (toolless and name .. "no WoW tools. Run mcp-setup --apply, restart Claude, then Witchcraft")
+        or (state == "linked" and selected.state == "working" and selected.activity and ("Last tool: " .. selected.activity))
         or (state == "linked" and "Ready" or "Link unavailable")
     self.footerHint:SetText(hint)
     local tone = { combat = C.warning, paused = C.warning, stale = C.staleText, offline = C.stale }
@@ -1786,6 +1790,9 @@ function View.Create(controller)
     self.guideAdventureButtons[1].tooltip = "Prepare a dungeon lesson; leave the name empty to choose a supported dungeon"
     self.guideAdventureButtons[2].tooltip = "Find detours in the zone entered above, or your current zone when empty"
     self.guideAdventureButtons[3].tooltip = "View your personal milestones and campaigns without adding any completion stamps"
+    self.guideMacro = makeButton(self.guidePanel, "REVIEW MACRO", function()
+        controller:ShowMacroProposal()
+    end, "secondary", { size = 10 })
     self.guideHint = text(self.guidePanel, 11, C.muted); self.guideHint:SetText("Draft only. Review, then Send.")
     self.guideHint:SetWordWrap(true); self.guideHint:SetMaxLines(2); self.guideHint:SetJustifyV("TOP")
     self.guidePanel:SetScript("OnHide", function() self.guideReference:ClearFocus() end)

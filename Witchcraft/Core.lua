@@ -891,6 +891,7 @@ end
 
 function methods:Stop()
     self.active, self.visible, self.generation, self.loading = false, false, self.generation + 1, nil
+    self:UpdateMacroProposal(nil)
     -- A combat minimize is ours to undo; the saved layout keeps only the player's own choice.
     if self.combatMinimized then
         self.global.view.minimized = false
@@ -970,6 +971,7 @@ function methods:Snapshot()
         answered = { claude = self:AnswerPending("claude") ~= nil, codex = self:AnswerPending("codex") ~= nil,
             copilot = self:AnswerPending("copilot") ~= nil, agy = self:AnswerPending("agy") ~= nil },
         snippets = { unpack(self.global.snippets) },
+        hasMacro = self.macroProposal ~= nil,
         settings = (function() local copy = {}; for key, value in pairs(self.global.settings) do copy[key] = value end; return copy end)(),
         view = self.global.view, fontSize = self.global.fontSize, opacity = self.global.opacity,
         status = status, seq = ring.seq, ringSize = ring.ringSize,
@@ -1543,6 +1545,7 @@ function methods:ReceiveChunk(payload)
     self.global.nextSeq, self.global.ringSize = self.ring.nextSeq, self.ring.ringSize
     self:WarnRing()
     if result.placeholder then
+        self:UpdateMacroProposal(nil)
         if self.everLinked then
             self.stalled, self.ring.delay = true, self.stallDelay
             self.stallDelay = math.min(self.stallDelay * 2, PAUSED_CEILING)
@@ -1553,6 +1556,7 @@ function methods:ReceiveChunk(payload)
         self:ClearContext("Waiting for host"); self:Render(); return true
     end
     local global = self.global
+    self:UpdateMacroProposal(result.macroProposal, result.newEpoch)
     global.epoch, global.ack, global.reloadAwaitHost = result.epoch, result.ack, false
     self.cursorLane, self.promptProtocol = result.cursorLane, result.promptProtocol
     global.nextId = math.max(global.nextId, result.ack + 1)
@@ -1963,11 +1967,34 @@ function methods:ListErrors(arg)
     self.errors:Command(arg, function(message) self:Print(message) end)
 end
 
+function methods:UpdateMacroProposal(incoming, newEpoch)
+    local previous = self.macroProposal
+    self.macroProposal = incoming
+    if not newEpoch and previous and incoming and previous.id == incoming.id then return end
+    if previous then ns.MacroProposal.Hide() end
+    if incoming then
+        self:Print("Macro suggestion ready. Use /witch macro to review it.")
+    end
+end
+
+function methods:ShowMacroProposal()
+    if not self.macroProposal then
+        self:Print("No macro suggestion yet. Ask your assistant to suggest a macro.")
+        return
+    end
+    local ok, detail = ns.MacroProposal.Show(self.macroProposal)
+    if detail then self:Print(detail) end
+    return ok
+end
+
 function methods:HandleSlash(input)
     self:ResetHeartbeatBackoff()
     local command, arg = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
     command = command:lower()
     if command == "" then self:Toggle()
+    elseif command == "macro" then
+        if arg == "" then self:ShowMacroProposal()
+        else self:Print("Use /witch macro.") end
     elseif command == "guide" then
         local ok, reason = self:OpenGuide(); if not ok then self:Print(reason) end
     elseif command == "quest" then
@@ -2127,7 +2154,7 @@ function methods:HandleSlash(input)
         self:Print(string.format("Witchcraft lanes: %s %s | cooldown %s | cursor %s", lane, snapshot.binding.status or "?",
             cooldown, self.cursorLane or "none"))
     else
-        self:Print("/witch | guide | quest [nudge|details|solution] <name/id> | loot [name/id]"
+        self:Print("/witch | guide | macro | quest [nudge|details|solution] <name/id> | loot [name/id]"
             .. " | rehearse [tank|healer|damage] [dungeon] | nearby [zone] | passport"
             .. " | tab <claude|codex|copilot|agy> [on|off] | size 8-20 | scale 80-140 | cols 40-160|fit | opacity 0-100"
             .. " | resetpos | strip [always|fallback|off] | context on|off|refresh|clear-journal | hz 0.125-2"

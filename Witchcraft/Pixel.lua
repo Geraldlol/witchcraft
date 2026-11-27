@@ -21,7 +21,7 @@ local function epochValue(value, allowZero)
 end
 
 -- Validate code points before sending. Lua 5.1 strings are bytes, not implicitly UTF-8.
-local function validText(text)
+local function validText(text, display, multiline)
     if type(text) ~= "string" or #text > MAX_TEXT then return false end
     local position = 1
     while position <= #text do
@@ -39,13 +39,22 @@ local function validText(text)
             code = code * 64 + byte - 128
         end
         if code < minimum or code > 1114111 or (code >= 55296 and code <= 57343)
-            or code < 32 or (code >= 127 and code <= 159) then return false end
+            or (code < 32 and not (multiline and code == 10)) or (code >= 127 and code <= 159) then return false end
+        -- Invisible formatting and bidi controls can hide or rearrange what a player is being asked to accept.
+        if display and (code == 0xAD or code == 0x61C or (code >= 0x200B and code <= 0x200F)
+            or (code >= 0x2028 and code <= 0x202E) or (code >= 0x2060 and code <= 0x206F) or code == 0xFEFF) then return false end
         position = position + count
     end
     return true
 end
 
-Pixel.ValidText = validText
+function Pixel.ValidText(text)
+    return validText(text)
+end
+
+function Pixel.ValidDisplayText(text, multiline)
+    return validText(text, true, multiline == true)
+end
 
 local function rgb(value)
     return { floor(value / 16) * 85, floor(value / 4) % 4 * 85, value % 4 * 85 }

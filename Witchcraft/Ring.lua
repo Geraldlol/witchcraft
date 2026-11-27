@@ -34,6 +34,19 @@ local function shortText(text, limit)
     return text == nil or (type(text) == "string" and #text <= limit and not text:find("[%z\1-\31\127]"))
 end
 
+-- Proposals are optional display data. A malformed suggestion must not cost the player a terminal update.
+local function proposalText(value, limit, multiline)
+    return type(value) == "string" and #value <= limit and value:find("%S") ~= nil
+        and ns.Pixel.ValidDisplayText(value, multiline)
+end
+
+local function readMacro(value)
+    if plain(value) and type(value.id) == "string" and #value.id == 32 and value.id:match("^[0-9a-f]+$")
+        and proposalText(value.name, 16) and proposalText(value.body, 255, true) then
+        return { id = value.id, name = value.name, body = value.body }
+    end
+end
+
 local function sessions(value, rows)
     local valid, count = array(value, 4)
     if not valid or (count ~= 2 and count ~= 3 and count ~= 4) then return nil, "sessions" end
@@ -112,9 +125,11 @@ local function sessions(value, rows)
         -- any other value claims nothing. (`x and false or nil` would always give nil.)
         local tools
         if session.tools == false then tools = false end
+        local activity = session.activity
+        if type(activity) ~= "string" or #activity > 64 or not activity:match("^[A-Za-z_][A-Za-z0-9_%-]*$") then activity = nil end
         copied[#copied + 1] = { id = session.id, title = session.title, status = session.status,
             lines = lines, history = history, scrolled = session.scrolled or 0,
-            state = state, choices = choices, info = info, reply = reply, tools = tools }
+            state = state, choices = choices, info = info, reply = reply, tools = tools, activity = activity }
         seen[session.id] = true
     end
     if not seen.claude or not seen.codex then return nil, "session identity" end
@@ -252,6 +267,7 @@ function methods:OnChunk(payload)
         accepted = true, changed = payload.changed, delay = self.delay, newEpoch = newEpoch,
         epoch = incomingEpoch, ack = payload.ack, cols = payload.cols, rows = payload.rows, sessions = copied,
         promptProtocol = payload.promptProtocol, promptResults = promptResults,
+        macroProposal = readMacro(payload.macroProposal),
         contextProtocol = payload.contextProtocol, contextAck = payload.contextAck, contextWant = payload.contextWant,
         contextWantMask = payload.contextWantMask,
         bindingProtocol = payload.bindingProtocol, bindingNonce = payload.bindingNonce, bindingAck = payload.bindingAck,
